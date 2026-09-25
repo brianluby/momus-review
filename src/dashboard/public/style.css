@@ -758,3 +758,28 @@ main > .quiet {
     font-size: 28px;
   }
 }
+
+/* finding evidence excerpt */
+.evidence-row td {
+  padding: 0 12px 14px 0;
+  grid-column: 1 / -1;
+}
+.evidence-row summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+.evidence-row pre {
+  margin: 8px 0 0 0;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--hair);
+  border-radius: 6px;
+  overflow: auto;
+  max-height: 260px;
+}
+.evidence-row code {
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre;
+}

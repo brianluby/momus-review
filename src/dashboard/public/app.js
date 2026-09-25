@@ -398,10 +398,10 @@ function findings(report) {
     h(
       "tbody",
       {},
-      list.map((finding) => {
+      list.flatMap((finding) => {
         const [dir, base] = splitPath(finding.file);
         const blocking = finding.action === "request_changes";
-        return h(
+        return [h(
           "tr",
           {
             title: `location confidence ${fixed(finding.locationConfidence)} · severity confidence ${fixed(finding.severityConfidence)}`,
@@ -431,7 +431,23 @@ function findings(report) {
             h("span", { class: "glyph", "aria-hidden": "true" }),
             blocking ? "Request changes" : finding.action === "comment" ? "Comment" : String(finding.action),
           ),
-        );
+        ),
+        finding.evidence
+          ? h(
+              "tr",
+              { class: "evidence-row" },
+              h(
+                "td",
+                { colspan: "5" },
+                h(
+                  "details",
+                  h("summary", {}, "Evidence"),
+                  h("pre", {}, h("code", {}, String(finding.evidence))),
+                ),
+              ),
+            )
+          : null,
+      ];
       }),
     ),
   );

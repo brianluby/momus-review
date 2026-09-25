@@ -314,6 +314,7 @@ pub async fn locate_source_signal(
         owner,
         owner_confidence,
         action,
+        evidence: region.content.clone(),
     }))
 }
 

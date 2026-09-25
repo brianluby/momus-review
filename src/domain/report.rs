@@ -79,6 +79,10 @@ pub struct Finding {
     #[serde(default)]
     pub owner_confidence: Option<f64>,
     pub action: Action,
+    /// The concrete evidence excerpt (diff hunk or source region) that
+    /// supports this finding.
+    #[serde(default)]
+    pub evidence: String,
 }
 
 /// `matrix: Array<{ file } & Record<Dimension, number>>`. The per-file
@@ -162,6 +166,7 @@ mod tests {
                 owner: Some("testing".into()),
                 owner_confidence: Some(0.7),
                 action: Action::RequestChanges,
+                evidence: "@@ -1,2 +1,2 @@\n-foo\n+bar".into(),
             }],
             ..Default::default()
         };
