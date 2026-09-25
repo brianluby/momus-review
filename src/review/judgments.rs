@@ -302,5 +302,6 @@ pub async fn locate_signal(
         owner,
         owner_confidence,
         action,
+        evidence: hunk.patch.clone(),
     }))
 }
