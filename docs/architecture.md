@@ -60,9 +60,10 @@ Mapping:
 | `check-dependencies.ts` | Deleted; `pub(crate)` + module tree enforces layers |
 | Loose `isReviewReport` | `serde` with `#[serde(default)]` for tolerant reads |
 
-`public/` (app.js, index.html, style.css) ports byte-identical, served via
-`include_dir!` or `tower-http::services`. Same curl-verified behavior:
-good host 200, foreign host 403, CSP header present.
+`public/` (app.js, index.html, style.css) is ported from the prototype with
+the empty-state command hints updated to the `momus` binary; served via
+`include_str!`. Same curl-verified behavior: good host 200, foreign host 403,
+CSP header present.
 
 ## Decisions
 
