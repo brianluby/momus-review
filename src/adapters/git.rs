@@ -11,6 +11,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
 
+use crate::adapters::exclude::Exclude;
 use crate::domain::patch::patch_for_new_file;
 use crate::domain::policy::source_file;
 use crate::domain::report::{ChangedFile, SourceFile};
@@ -110,8 +111,9 @@ fn is_benign_open_error(e: &std::io::Error) -> bool {
 }
 
 /// Discovers changed source files under `scope`: tracked diffs plus untracked
-/// contents rendered as all-additions patches.
-pub fn changed_files(scope: &Path) -> Result<Vec<ChangedFile>> {
+/// contents rendered as all-additions patches. Paths matching `exclude` are
+/// skipped before any read.
+pub fn changed_files(scope: &Path, exclude: &Exclude) -> Result<Vec<ChangedFile>> {
     let real_scope = scope
         .canonicalize()
         .with_context(|| format!("resolve scope {}", scope.display()))?;
@@ -143,7 +145,7 @@ pub fn changed_files(scope: &Path) -> Result<Vec<ChangedFile>> {
     let mut files = Vec::new();
 
     for path in tracked.iter().chain(untracked.iter()).copied() {
-        if !source_file().is_match(path) || !seen.insert(path) {
+        if !source_file().is_match(path) || exclude.is_match(path) || !seen.insert(path) {
             continue;
         }
         if !untracked_set.contains(path) {
@@ -160,7 +162,8 @@ pub fn changed_files(scope: &Path) -> Result<Vec<ChangedFile>> {
 }
 
 /// Discovers every non-ignored source file under `scope` (tracked + untracked).
-pub fn repository_files(scope: &Path) -> Result<Vec<SourceFile>> {
+/// Paths matching `exclude` are skipped before any read.
+pub fn repository_files(scope: &Path, exclude: &Exclude) -> Result<Vec<SourceFile>> {
     let real_scope = scope
         .canonicalize()
         .with_context(|| format!("resolve scope {}", scope.display()))?;
@@ -184,7 +187,7 @@ pub fn repository_files(scope: &Path) -> Result<Vec<SourceFile>> {
 
     let mut files = Vec::new();
     for path in paths {
-        if !source_file().is_match(path) {
+        if !source_file().is_match(path) || exclude.is_match(path) {
             continue;
         }
         if let Some(content) = read_repo_file(&repo_root, path)? {

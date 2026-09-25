@@ -5,6 +5,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
+use crate::adapters::exclude::Exclude;
 use crate::adapters::git;
 use crate::domain::policy::{Probabilities, test_file};
 use crate::domain::report::{FileProfile, Finding, ReviewMode, SourceFile};
@@ -14,11 +15,12 @@ use crate::review::typesafe::TypeSafeClient;
 
 pub struct CodebaseStrategy {
     client: TypeSafeClient,
+    exclude: Exclude,
 }
 
 impl CodebaseStrategy {
-    pub fn new() -> Result<Self> {
-        Ok(Self { client: TypeSafeClient::from_env()? })
+    pub fn new(exclude: Exclude) -> Result<Self> {
+        Ok(Self { client: TypeSafeClient::from_env()?, exclude })
     }
 }
 
@@ -38,7 +40,7 @@ impl ReviewStrategy for CodebaseStrategy {
     }
 
     fn discover(&self, scope: &Path) -> Result<Discovery<SourceFile>> {
-        let repository = git::repository_files(scope)?;
+        let repository = git::repository_files(scope, &self.exclude)?;
         let mut files = Vec::new();
         let mut context_files = Vec::new();
         for f in repository {

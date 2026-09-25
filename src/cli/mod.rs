@@ -6,6 +6,7 @@ use std::path::Path;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
+use crate::adapters::exclude::Exclude;
 use crate::adapters::report_store::{report_path, save_report};
 use crate::domain::report::Action;
 use crate::review::changes::ChangesStrategy;
@@ -31,6 +32,11 @@ pub enum Command {
         /// Exit non-zero when any finding requests changes
         #[arg(long)]
         fail_on_blocking: bool,
+
+        /// Exclude paths matching a gitignore-style glob (repeatable),
+        /// e.g. `--exclude 'frontend/src/assets/**'`
+        #[arg(long = "exclude", value_name = "GLOB")]
+        exclude: Vec<String>,
     },
 
     /// Scan every non-ignored source file under a scope
@@ -42,6 +48,10 @@ pub enum Command {
         /// Exit non-zero when any finding requests changes
         #[arg(long)]
         fail_on_blocking: bool,
+
+        /// Exclude paths matching a gitignore-style glob (repeatable)
+        #[arg(long = "exclude", value_name = "GLOB")]
+        exclude: Vec<String>,
     },
 
     /// Serve the loopback dashboard
@@ -54,11 +64,13 @@ pub enum Command {
 
 pub async fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        Command::Review { path, fail_on_blocking } => {
-            run_mode(path, fail_on_blocking, ChangesStrategy::new()?).await
+        Command::Review { path, fail_on_blocking, exclude } => {
+            let strategy = ChangesStrategy::new(Exclude::new(&exclude)?)?;
+            run_mode(path, fail_on_blocking, strategy).await
         }
-        Command::Scan { path, fail_on_blocking } => {
-            run_mode(path, fail_on_blocking, CodebaseStrategy::new()?).await
+        Command::Scan { path, fail_on_blocking, exclude } => {
+            let strategy = CodebaseStrategy::new(Exclude::new(&exclude)?)?;
+            run_mode(path, fail_on_blocking, strategy).await
         }
         Command::Dashboard { port } => crate::dashboard::serve(port).await,
     }

@@ -7,6 +7,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+use momus_review::adapters::exclude::Exclude;
 use momus_review::adapters::git;
 
 fn run_git(repo: &Path, args: &[&str]) {
@@ -49,13 +50,31 @@ fn repository_files_discovers_only_source_files() {
     run_git(&repo, &["add", "-A"]);
     run_git(&repo, &["commit", "-q", "-m", "seed"]);
 
-    let files = git::repository_files(&repo).unwrap();
+    let files = git::repository_files(&repo, &Exclude::default()).unwrap();
     let mut paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
     paths.sort();
 
     // Test files are returned too (they become test-gap context); non-source
     // files are silently skipped.
     assert_eq!(paths, vec!["src/lib.rs", "tests/lib_test.rs"]);
+}
+
+#[test]
+fn exclude_filters_discovered_paths() {
+    let (_dir, repo) = fixture_repo();
+    write(&repo, "src/lib.rs", "pub fn f() -> i32 { 1 }\n");
+    write(&repo, "frontend/src/assets/three.js", "var x = 1;\n");
+    write(&repo, "frontend/src/app/app.js", "console.log('hi');\n");
+    run_git(&repo, &["add", "-A"]);
+    run_git(&repo, &["commit", "-q", "-m", "seed"]);
+
+    let exclude = Exclude::new(&["frontend/src/assets/**".to_string()]).unwrap();
+    let files = git::repository_files(&repo, &exclude).unwrap();
+    let mut paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+    paths.sort();
+
+    // The vendored subtree is skipped; the app file and source remain.
+    assert_eq!(paths, vec!["frontend/src/app/app.js", "src/lib.rs"]);
 }
 
 #[test]
@@ -69,7 +88,7 @@ fn changed_files_finds_tracked_diff_and_untracked_source() {
     write(&repo, "src/lib.rs", "pub fn f() -> i32 { 2 }\n");
     write(&repo, "src/extra.rs", "pub fn g() -> i32 { 3 }\n");
 
-    let files = git::changed_files(&repo).unwrap();
+    let files = git::changed_files(&repo, &Exclude::default()).unwrap();
     let mut paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
     paths.sort();
     assert_eq!(paths, vec!["src/extra.rs", "src/lib.rs"]);

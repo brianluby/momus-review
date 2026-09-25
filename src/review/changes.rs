@@ -5,6 +5,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
+use crate::adapters::exclude::Exclude;
 use crate::adapters::git;
 use crate::domain::policy::{Probabilities, test_file};
 use crate::domain::report::{ChangedFile, FileProfile, Finding, ReviewMode};
@@ -14,11 +15,12 @@ use crate::review::typesafe::TypeSafeClient;
 
 pub struct ChangesStrategy {
     client: TypeSafeClient,
+    exclude: Exclude,
 }
 
 impl ChangesStrategy {
-    pub fn new() -> Result<Self> {
-        Ok(Self { client: TypeSafeClient::from_env()? })
+    pub fn new(exclude: Exclude) -> Result<Self> {
+        Ok(Self { client: TypeSafeClient::from_env()?, exclude })
     }
 }
 
@@ -38,7 +40,7 @@ impl ReviewStrategy for ChangesStrategy {
     }
 
     fn discover(&self, scope: &Path) -> Result<Discovery<ChangedFile>> {
-        let changed = git::changed_files(scope)?;
+        let changed = git::changed_files(scope, &self.exclude)?;
         let mut files = Vec::new();
         let mut context_files = Vec::new();
         for f in changed {
