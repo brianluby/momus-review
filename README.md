@@ -36,7 +36,9 @@ state, with calibrated probabilities — fast enough to sit inside code paths.
 Momus keeps orchestration in code (thresholds, budgets, ranking) and uses Jev
 only for bounded judgments. That gives:
 
-- Cost control: screen everything cheaply, spend follow-up budget (top 8) wisely
+- Cost control: screen everything cheaply, follow up every threshold signal
+  (unlimited by default, cap via `--follow-ups N`), so no finding is silently
+  dropped by an arbitrary budget
 - Calibration: probabilities mean something, so thresholds and routing work
 - Composability: narrow calls chain into taint analysis, meta-judgment,
   pairwise ranking — things monolithic prompts fumble

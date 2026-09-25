@@ -92,12 +92,13 @@ pub struct MatrixRow {
 }
 
 /// The `config` snapshot embedded in a report (thresholds/budget ceilings).
+/// `max_follow_ups: None` means unlimited (follow up every threshold signal).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigSnapshot {
     pub screen_threshold: f64,
     pub severity_max: f64,
-    pub max_follow_ups: usize,
+    pub max_follow_ups: Option<usize>,
     pub max_profiles: usize,
 }
 

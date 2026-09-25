@@ -90,6 +90,9 @@ pub const BLOCKING_SEVERITY: f64 = 2.0;
 // Minimum confidence for an evidence-hunk selection to count.
 pub const MIN_LOCATION_CONFIDENCE: f64 = 0.55;
 
+/// The prototype's follow-up cap (top-8). The CLI defaults to unlimited
+/// follow-ups and offers `--follow-ups N` to re-impose a cap; this constant
+/// documents the original budget for reference.
 pub const MAX_FOLLOW_UPS: usize = 8;
 pub const MAX_PROFILES: usize = 5;
 pub const CONCURRENCY: usize = 3;

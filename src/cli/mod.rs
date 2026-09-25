@@ -37,6 +37,10 @@ pub enum Command {
         /// e.g. `--exclude 'frontend/src/assets/**'`
         #[arg(long = "exclude", value_name = "GLOB")]
         exclude: Vec<String>,
+
+        /// Cap follow-ups at N signals (default: follow every threshold signal)
+        #[arg(long = "follow-ups", value_name = "N")]
+        follow_ups: Option<usize>,
     },
 
     /// Scan every non-ignored source file under a scope
@@ -52,6 +56,10 @@ pub enum Command {
         /// Exclude paths matching a gitignore-style glob (repeatable)
         #[arg(long = "exclude", value_name = "GLOB")]
         exclude: Vec<String>,
+
+        /// Cap follow-ups at N signals (default: follow every threshold signal)
+        #[arg(long = "follow-ups", value_name = "N")]
+        follow_ups: Option<usize>,
     },
 
     /// Serve the loopback dashboard
@@ -64,13 +72,13 @@ pub enum Command {
 
 pub async fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        Command::Review { path, fail_on_blocking, exclude } => {
+        Command::Review { path, fail_on_blocking, exclude, follow_ups } => {
             let strategy = ChangesStrategy::new(Exclude::new(&exclude)?)?;
-            run_mode(path, fail_on_blocking, strategy).await
+            run_mode(path, fail_on_blocking, follow_ups, strategy).await
         }
-        Command::Scan { path, fail_on_blocking, exclude } => {
+        Command::Scan { path, fail_on_blocking, exclude, follow_ups } => {
             let strategy = CodebaseStrategy::new(Exclude::new(&exclude)?)?;
-            run_mode(path, fail_on_blocking, strategy).await
+            run_mode(path, fail_on_blocking, follow_ups, strategy).await
         }
         Command::Dashboard { port } => crate::dashboard::serve(port).await,
     }
@@ -81,12 +89,13 @@ pub async fn run(cli: Cli) -> Result<()> {
 async fn run_mode<S: ReviewStrategy>(
     path: String,
     fail_on_blocking: bool,
+    max_follow_ups: Option<usize>,
     strategy: S,
 ) -> Result<()> {
     let scope = std::path::absolute(Path::new(&path))?;
     let log = |msg: &str| eprintln!("{msg}");
 
-    let report = run_review(&scope, &log, strategy).await?;
+    let report = run_review(&scope, &log, max_follow_ups, strategy).await?;
 
     let out = report_path();
     save_report(&report, &out)?;

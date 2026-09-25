@@ -9,8 +9,8 @@ use anyhow::{Result, anyhow};
 use futures::{StreamExt, stream};
 
 use crate::domain::policy::{
-    CONCURRENCY, DIMENSIONS, MAX_FOLLOW_UPS, MAX_PROFILES, SCREEN_THRESHOLD, SEVERITY_MAX,
-    Dimension, dimension_metadata,
+    CONCURRENCY, DIMENSIONS, MAX_PROFILES, SCREEN_THRESHOLD, SEVERITY_MAX, Dimension,
+    dimension_metadata,
 };
 use crate::domain::report::{
     ConfigSnapshot, FileProfile, Finding, MatrixRow, ReviewReport, WorkflowCounts,
@@ -22,6 +22,7 @@ use crate::review::strategy::{Discovery, FileEntry, ReviewStrategy, Screening, S
 pub async fn run_review<S: ReviewStrategy>(
     scope: &Path,
     log: &dyn Fn(&str),
+    max_follow_ups: Option<usize>,
     strategy: S,
 ) -> Result<ReviewReport> {
     let Discovery { files, context_files } = strategy.discover(scope)?;
@@ -102,8 +103,9 @@ pub async fn run_review<S: ReviewStrategy>(
         .collect::<Result<Vec<_>>>()?;
     let profiled_files = profiles.len();
 
-    // 4. Locate: follow up to MAX_FOLLOW_UPS signals, per-dimension budgeted.
-    let follow_ups = select_follow_ups(&signals, MAX_FOLLOW_UPS);
+    // 4. Locate: follow up every threshold signal (unlimited), or cap with a
+    //    per-dimension budget when `max_follow_ups` is set.
+    let follow_ups = select_follow_ups(&signals, max_follow_ups);
     let followed_signals = follow_ups.len();
     log(&format!(
         "Following {} of {} signals at or above {}...",
@@ -149,7 +151,7 @@ pub async fn run_review<S: ReviewStrategy>(
         config: ConfigSnapshot {
             screen_threshold: SCREEN_THRESHOLD,
             severity_max: SEVERITY_MAX,
-            max_follow_ups: MAX_FOLLOW_UPS,
+            max_follow_ups,
             max_profiles: MAX_PROFILES,
         },
         screened_files,
@@ -176,11 +178,16 @@ fn max_probability<F: crate::review::strategy::FileEntry>(s: &Screening<F>) -> f
         .fold(f64::NEG_INFINITY, f64::max)
 }
 
-/// Selects up to `budget` follow-up signals. Assumes `signals` is sorted by
-/// probability descending. Each dimension with at least one signal gets a
-/// slot before global probability fills the remaining budget, so a saturated
-/// cheap dimension (e.g. `testGap`) cannot starve the others.
-fn select_follow_ups<F: FileEntry>(signals: &[Signal<F>], budget: usize) -> Vec<Signal<F>> {
+/// Selects follow-up signals. Assumes `signals` is sorted by probability
+/// descending. With `budget: None` (unlimited) it returns every signal; with
+/// `Some(n)` each dimension with a signal gets a slot before global
+/// probability fills the remainder, so a saturated cheap dimension (e.g.
+/// `testGap`) cannot starve the others.
+fn select_follow_ups<F: FileEntry>(signals: &[Signal<F>], budget: Option<usize>) -> Vec<Signal<F>> {
+    let Some(budget) = budget else {
+        return signals.to_vec();
+    };
+
     use std::collections::HashSet;
 
     let mut out: Vec<Signal<F>> = Vec::new();
@@ -235,7 +242,7 @@ mod tests {
             sig(Dimension::Compatibility, 0.80),
             sig(Dimension::TestGap, 0.96),
         ];
-        let selected = select_follow_ups(&signals, 8);
+        let selected = select_follow_ups(&signals, Some(8));
         assert_eq!(selected.len(), 8);
         let dims: std::collections::HashSet<Dimension> =
             selected.iter().map(|s| s.dimension).collect();
@@ -250,6 +257,16 @@ mod tests {
             sig(Dimension::TestGap, 0.99),
             sig(Dimension::Security, 0.98),
         ];
-        assert_eq!(select_follow_ups(&signals, 1).len(), 1);
+        assert_eq!(select_follow_ups(&signals, Some(1)).len(), 1);
+    }
+
+    #[test]
+    fn unrestricted_follows_every_signal() {
+        let signals = vec![
+            sig(Dimension::TestGap, 0.99),
+            sig(Dimension::TestGap, 0.98),
+            sig(Dimension::Security, 0.95),
+        ];
+        assert_eq!(select_follow_ups(&signals, None).len(), 3);
     }
 }

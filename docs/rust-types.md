@@ -148,14 +148,14 @@ concurrency (`futures` `buffered(CONCURRENCY)` — ordered, bounded
 concurrency), thresholding (`SCREEN_THRESHOLD`), ranking, follow-up budget
 (`MAX_FOLLOW_UPS`), and report assembly.
 
-**Deviation from the prototype:** follow-up selection uses a per-dimension
-budget, not the prototype's global top-8 by probability. Each dimension with
-a threshold signal gets at least one follow-up slot before global probability
-fills the rest. The prototype's global ranking let a saturated cheap dimension
-(`testGap`, which screens near 1.0 broadly but can rarely localize to a
-concrete evidence region) monopolize the budget and starve security/
-correctness — observed as 0 findings on a real (intentionally vulnerable)
-codebase. See `select_follow_ups` + its unit test.
+**Deviation from the prototype:** follow-ups are unlimited by default — every
+signal at/above `SCREEN_THRESHOLD` gets a follow-up. `--follow-ups N` opts back
+into a budget; when capped, selection is per-dimension (each dimension with a
+signal gets a slot before global probability fills the rest), so a saturated
+cheap dimension (`testGap`) can't starve security/correctness. The prototype's
+global top-8 starved real findings (observed as 0 on an intentionally
+vulnerable codebase that holds 99 under the new default). See
+`select_follow_ups` + its unit tests.
 
 ## Type-level decisions
 
