@@ -5,3 +5,7 @@
 .env
 .env.*
 !.env.example
+
+# Per-developer tooling: rusty-brain MCP wiring + omp extension.
+.mcp.json
+.omp/
