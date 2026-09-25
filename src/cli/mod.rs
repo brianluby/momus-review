@@ -1,8 +1,6 @@
 //! CLI entry points: `review` (diff), `scan` (codebase), `dashboard`.
 //! Mirrors the four `cli/*.ts` entry points consolidated under one clap binary.
 
-use std::path::Path;
-
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
@@ -25,9 +23,10 @@ pub struct Cli {
 pub enum Command {
     /// Review the current Git diff (tracked changes + untracked files)
     Review {
-        /// Scope directory (defaults to the current directory)
-        #[arg(default_value = ".")]
-        path: String,
+        /// Scope directory/directories (defaults to the current directory);
+        /// multiple paths are unioned into one run
+        #[arg(default_value = ".", value_name = "PATH")]
+        paths: Vec<String>,
 
         /// Exit non-zero when any finding requests changes
         #[arg(long)]
@@ -45,9 +44,10 @@ pub enum Command {
 
     /// Scan every non-ignored source file under a scope
     Scan {
-        /// Scope directory (defaults to the current directory)
-        #[arg(default_value = ".")]
-        path: String,
+        /// Scope directory/directories (defaults to the current directory);
+        /// multiple paths are unioned into one run
+        #[arg(default_value = ".", value_name = "PATH")]
+        paths: Vec<String>,
 
         /// Exit non-zero when any finding requests changes
         #[arg(long)]
@@ -72,13 +72,13 @@ pub enum Command {
 
 pub async fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        Command::Review { path, fail_on_blocking, exclude, follow_ups } => {
+        Command::Review { paths, fail_on_blocking, exclude, follow_ups } => {
             let strategy = ChangesStrategy::new(Exclude::new(&exclude)?)?;
-            run_mode(path, fail_on_blocking, follow_ups, strategy).await
+            run_mode(paths, fail_on_blocking, follow_ups, strategy).await
         }
-        Command::Scan { path, fail_on_blocking, exclude, follow_ups } => {
+        Command::Scan { paths, fail_on_blocking, exclude, follow_ups } => {
             let strategy = CodebaseStrategy::new(Exclude::new(&exclude)?)?;
-            run_mode(path, fail_on_blocking, follow_ups, strategy).await
+            run_mode(paths, fail_on_blocking, follow_ups, strategy).await
         }
         Command::Dashboard { port } => crate::dashboard::serve(port).await,
     }
@@ -87,15 +87,18 @@ pub async fn run(cli: Cli) -> Result<()> {
 /// Runs a review, saves the report, prints JSON to stdout, and applies the
 /// CI exit contract.
 async fn run_mode<S: ReviewStrategy>(
-    path: String,
+    paths: Vec<String>,
     fail_on_blocking: bool,
     max_follow_ups: Option<usize>,
     strategy: S,
 ) -> Result<()> {
-    let scope = std::path::absolute(Path::new(&path))?;
+    let scopes: Vec<std::path::PathBuf> = paths
+        .iter()
+        .map(|p| std::path::absolute(std::path::Path::new(p)))
+        .collect::<std::io::Result<_>>()?;
     let log = |msg: &str| eprintln!("{msg}");
 
-    let report = run_review(&scope, &log, max_follow_ups, strategy).await?;
+    let report = run_review(&scopes, &log, max_follow_ups, strategy).await?;
 
     let out = report_path();
     save_report(&report, &out)?;

@@ -1,7 +1,7 @@
 //! Codebase-scan strategy: discovery via git ls-files, judgments via
 //! `codebase_judgments`. Mirrors `review/codebase.ts`.
 
-use std::path::Path;
+use std::path::PathBuf;
 
 use anyhow::Result;
 
@@ -39,8 +39,8 @@ impl ReviewStrategy for CodebaseStrategy {
         "repository test"
     }
 
-    fn discover(&self, scope: &Path) -> Result<Discovery<SourceFile>> {
-        let repository = git::repository_files(scope, &self.exclude)?;
+    fn discover(&self, scopes: &[PathBuf]) -> Result<Discovery<SourceFile>> {
+        let repository = git::repository_files(scopes, &self.exclude)?;
         let mut files = Vec::new();
         let mut context_files = Vec::new();
         for f in repository {

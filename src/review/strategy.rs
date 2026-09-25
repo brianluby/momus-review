@@ -1,7 +1,7 @@
 //! The per-mode strategy abstraction and shared workflow types. Mirrors the
 //! `Strategy<File, Context>` structural type in `review/workflow.ts`.
 
-use std::path::Path;
+use std::path::PathBuf;
 
 use anyhow::Result;
 
@@ -60,7 +60,7 @@ pub trait ReviewStrategy: Send + Sync {
     fn subject(&self) -> &'static str;
     fn context_label(&self) -> &'static str;
 
-    fn discover(&self, scope: &Path) -> Result<Discovery<Self::File>>;
+    fn discover(&self, scopes: &[PathBuf]) -> Result<Discovery<Self::File>>;
     async fn screen(&self, file: &Self::File, context: &[Self::File])
         -> Result<Screening<Self::File>>;
     async fn profile(&self, file: &Self::File, probabilities: &Probabilities)

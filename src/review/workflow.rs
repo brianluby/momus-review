@@ -3,7 +3,7 @@
 //! Mirrors `review/workflow.ts`.
 
 use std::cmp::Ordering;
-use std::path::Path;
+use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
 use futures::{StreamExt, stream};
@@ -20,17 +20,23 @@ use crate::review::strategy::{Discovery, FileEntry, ReviewStrategy, Screening, S
 /// Runs the staged funnel for a strategy. Owns concurrency, thresholding,
 /// ranking, and report assembly; the strategy owns discovery and judgments.
 pub async fn run_review<S: ReviewStrategy>(
-    scope: &Path,
+    scopes: &[PathBuf],
     log: &dyn Fn(&str),
     max_follow_ups: Option<usize>,
     strategy: S,
 ) -> Result<ReviewReport> {
-    let Discovery { files, context_files } = strategy.discover(scope)?;
+    let scope_label = scopes
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let Discovery { files, context_files } = strategy.discover(scopes)?;
     if files.is_empty() {
         return Err(anyhow!(
             "No {} files found under {}",
             strategy.subject(),
-            scope.display()
+            scope_label
         ));
     }
 
@@ -146,7 +152,7 @@ pub async fn run_review<S: ReviewStrategy>(
 
     Ok(ReviewReport {
         mode: strategy.mode(),
-        scope: scope.display().to_string(),
+        scope: scope_label,
         dimensions: dimension_metadata(),
         config: ConfigSnapshot {
             screen_threshold: SCREEN_THRESHOLD,

@@ -110,10 +110,23 @@ fn is_benign_open_error(e: &std::io::Error) -> bool {
     )
 }
 
-/// Discovers changed source files under `scope`: tracked diffs plus untracked
-/// contents rendered as all-additions patches. Paths matching `exclude` are
-/// skipped before any read.
-pub fn changed_files(scope: &Path, exclude: &Exclude) -> Result<Vec<ChangedFile>> {
+/// Discovers changed source files across `scopes`: tracked diffs plus
+/// untracked contents rendered as all-additions patches. Paths matching
+/// `exclude` are skipped before any read; overlapping scopes are deduped.
+pub fn changed_files(scopes: &[PathBuf], exclude: &Exclude) -> Result<Vec<ChangedFile>> {
+    let mut files = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for scope in scopes {
+        for file in changed_files_in_scope(scope, exclude)? {
+            if seen.insert(file.path.clone()) {
+                files.push(file);
+            }
+        }
+    }
+    Ok(files)
+}
+
+fn changed_files_in_scope(scope: &Path, exclude: &Exclude) -> Result<Vec<ChangedFile>> {
     let real_scope = scope
         .canonicalize()
         .with_context(|| format!("resolve scope {}", scope.display()))?;
@@ -161,9 +174,23 @@ pub fn changed_files(scope: &Path, exclude: &Exclude) -> Result<Vec<ChangedFile>
     Ok(files)
 }
 
-/// Discovers every non-ignored source file under `scope` (tracked + untracked).
-/// Paths matching `exclude` are skipped before any read.
-pub fn repository_files(scope: &Path, exclude: &Exclude) -> Result<Vec<SourceFile>> {
+/// Discovers every non-ignored source file across `scopes` (tracked +
+/// untracked). Paths matching `exclude` are skipped before any read;
+/// overlapping scopes are deduped.
+pub fn repository_files(scopes: &[PathBuf], exclude: &Exclude) -> Result<Vec<SourceFile>> {
+    let mut files = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for scope in scopes {
+        for file in repository_files_in_scope(scope, exclude)? {
+            if seen.insert(file.path.clone()) {
+                files.push(file);
+            }
+        }
+    }
+    Ok(files)
+}
+
+fn repository_files_in_scope(scope: &Path, exclude: &Exclude) -> Result<Vec<SourceFile>> {
     let real_scope = scope
         .canonicalize()
         .with_context(|| format!("resolve scope {}", scope.display()))?;

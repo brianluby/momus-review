@@ -1,7 +1,7 @@
 //! Diff-review strategy: discovery via git diff, judgments via `judgments`.
 //! Mirrors `review/changes.ts`.
 
-use std::path::Path;
+use std::path::PathBuf;
 
 use anyhow::Result;
 
@@ -39,8 +39,8 @@ impl ReviewStrategy for ChangesStrategy {
         "changed test"
     }
 
-    fn discover(&self, scope: &Path) -> Result<Discovery<ChangedFile>> {
-        let changed = git::changed_files(scope, &self.exclude)?;
+    fn discover(&self, scopes: &[PathBuf]) -> Result<Discovery<ChangedFile>> {
+        let changed = git::changed_files(scopes, &self.exclude)?;
         let mut files = Vec::new();
         let mut context_files = Vec::new();
         for f in changed {

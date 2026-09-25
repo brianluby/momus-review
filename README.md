@@ -23,6 +23,11 @@ Two modes, one funnel:
 - `momus review` — review the current Git diff (tracked changes + untracked files)
 - `momus scan` — scan every non-ignored source file under a scope
 
+Both accept one or more scope directories (unioned into one run) plus
+`--exclude GLOB` (skip vendored/third-party subtrees), `--follow-ups N`
+(opt into a follow-up budget; unlimited by default), and
+`--fail-on-blocking` (CI exit contract).
+
 Both run the same staged pipeline: cheap risk screening across five
 dimensions (correctness, security, reliability, compatibility, test gap),
 then focused follow-ups on the strongest signals only — evidence selection,

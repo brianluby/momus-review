@@ -50,7 +50,7 @@ fn repository_files_discovers_only_source_files() {
     run_git(&repo, &["add", "-A"]);
     run_git(&repo, &["commit", "-q", "-m", "seed"]);
 
-    let files = git::repository_files(&repo, &Exclude::default()).unwrap();
+    let files = git::repository_files(std::slice::from_ref(&repo), &Exclude::default()).unwrap();
     let mut paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
     paths.sort();
 
@@ -69,7 +69,7 @@ fn exclude_filters_discovered_paths() {
     run_git(&repo, &["commit", "-q", "-m", "seed"]);
 
     let exclude = Exclude::new(&["frontend/src/assets/**".to_string()]).unwrap();
-    let files = git::repository_files(&repo, &exclude).unwrap();
+    let files = git::repository_files(std::slice::from_ref(&repo), &exclude).unwrap();
     let mut paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
     paths.sort();
 
@@ -88,7 +88,7 @@ fn changed_files_finds_tracked_diff_and_untracked_source() {
     write(&repo, "src/lib.rs", "pub fn f() -> i32 { 2 }\n");
     write(&repo, "src/extra.rs", "pub fn g() -> i32 { 3 }\n");
 
-    let files = git::changed_files(&repo, &Exclude::default()).unwrap();
+    let files = git::changed_files(std::slice::from_ref(&repo), &Exclude::default()).unwrap();
     let mut paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
     paths.sort();
     assert_eq!(paths, vec!["src/extra.rs", "src/lib.rs"]);
@@ -102,4 +102,23 @@ fn changed_files_finds_tracked_diff_and_untracked_source() {
     let untracked = files.iter().find(|f| f.path == "src/extra.rs").unwrap();
     assert!(untracked.patch.starts_with("@@ -0,0 +1,"));
     assert!(untracked.patch.contains("+pub fn g() -> i32 { 3 }"));
+}
+
+#[test]
+fn multi_scope_unions_and_dedupes() {
+    let (_dir, repo) = fixture_repo();
+    write(&repo, "server/app.js", "console.log('a');\n");
+    write(&repo, "server/routes/search.js", "console.log('s');\n");
+    write(&repo, "frontend/app.js", "console.log('f');\n");
+    run_git(&repo, &["add", "-A"]);
+    run_git(&repo, &["commit", "-q", "-m", "seed"]);
+
+    // Overlapping scopes: "server" plus "server/routes".
+    let scopes = vec![repo.join("server"), repo.join("server").join("routes")];
+    let files = git::repository_files(&scopes, &Exclude::default()).unwrap();
+    let mut paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+    paths.sort();
+
+    // Union of both scopes, deduped; frontend/app.js is outside the scopes.
+    assert_eq!(paths, vec!["server/app.js", "server/routes/search.js"]);
 }
