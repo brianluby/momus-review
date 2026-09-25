@@ -2,7 +2,8 @@
 
 Target: `momus-review` crate, `momus` binary. The TS prototype is ~900 lines
 of real logic (`review/` 660 + `adapters/` 250 + `domain/`/`cli/`) plus a
-1,300-line dashboard frontend that ports byte-identical. Realistic: 2–4
+1,300-line dashboard frontend ported near-verbatim (empty-state command hints
+updated to the `momus` binary). Realistic: 2–4
 focused days, mostly mechanical. Blocker removed: [`jev_sdk` exists on
 crates.io](https://docs.rs/jev_sdk) with `Choice`/`Noul`/`Score`/
 `TypeSafeClient` mirroring the TS SDK.
