@@ -80,11 +80,11 @@ fn read_repo_file(repo_root: &Path, path: &str) -> Result<Option<String>> {
     assert_same_file(&absolute, stat.dev(), stat.ino(), stat.size())?;
 
     // Decode only after confirming the bytes came from the path we opened.
-    // Non-UTF-8 source is skipped rather than failing the whole scan.
-    match String::from_utf8(bytes) {
-        Ok(content) => Ok(Some(content)),
-        Err(_) => Ok(None),
-    }
+    // Non-UTF-8 source fails loudly rather than being silently garbled or
+    // dropped from review coverage.
+    let content = String::from_utf8(bytes)
+        .map_err(|e| anyhow!("{} is not valid UTF-8: {e}", absolute.display()))?;
+    Ok(Some(content))
 }
 
 fn open_guarded(absolute: &Path) -> Result<Option<File>> {
