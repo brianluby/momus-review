@@ -45,6 +45,12 @@ fn mechanism_categories(m: &str) -> &'static [&'static str] {
         "cryptographicFailure" => &["Cryptographic Issues"],
         "sensitiveDataExposure" => &["Sensitive Data Exposure"],
         "securityMisconfiguration" => &["Security Misconfiguration"],
+        // Legacy pre-Lever-1 names: kept so older reports remain evaluable,
+        // mapped to their original (coarse) categories.
+        "authorization" => &["Broken Access Control", "Broken Authentication", "Unvalidated Redirects"],
+        "injection" => &["Injection", "XSS", "XXE", "Insecure Deserialization"],
+        "exposure" => &["Sensitive Data Exposure", "Observability Failures"],
+        "unsafeDefault" => &["Security Misconfiguration"],
         "other" => &["Miscellaneous"],
         _ => &[],
     }
@@ -152,9 +158,13 @@ mod tests {
     use super::mechanism_categories;
     use momus_review::domain::policy::{Dimension, mechanisms};
 
-    /// Every security mechanism the product can emit must map to at least one
-    /// OWASP category, so the evaluator never silently undercounts a class
-    /// (the `other → empty` bug reviewers flagged twice).
+    /// Mechanism names that existed before the Lever-1 vocabulary expansion
+    /// and can still appear in older reports.
+    const LEGACY_MECHANISMS: &[&str] = &["authorization", "injection", "exposure", "unsafeDefault"];
+
+    /// Every mechanism the product (or an older report) can emit must map to
+    /// at least one OWASP category, so the evaluator never silently undercounts
+    /// a class (the `other → empty` bug reviewers flagged twice).
     #[test]
     fn every_security_mechanism_maps_to_a_category() {
         for (name, _) in mechanisms(Dimension::Security) {
@@ -164,6 +174,12 @@ mod tests {
             assert!(
                 !mechanism_categories(name).is_empty(),
                 "security mechanism {name:?} maps to no category"
+            );
+        }
+        for name in LEGACY_MECHANISMS {
+            assert!(
+                !mechanism_categories(name).is_empty(),
+                "legacy security mechanism {name:?} maps to no category"
             );
         }
     }
