@@ -441,6 +441,7 @@ function findings(report) {
                 { colspan: "5" },
                 h(
                   "details",
+                  {},
                   h("summary", {}, "Evidence"),
                   h("pre", {}, h("code", {}, String(finding.evidence))),
                 ),
