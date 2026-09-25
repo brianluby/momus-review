@@ -94,8 +94,9 @@ momus scan . \
 | located findings | 99 (86 routed to an owner) |
 | `request_changes` / `comment` | 34 / 65 |
 
-Findings by dimension: security 39, reliability 40, correctness 12, testGap 8.
-Security breaks down 17 authorization / 13 injection / 9 exposure, and the top
+Findings by dimension: security 39, reliability 40, correctness 12, testGap 8,
+compatibility 0. Security breaks down 17 authorization / 13 injection / 9
+exposure, and the top
 hits are the known Juice Shop vulnerability classes — `routes/checkKeys.ts`
 exposure (2.74), `routes/search.ts` injection (2.67),
 `routes/profileImageUrlUpload.ts` injection (2.64), `routes/login.ts`
