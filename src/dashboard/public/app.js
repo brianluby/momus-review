@@ -477,13 +477,13 @@ function render(state) {
       );
       break;
     case "empty":
-      app.replaceChildren(quiet("No review yet", null, "npm run review:changes:save -- <path>"));
+      app.replaceChildren(quiet("No review yet", null, "momus review <path>"));
       break;
     case "error":
       app.replaceChildren(quiet("Unreadable report", `${state.message} · ${state.source}`));
       break;
     default:
-      app.replaceChildren(quiet("Server unavailable", null, "npm run dashboard"));
+      app.replaceChildren(quiet("Server unavailable", null, "momus dashboard"));
   }
 }
 

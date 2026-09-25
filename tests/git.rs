@@ -37,6 +37,9 @@ fn fixture_repo() -> (tempfile::TempDir, std::path::PathBuf) {
     run_git(&repo, &["init", "-q"]);
     run_git(&repo, &["config", "user.email", "t@t.co"]);
     run_git(&repo, &["config", "user.name", "t"]);
+    // Isolate the fixture from developer-wide signing/hook config.
+    run_git(&repo, &["config", "commit.gpgsign", "false"]);
+    run_git(&repo, &["config", "core.hooksPath", "nonexistent-hooks"]);
     (dir, repo)
 }
 

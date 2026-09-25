@@ -108,32 +108,58 @@ impl TypeSafeClient {
     }
 
     /// Evaluates one `system_one` request: a state plus a map of named
-    /// questions. Retries transient `429`/`529` responses with backoff.
+    /// questions. Retries transient failures — connection/timeout errors and
+    /// `429`/`529`/`5xx` responses — with backoff.
     pub async fn system_one(&self, state: Value, questions: Value) -> Result<SystemOneResponse> {
         let url = format!("{}/v1/systemone", self.base_url);
         let body = json!({ "state": state, "questions": questions, "model": self.model });
 
         for attempt in 0..=MAX_RETRIES {
-            let resp = self
+            let resp = match self
                 .http
                 .post(&url)
                 .bearer_auth(&self.api_key)
                 .json(&body)
                 .send()
-                .await?;
+                .await
+            {
+                Ok(resp) => resp,
+                Err(e) if is_retryable_transport(&e) && attempt < MAX_RETRIES => {
+                    backoff(attempt).await;
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
+
             let status = resp.status();
             if status.is_success() {
                 return Ok(resp.json().await?);
             }
+
             let text = resp.text().await.unwrap_or_default();
-            let retryable = status.as_u16() == 429 || status.as_u16() == 529;
-            if !retryable || attempt == MAX_RETRIES {
-                bail!("system_one failed ({status}): {text}");
+            if is_retryable_status(status.as_u16()) && attempt < MAX_RETRIES {
+                backoff(attempt).await;
+                continue;
             }
-            tokio::time::sleep(Duration::from_millis(500 * (1 << attempt))).await;
+            bail!("system_one failed ({status}): {text}");
         }
-        unreachable!()
+        unreachable!("retry loop always returns or errors")
     }
+}
+
+/// Transient server statuses worth retrying: rate limit, overloaded, and
+/// 5xx server errors.
+fn is_retryable_status(code: u16) -> bool {
+    matches!(code, 429 | 500 | 502 | 503 | 504 | 529)
+}
+
+/// Connection and timeout failures are transient; retry them.
+fn is_retryable_transport(e: &reqwest::Error) -> bool {
+    e.is_connect() || e.is_timeout()
+}
+
+async fn backoff(attempt: usize) {
+    tokio::time::sleep(Duration::from_millis(500 * (1 << attempt))).await;
 }
 
 // ---- Question builders (wire types, mirroring the TS SDK) ---------------

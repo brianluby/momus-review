@@ -65,7 +65,7 @@ pub enum Command {
     /// Serve the loopback dashboard
     Dashboard {
         /// Port (1–65535, default 4317)
-        #[arg(long, default_value_t = crate::dashboard::DEFAULT_PORT)]
+        #[arg(long, default_value_t = crate::dashboard::DEFAULT_PORT, value_parser = clap::value_parser!(u16).range(1..))]
         port: u16,
     },
 }

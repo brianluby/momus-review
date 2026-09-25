@@ -35,8 +35,10 @@ fn git(cwd: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-fn lines(output: &str) -> Vec<&str> {
-    output.split('\n').filter(|l| !l.is_empty()).collect()
+/// Splits NUL-separated git path output. `-z` makes git emit NULs so paths
+/// containing spaces or newlines round-trip intact.
+fn nul_lines(output: &str) -> Vec<&str> {
+    output.split('\0').filter(|l| !l.is_empty()).collect()
 }
 
 /// Reads `path` relative to `repo_root` only when it is a regular file inside
@@ -69,15 +71,20 @@ fn read_repo_file(repo_root: &Path, path: &str) -> Result<Option<String>> {
         return Ok(None);
     }
 
-    let mut content = String::new();
-    file.read_to_string(&mut content)
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
         .with_context(|| format!("read {}", absolute.display()))?;
 
     // Ancestor swap between open and read is a live-mutation race; fail loudly
     // rather than misattribute content to the reported path.
     assert_same_file(&absolute, stat.dev(), stat.ino(), stat.size())?;
 
-    Ok(Some(content))
+    // Decode only after confirming the bytes came from the path we opened.
+    // Non-UTF-8 source is skipped rather than failing the whole scan.
+    match String::from_utf8(bytes) {
+        Ok(content) => Ok(Some(content)),
+        Err(_) => Ok(None),
+    }
 }
 
 fn open_guarded(absolute: &Path) -> Result<Option<File>> {
@@ -141,6 +148,7 @@ fn changed_files_in_scope(scope: &Path, exclude: &Exclude) -> Result<Vec<Changed
             "diff",
             "HEAD",
             "--name-only",
+            "-z",
             "--diff-filter=ACMRTUXB",
             "--",
             relative_scope,
@@ -148,10 +156,10 @@ fn changed_files_in_scope(scope: &Path, exclude: &Exclude) -> Result<Vec<Changed
     )?;
     let untracked_output = git(
         &repo_root,
-        &["ls-files", "--others", "--exclude-standard", "--", relative_scope],
+        &["ls-files", "--others", "--exclude-standard", "-z", "--", relative_scope],
     )?;
-    let tracked = lines(&tracked_output);
-    let untracked = lines(&untracked_output);
+    let tracked = nul_lines(&tracked_output);
+    let untracked = nul_lines(&untracked_output);
 
     let untracked_set: std::collections::HashSet<&str> = untracked.iter().copied().collect();
     let mut seen = std::collections::HashSet::new();
@@ -206,11 +214,12 @@ fn repository_files_in_scope(scope: &Path, exclude: &Exclude) -> Result<Vec<Sour
             "--cached",
             "--others",
             "--exclude-standard",
+            "-z",
             "--",
             relative_scope,
         ],
     )?;
-    let paths = lines(&paths_output);
+    let paths = nul_lines(&paths_output);
 
     let mut files = Vec::new();
     for path in paths {
