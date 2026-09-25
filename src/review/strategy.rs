@@ -39,6 +39,7 @@ pub struct Screening<F> {
 }
 
 /// A single dimension's probability for a file, above threshold → follow-up.
+#[derive(Debug, Clone)]
 pub struct Signal<F> {
     pub file: F,
     pub dimension: Dimension,

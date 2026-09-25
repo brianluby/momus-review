@@ -10,7 +10,7 @@ use futures::{StreamExt, stream};
 
 use crate::domain::policy::{
     CONCURRENCY, DIMENSIONS, MAX_FOLLOW_UPS, MAX_PROFILES, SCREEN_THRESHOLD, SEVERITY_MAX,
-    dimension_metadata,
+    Dimension, dimension_metadata,
 };
 use crate::domain::report::{
     ConfigSnapshot, FileProfile, Finding, MatrixRow, ReviewReport, WorkflowCounts,
@@ -102,8 +102,8 @@ pub async fn run_review<S: ReviewStrategy>(
         .collect::<Result<Vec<_>>>()?;
     let profiled_files = profiles.len();
 
-    // 4. Locate: follow up to MAX_FOLLOW_UPS signals.
-    let follow_ups: Vec<Signal<S::File>> = signals.into_iter().take(MAX_FOLLOW_UPS).collect();
+    // 4. Locate: follow up to MAX_FOLLOW_UPS signals, per-dimension budgeted.
+    let follow_ups = select_follow_ups(&signals, MAX_FOLLOW_UPS);
     let followed_signals = follow_ups.len();
     log(&format!(
         "Following {} of {} signals at or above {}...",
@@ -174,4 +174,82 @@ fn max_probability<F: crate::review::strategy::FileEntry>(s: &Screening<F>) -> f
         .values()
         .copied()
         .fold(f64::NEG_INFINITY, f64::max)
+}
+
+/// Selects up to `budget` follow-up signals. Assumes `signals` is sorted by
+/// probability descending. Each dimension with at least one signal gets a
+/// slot before global probability fills the remaining budget, so a saturated
+/// cheap dimension (e.g. `testGap`) cannot starve the others.
+fn select_follow_ups<F: FileEntry>(signals: &[Signal<F>], budget: usize) -> Vec<Signal<F>> {
+    use std::collections::HashSet;
+
+    let mut out: Vec<Signal<F>> = Vec::new();
+    let mut chosen: HashSet<usize> = HashSet::new();
+    let mut dim_done: HashSet<Dimension> = HashSet::new();
+
+    for (i, s) in signals.iter().enumerate() {
+        if out.len() >= budget || dim_done.len() == DIMENSIONS.len() {
+            break;
+        }
+        if dim_done.insert(s.dimension) {
+            chosen.insert(i);
+            out.push(s.clone());
+        }
+    }
+    for (i, s) in signals.iter().enumerate() {
+        if out.len() >= budget {
+            break;
+        }
+        if chosen.insert(i) {
+            out.push(s.clone());
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::policy::Dimension;
+    use crate::domain::report::ChangedFile;
+
+    fn sig(dim: Dimension, p: f64) -> Signal<ChangedFile> {
+        Signal {
+            file: ChangedFile { path: format!("{dim:?}"), patch: String::new() },
+            dimension: dim,
+            probability: p,
+        }
+    }
+
+    #[test]
+    fn follow_up_budget_spans_dimensions() {
+        // testGap saturates at high probability, but every signaled dimension
+        // must still get a follow-up slot.
+        let signals = vec![
+            sig(Dimension::TestGap, 0.99),
+            sig(Dimension::TestGap, 0.98),
+            sig(Dimension::TestGap, 0.97),
+            sig(Dimension::Security, 0.95),
+            sig(Dimension::Correctness, 0.90),
+            sig(Dimension::Reliability, 0.88),
+            sig(Dimension::Compatibility, 0.80),
+            sig(Dimension::TestGap, 0.96),
+        ];
+        let selected = select_follow_ups(&signals, 8);
+        assert_eq!(selected.len(), 8);
+        let dims: std::collections::HashSet<Dimension> =
+            selected.iter().map(|s| s.dimension).collect();
+        for d in DIMENSIONS {
+            assert!(dims.contains(&d), "dimension {d:?} missing from follow-ups");
+        }
+    }
+
+    #[test]
+    fn follow_up_budget_respects_cap() {
+        let signals = vec![
+            sig(Dimension::TestGap, 0.99),
+            sig(Dimension::Security, 0.98),
+        ];
+        assert_eq!(select_follow_ups(&signals, 1).len(), 1);
+    }
 }
