@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "rusty-brain": {
+      "command": "rusty-brain",
+      "args": [
+        "mcp"
+      ]
+    }
+  }
+}
