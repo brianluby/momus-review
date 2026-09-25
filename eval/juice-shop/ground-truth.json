@@ -1,0 +1,21 @@
+{
+  "categories": {
+    "Sensitive Data Exposure": 17,
+    "Injection": 14,
+    "Improper Input Validation": 12,
+    "Broken Access Control": 12,
+    "XSS": 9,
+    "Vulnerable Components": 9,
+    "Broken Authentication": 9,
+    "Miscellaneous": 6,
+    "Security Misconfiguration": 5,
+    "Cryptographic Issues": 5,
+    "Observability Failures": 4,
+    "Broken Anti Automation": 4,
+    "Security through Obscurity": 3,
+    "Insecure Deserialization": 3,
+    "XXE": 2,
+    "Unvalidated Redirects": 2
+  },
+  "known_vulnerable": []
+}
