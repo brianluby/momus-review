@@ -74,6 +74,46 @@ fixes), `docs/rust-port.md` (migration plan).
 - `docs/rust-types.md` — the shipped Rust types/traits + the `jev_sdk` finding
 - `docs/distribution.md` — `cargo install`, `npx`-style runs, CI gating
 
+## Validation
+
+A single `momus scan` of [OWASP Juice Shop](https://owasp.org/www-project-juice-shop/)
+at commit `1618a611b` (2026-08-10), vendored assets excluded:
+
+```bash
+momus scan . \
+  --exclude 'frontend/src/assets/**' \
+  --exclude 'data/static/codefixes/**' \
+  --exclude 'data/static/contractABIs.ts'
+```
+
+| metric | value |
+|---|---|
+| source files screened | 299 (1,495 cells = 299 × 5 dimensions) |
+| test files used as context | 249 |
+| signals ≥ 0.7 | 357 |
+| located findings | 99 (86 routed to an owner) |
+| `request_changes` / `comment` | 34 / 65 |
+
+Findings by dimension: security 39, reliability 40, correctness 12, testGap 8.
+Security breaks down 17 authorization / 13 injection / 9 exposure, and the top
+hits are the known Juice Shop vulnerability classes — `routes/checkKeys.ts`
+exposure (2.74), `routes/search.ts` injection (2.67),
+`routes/profileImageUrlUpload.ts` injection (2.64), `routes/login.ts`
+injection (2.60), `routes/orderHistory.ts` authorization (2.60).
+
+Conditions: Apple-silicon macOS, `jev-latest` model, concurrency 3 (the
+policy default), end-to-end wall time ~46 s. That time is dominated by Jev API
+latency — 357 followed signals, each up to four `system_one` calls, on top of
+the screen pass — not local computation.
+
+Implementation behind these numbers: the staged pipeline is
+[`src/review/workflow.rs`](src/review/workflow.rs) (screen → rank → profile →
+locate); judgments in
+[`src/review/codebase_judgments.rs`](src/review/codebase_judgments.rs) and
+[`src/review/judgments.rs`](src/review/judgments.rs); thresholds and budgets
+in [`src/domain/policy.rs`](src/domain/policy.rs). Full judgment graph:
+[`docs/jev-pipeline.md`](docs/jev-pipeline.md).
+
 ## Non-Goals (for now)
 
 - Not a prose explainer: findings are structured (evidence, mechanism,
