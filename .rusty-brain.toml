@@ -1,0 +1,3 @@
+# Repo-committed namespace identity: every clone of this repository
+# resolves the same memory namespace regardless of its directory name.
+namespace = "momus-review"
