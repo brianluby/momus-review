@@ -12,10 +12,12 @@ reliability/testGap findings):
 1. **Category coverage** (automated): map each security finding's *mechanism*
    to the OWASP categories it can indicate, and report which of the target's
    16 categories are touched.
-2. **File-level precision** (curated): match findings against a
-   `known_vulnerable` table of `file → categories`. Not yet populated — the
-   mapping from challenge `key` to code location is not machine-readable in
-   Juice Shop, so it must be curated by hand rather than guessed.
+2. **Curated corroboration rate** (curated, lower bound): match findings
+   against a `known_vulnerable` table of `file → categories`. The table is
+   populated (23 routes) but incomplete — the mapping from challenge `key` to
+   code location is not machine-readable in Juice Shop, so it is curated by
+   hand rather than derived, and uncurated routes are not counted as false
+   positives.
 
 ## Run
 

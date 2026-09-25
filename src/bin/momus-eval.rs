@@ -1,13 +1,15 @@
-//! Golden-set evaluation: measure category coverage and file-level precision
-//! of a momus report against a ground-truth mapping.
+//! Golden-set evaluation: measure category coverage and curated
+//! corroboration of a momus report against a ground-truth mapping.
 //!
 //! Usage: `momus-eval <report.json> <ground-truth.json>`
 //!
 //! Ground-truth JSON: `{ "categories": { "<category>": <challenge-count> },
 //! "known_vulnerable": [{ "file": "<prefix>", "categories": ["<category>"] }] }`.
 //! Coverage maps a finding's security mechanism to the OWASP categories it
-//! can indicate (a deliberately loose, security-scoped mapping). Precision
-//! matches findings against the curated known-vulnerable file list.
+//! can indicate (a deliberately loose, security-scoped mapping).
+//! Corroboration matches findings against the curated known-vulnerable file
+//! list (a lower bound, not a precision estimate — uncurated routes are not
+//! counted as false positives).
 
 use std::collections::BTreeMap;
 
@@ -41,8 +43,19 @@ fn mechanism_categories(m: &str) -> &'static [&'static str] {
         "injection" => &["Injection", "XSS", "XXE", "Insecure Deserialization"],
         "exposure" => &["Sensitive Data Exposure", "Observability Failures"],
         "unsafeDefault" => &["Security Misconfiguration"],
+        "other" => &["Miscellaneous"],
         _ => &[],
     }
+}
+
+/// A curated `known_vulnerable.file` prefix matches a finding path only when
+/// it is the whole path or a `/` path-component boundary follows, so a
+/// sibling like `routes/login.ts.bak` does not match `routes/login.ts`.
+fn matches_curated_file(path: &str, prefix: &str) -> bool {
+    path == prefix
+        || path
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('/'))
 }
 
 fn main() -> Result<()> {
@@ -81,17 +94,18 @@ fn main() -> Result<()> {
         println!("  {} {cat}: {ours} findings vs {count} challenges", if ours > 0 { '✓' } else { '✗' });
     }
 
-    // 2. File-level precision (only meaningful once known_vulnerable is curated).
+    // 2. Curated corroboration rate (only meaningful once known_vulnerable is
+    // curated; a lower bound, not precision).
     if !gt.known_vulnerable.is_empty() {
         println!();
-        println!("== file-level precision ==");
+        println!("== curated corroboration rate ==");
         let mut matched = 0;
         let mut mismatched: Vec<String> = Vec::new();
         for f in &security {
             if let Some(kv) = gt
                 .known_vulnerable
                 .iter()
-                .find(|kv| f.file.starts_with(&kv.file))
+                .find(|kv| matches_curated_file(&f.file, &kv.file))
             {
                 let cat_ok = kv
                     .categories
@@ -113,7 +127,7 @@ fn main() -> Result<()> {
         let found_files = gt
             .known_vulnerable
             .iter()
-            .filter(|kv| security.iter().any(|f| f.file.starts_with(&kv.file)))
+            .filter(|kv| security.iter().any(|f| matches_curated_file(&f.file, &kv.file)))
             .count();
         println!(
             "known-vulnerable files hit by a matching finding: {found_files}/{}",
