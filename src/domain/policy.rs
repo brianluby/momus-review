@@ -187,3 +187,38 @@ pub const OWNERS: [(&str, &str); 5] = [
     ("testing", "Coverage strategy, fixtures, or regression testing"),
     ("maintainer", "The owning domain or feature maintainer"),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pins the discovery contract from `docs/language-support.md`: the
+    /// `tests/`/`__tests__/` directory half is language-agnostic; the
+    /// `.(spec|test).` file half is JS/TS-only. This is what gives the
+    /// `testGap` dimension its related-test context.
+    #[test]
+    fn test_file_matches_rust_test_dir_only() {
+        assert!(test_file().is_match("tests/lib_test.rs"));
+        assert!(test_file().is_match("__tests__/foo.rs"));
+        assert!(test_file().is_match("src/__tests__/helpers.ts"));
+        assert!(!test_file().is_match("src/lib.rs"));
+        assert!(!test_file().is_match("testing_util.rs"));
+    }
+
+    #[test]
+    fn test_file_js_suffix_only_for_js() {
+        assert!(test_file().is_match("foo.spec.ts"));
+        assert!(test_file().is_match("foo.test.js"));
+        // `foo_test.go` has no `tests/` dir and the suffix half is JS-only.
+        assert!(!test_file().is_match("foo_test.go"));
+    }
+
+    #[test]
+    fn source_file_matches_rust_and_ts() {
+        assert!(source_file().is_match("src/lib.rs"));
+        assert!(source_file().is_match("a/file.tsx"));
+        assert!(source_file().is_match("a/file.mjs"));
+        assert!(!source_file().is_match("a/file.py"));
+        assert!(!source_file().is_match("a/file.go"));
+    }
+}
