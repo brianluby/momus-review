@@ -1,0 +1,7 @@
+/target
+/reviews
+
+# Local secrets and report artifacts stay out of the repo (docs/security.md).
+.env
+.env.*
+!.env.example

@@ -9,9 +9,12 @@ with concrete evidence, severity, and owner routing.
 
 - Crate: `momus-review` (free on crates.io as of 2026-09-25)
 - Binary: `momus`
-- Engine: [TypeSafe Jev](https://typesafe.ai) (`jev_sdk` in Rust,
-  `@typesafe-ai/sdk` in the TypeScript prototype)
-- Status: prototype proven in TypeScript (`jev-review` fork), Rust port planned
+- Engine: [TypeSafe Jev](https://typesafe.ai) — `@typesafe-ai/sdk` in the
+  TypeScript prototype; a thin HTTP client speaking the `system_one` wire
+  format directly in the Rust port (see `docs/rust-types.md`)
+- Status: prototype proven in TypeScript (`jev-review` fork); Rust port of the
+  core funnel (`review`/`scan`/`dashboard`) is implemented and smoke-tested
+  against a live key
 
 ## What It Does
 
@@ -61,6 +64,7 @@ fixes), `docs/rust-port.md` (migration plan).
 - `docs/security.md` — threat model, FIND-001–004, secure defaults
 - `docs/roadmap.md` — Now/Next/Later, metrics, open bets
 - `docs/rust-port.md` — TS→Rust conversion plan, SDK parity checklist
+- `docs/rust-types.md` — the shipped Rust types/traits + the `jev_sdk` finding
 - `docs/distribution.md` — `cargo install`, `npx`-style runs, CI gating
 
 ## Non-Goals (for now)

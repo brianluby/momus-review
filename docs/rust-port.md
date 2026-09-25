@@ -18,17 +18,18 @@ crates.io](https://docs.rs/jev_sdk) with `Choice`/`Noul`/`Score`/
 - Report validation becomes `serde` structs with `#[serde(default)]` for the
   same tolerant reads `isReviewReport` provides today.
 
-## Step 0: SDK Parity Spike (30 min, do first)
+## Step 0: SDK Parity Spike (30 min, do first) — RESOLVED
 
-`jev_sdk` is young (~7 days on docs.rs at check time). Build one `screenFile`
-equivalent and compare JSON wire format against the TS client. Must confirm:
+`jev_sdk` 0.1.0 could not express the prototype's judgment questions: its
+`NoulCriteria`/`Choice`/`Score` criteria are string-only, while the prototype
+sends structured JSON (`{ what, examples }`, `not_for`, `inspect`/`focus`
+/`ignore`/`compare`/`caution`). The port therefore speaks the `POST
+/v1/systemone` wire format directly through a thin HTTP client
+(`src/review/typesafe.rs`); `jev_sdk` is not a dependency. Details and the
+decision record: `docs/rust-types.md`.
 
-- `inspect`, `focus`, `ignore`, `compare`, `caution`, `fallback`, `not_for`
-- `noul` true/false criteria with `examples`
-- `choice` option descriptions, `score` rubrics
-- Answer shapes: `choice`+`confidence`, `noul` probability, `score`+`confidence`
-
-If anything is missing, the underlying API is plain HTTP — fill gaps directly.
+The wiring checked against the live API, not fixtures: `momus review` and
+`momus scan` both produce reports the dashboard deserializes.
 
 ## Steps
 
