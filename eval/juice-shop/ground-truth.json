@@ -17,5 +17,29 @@
     "XXE": 2,
     "Unvalidated Redirects": 2
   },
-  "known_vulnerable": []
+  "known_vulnerable": [
+    { "file": "routes/login.ts", "categories": ["Injection", "Broken Authentication", "Sensitive Data Exposure"] },
+    { "file": "routes/search.ts", "categories": ["Injection", "XSS"] },
+    { "file": "routes/orderHistory.ts", "categories": ["Broken Access Control"] },
+    { "file": "routes/trackOrder.ts", "categories": ["Broken Access Control"] },
+    { "file": "routes/basketItems.ts", "categories": ["Broken Access Control"] },
+    { "file": "routes/basket.ts", "categories": ["Broken Access Control"] },
+    { "file": "routes/b2bOrder.ts", "categories": ["XXE"] },
+    { "file": "routes/checkKeys.ts", "categories": ["Sensitive Data Exposure"] },
+    { "file": "routes/keyServer.ts", "categories": ["Sensitive Data Exposure"] },
+    { "file": "routes/metrics.ts", "categories": ["Observability Failures"] },
+    { "file": "routes/captcha.ts", "categories": ["Broken Anti Automation"] },
+    { "file": "routes/dataExport.ts", "categories": ["Sensitive Data Exposure"] },
+    { "file": "routes/dataErasure.ts", "categories": ["Broken Authentication"] },
+    { "file": "routes/fileUpload.ts", "categories": ["Improper Input Validation"] },
+    { "file": "routes/profileImageUrlUpload.ts", "categories": ["Improper Input Validation"] },
+    { "file": "routes/profileImageFileUpload.ts", "categories": ["Improper Input Validation"] },
+    { "file": "routes/deluxe.ts", "categories": ["Cryptographic Issues", "Improper Input Validation"] },
+    { "file": "routes/resetPassword.ts", "categories": ["Broken Authentication", "Sensitive Data Exposure"] },
+    { "file": "routes/changePassword.ts", "categories": ["Broken Authentication"] },
+    { "file": "routes/fileServer.ts", "categories": ["Sensitive Data Exposure"] },
+    { "file": "routes/logfileServer.ts", "categories": ["Observability Failures"] },
+    { "file": "routes/chat.ts", "categories": ["Injection"] },
+    { "file": "lib/insecurity.ts", "categories": ["Cryptographic Issues", "Injection"] }
+  ]
 }

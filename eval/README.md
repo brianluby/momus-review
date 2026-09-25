@@ -34,3 +34,29 @@ momus-eval report.json eval/juice-shop/ground-truth.json
   is a coverage signal, not a classifier.
 - Category counts in `ground-truth.json` are extracted from Juice Shop's
   `data/static/challenges.yml`.
+
+## Current result (2026-09-25, Juice Shop @ `1618a611b`)
+
+Scan scope: 299 files, 3 vendored `--exclude`s, 99 findings (39 security).
+
+| measure | value |
+|---|---|
+| category coverage | **9/16** |
+| recall over curated known-vulnerable routes | **19/23** (83%) |
+| security findings on a known-vulnerable route | **19/39** (49%) |
+| …with a matching category label | 11/39 (28%) |
+
+The three findings this surfaces:
+
+1. **Real coverage gaps** — Improper Input Validation (12), Security
+   Misconfiguration (5), Cryptographic Issues (5) have no clean slot in the
+   five-dimension / per-dimension-mechanism vocabulary.
+2. **Good recall** — the tool hits 19 of 23 curated vulnerable routes.
+3. **Taxonomy over-collapse** — the 8 category "mismatches" are on the *right
+   file* but labeled differently (`injection` subsumes SSRF/XXE/file-upload and
+   what Juice Shop calls "improper input validation" or "XXE"). Not wrong-file
+   false positives, but a signal the `injection` mechanism is too coarse.
+
+The 20 security findings on un-curated routes are not counted as false
+positives — the `known_vulnerable` list is a conservative subset, not the full
+challenge map.
