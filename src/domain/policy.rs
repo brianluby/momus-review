@@ -10,10 +10,11 @@ use serde::{Deserialize, Serialize};
 // The five screening dimensions. Serialized as camelCase so `testGap` matches
 // the wire key the dashboard reads (and the `matrix` row keys).
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
 )]
 #[serde(rename_all = "camelCase")]
 pub enum Dimension {
+    #[default]
     Correctness,
     Security,
     Reliability,
@@ -99,6 +100,92 @@ pub const MIN_META_JUDGE_CONFIDENCE: f64 = 0.55;
 pub const MAX_FOLLOW_UPS: usize = 8;
 pub const MAX_PROFILES: usize = 5;
 pub const CONCURRENCY: usize = 3;
+
+// ---- Refinement: post-locate judgments (see `review/refine`) ------------
+
+// Dedupe (#10): a finding is compared only with kept findings in the same file
+// whose lines are within this window, and folded into one only at or above
+// this confidence that the root cause is shared.
+pub const CLUSTER_LINE_WINDOW: usize = 40;
+pub const MIN_CLUSTER_CONFIDENCE: f64 = 0.6;
+// At most this many candidate representatives are offered per dedupe choice.
+pub const MAX_CLUSTER_CANDIDATES: usize = 6;
+
+// Pairwise ranking (#12): the top-K findings by severity are compared in every
+// pair and re-ordered by Bradley-Terry strength. K=6 is 15 comparisons.
+pub const PAIRWISE_TOP_K: usize = 6;
+// Pair questions batched into one `system_one` request.
+pub const PAIRWISE_BATCH: usize = 5;
+
+// Taint chains (#13): security mechanisms whose harm needs untrusted data to
+// reach a sink. Other mechanisms (access control, crypto, ...) are skipped.
+pub const TAINT_MECHANISMS: [&str; 8] = [
+    "sqlInjection",
+    "noSqlInjection",
+    "commandInjection",
+    "xss",
+    "xxe",
+    "ssrf",
+    "pathTraversal",
+    "insecureDeserialization",
+];
+pub const MAX_TAINT: usize = 12;
+// Below this exploitability a blocking finding is demoted to a comment.
+pub const LOW_EXPLOITABILITY: f64 = 0.2;
+// Below this P(reaches sink) the sanitizer question is not asked.
+pub const MIN_SINK_PROBABILITY: f64 = 0.3;
+
+/// Where tainted data originates. The first three are untrusted.
+pub const TAINT_SOURCES: [(&str, &str); 6] = [
+    ("requestInput", "HTTP request parameters, body, headers, cookies, or path segments"),
+    ("userContent", "User-supplied content read back from storage (uploads, profiles, reviews, messages)"),
+    ("externalService", "Responses from an external service or third-party API"),
+    ("serverConfig", "Server-controlled configuration, environment, or constants"),
+    ("internalComputation", "Values computed internally from trusted data"),
+    ("unknown", "The origin of the data is not visible in the evidence"),
+];
+pub const UNTRUSTED_SOURCES: [&str; 3] = ["requestInput", "userContent", "externalService"];
+
+// Counterfactual calibration (#14): the top findings by severity are asked
+// which single fact would exonerate them, then whether the context shows it.
+pub const MAX_COUNTERFACTUAL: usize = 12;
+// A finding is dropped only when the context shows the fact this strongly.
+pub const EXONERATION_DROP: f64 = 0.8;
+
+/// Facts that would make a finding a false positive. `none` ends the check.
+pub const EXONERATING_FACTS: [(&str, &str); 8] = [
+    ("validatedUpstream", "The input is validated, constrained, or escaped before it reaches this code"),
+    ("unreachable", "The flagged path is unreachable or dead in practice"),
+    ("invariantGuaranteed", "A type, guard, or invariant visible elsewhere rules out the failing case"),
+    ("frameworkHandled", "The framework, library, or runtime already handles it (parameterization, escaping, cleanup, retries)"),
+    ("intendedBehavior", "Deliberate, documented product behavior that is not a defect (never applies to a security weakness)"),
+    ("testOrToolingOnly", "The code only runs in tests, fixtures, examples, or build tooling, not production"),
+    ("coveredElsewhere", "Tests or checks elsewhere already cover or prevent the concern"),
+    ("none", "No single fact would exonerate this finding"),
+];
+
+// Ensembles (#15): high-stakes (blocking) findings are re-screened once per
+// focus; a human decides when the votes disagree or on balance reject.
+pub const MAX_ENSEMBLE: usize = 8;
+pub const NEEDS_HUMAN_SPREAD: f64 = 0.5;
+pub const NEEDS_HUMAN_MEAN: f64 = 0.5;
+
+/// Varied screening perspectives for the ensemble re-ask.
+pub const ENSEMBLE_FOCI: [(&str, &str); 3] = [
+    ("adversarial", "Assume hostile input or an adversarial caller and look for a concrete failure path"),
+    ("maintainer", "Judge as the maintainer who knows typical call patterns and the invariants the code relies on"),
+    ("literal", "Accept the concern only if the visible code demonstrates it without assumptions about unseen code"),
+];
+
+// Feedback auto-tune (#8): per-dimension screen thresholds move only with at
+// least this many votes, within [MIN, MAX], toward TARGET precision.
+pub const MIN_FEEDBACK_VOTES: usize = 5;
+pub const TARGET_PRECISION: f64 = 0.6;
+// With precision this high at the default, the threshold drops one step.
+pub const HIGH_PRECISION: f64 = 0.9;
+pub const THRESHOLD_STEP: f64 = 0.05;
+pub const MIN_TUNED_THRESHOLD: f64 = 0.6;
+pub const MAX_TUNED_THRESHOLD: f64 = 0.95;
 
 // The prototype uses two regex literals. `regex::Regex` is not `const`-safe,
 // so they become `LazyLock` statics with the initializer at the declaration.

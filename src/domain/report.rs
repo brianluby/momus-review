@@ -65,7 +65,7 @@ pub enum Action {
 }
 
 /// A located, classified, scored, and routed finding.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Finding {
     pub file: String,
@@ -98,6 +98,82 @@ pub struct Finding {
     /// A model-selected test strategy (actionable description).
     #[serde(default)]
     pub test: Option<String>,
+    /// Stable identity across runs (file, dimension, mechanism, evidence text;
+    /// not line numbers), keying feedback and the suppression list.
+    #[serde(default)]
+    pub fingerprint: String,
+    /// Other located findings judged to share this finding's root cause and
+    /// folded into it by the dedupe stage.
+    #[serde(default)]
+    pub related: Vec<RelatedFinding>,
+    /// 1-based position in the pairwise (Bradley-Terry) fix-first ranking;
+    /// `None` outside the ranked top-K.
+    #[serde(default)]
+    pub rank: Option<usize>,
+    /// Source → sanitizer → sink chain for injection-class security findings.
+    #[serde(default)]
+    pub taint: Option<TaintChain>,
+    /// The single fact that would exonerate this finding, and whether the
+    /// visible context shows it.
+    #[serde(default)]
+    pub exoneration: Option<Exoneration>,
+    /// Re-asked screen votes for a high-stakes finding.
+    #[serde(default)]
+    pub ensemble: Option<Ensemble>,
+}
+
+/// A finding folded into another as the same root cause.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelatedFinding {
+    pub file: String,
+    pub line: usize,
+    pub dimension: Dimension,
+    pub mechanism: String,
+    /// The dedupe judgment's confidence that the root cause is shared.
+    pub confidence: f64,
+}
+
+/// A composed taint judgment: where the data comes from, whether it is
+/// neutralized, and whether it reaches the dangerous sink.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaintChain {
+    /// Source label from `policy::TAINT_SOURCES`.
+    pub source: String,
+    pub source_confidence: f64,
+    /// P(the data originates outside the trust boundary).
+    pub untrusted: f64,
+    /// P(the data reaches the mechanism's sink).
+    pub reaches_sink: f64,
+    /// P(the data is validated, escaped, or parameterized for that sink).
+    pub sanitized: f64,
+    /// untrusted × reaches_sink × (1 − sanitized).
+    pub exploitability: f64,
+}
+
+/// A counterfactual check: the exonerating fact and P(the context shows it).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Exoneration {
+    /// Fact label from `policy::EXONERATING_FACTS`.
+    pub fact: String,
+    pub fact_confidence: f64,
+    /// P(the visible context establishes the fact).
+    pub holds: f64,
+}
+
+/// Independent re-screens of a high-stakes finding under varied focus.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Ensemble {
+    /// One probability per focus variant, in `policy::ENSEMBLE_FOCI` order.
+    pub votes: Vec<f64>,
+    pub mean: f64,
+    /// max − min over `votes`.
+    pub spread: f64,
+    /// The votes disagree, or on balance reject the finding: a human decides.
+    pub needs_human: bool,
 }
 
 /// `matrix: Array<{ file } & Record<Dimension, number>>`. The per-file
@@ -112,10 +188,13 @@ pub struct MatrixRow {
 
 /// The `config` snapshot embedded in a report (thresholds/budget ceilings).
 /// `max_follow_ups: None` means unlimited (follow up every threshold signal).
+/// `screen_thresholds` holds the per-dimension thresholds actually applied
+/// (feedback-tuned; `screen_threshold` stays the policy default).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct ConfigSnapshot {
     pub screen_threshold: f64,
+    pub screen_thresholds: BTreeMap<Dimension, f64>,
     pub severity_max: f64,
     pub max_follow_ups: Option<usize>,
     pub max_profiles: usize,
@@ -123,7 +202,7 @@ pub struct ConfigSnapshot {
 
 /// Funnel counters reported in `workflow`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct WorkflowCounts {
     pub screened_cells: usize,
     pub threshold_signals: usize,
@@ -131,6 +210,14 @@ pub struct WorkflowCounts {
     pub followed_signals: usize,
     pub located_findings: usize,
     pub routed_findings: usize,
+    /// Dropped by the feedback suppression list.
+    pub suppressed_findings: usize,
+    /// Folded into another finding as the same root cause.
+    pub clustered_findings: usize,
+    /// Dropped because the context shows an exonerating fact.
+    pub exonerated_findings: usize,
+    /// Flagged for a human by ensemble disagreement.
+    pub needs_human_findings: usize,
 }
 
 /// The full review report. `#[serde(default)]` reproduces the prototype's
@@ -186,10 +273,7 @@ mod tests {
                 owner_confidence: Some(0.7),
                 action: Action::RequestChanges,
                 evidence: "@@ -1,2 +1,2 @@\n-foo\n+bar".into(),
-                title: None,
-                why: None,
-                fix: None,
-                test: None,
+                ..Default::default()
             }],
             ..Default::default()
         };

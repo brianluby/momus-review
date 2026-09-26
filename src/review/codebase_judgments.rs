@@ -352,10 +352,7 @@ pub async fn locate_source_signal(
         owner_confidence,
         action,
         evidence: region.content.clone(),
-        title: None,
-        why: None,
-        fix: None,
-        test: None,
+        ..Default::default()
     }))
 }
 

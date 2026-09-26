@@ -8,6 +8,7 @@ pub mod explain;
 pub mod judgments;
 pub mod merge_confidence;
 pub mod meta;
+pub mod refine;
 pub mod regions;
 pub mod strategy;
 pub mod typesafe;

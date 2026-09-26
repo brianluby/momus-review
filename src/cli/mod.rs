@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 use crate::adapters::exclude::Exclude;
+use crate::adapters::feedback_store::{feedback_path, read_feedback};
 use crate::adapters::git;
 use crate::adapters::report_store::{report_path, save_history, save_json, save_report};
 use crate::adapters::sarif;
@@ -13,7 +14,7 @@ use crate::domain::report::Action;
 use crate::review::changes::ChangesStrategy;
 use crate::review::codebase::CodebaseStrategy;
 use crate::review::strategy::ReviewStrategy;
-use crate::review::workflow::run_review;
+use crate::review::workflow::{ReviewOptions, run_review};
 
 #[derive(Parser)]
 #[command(name = "momus", version, about = "Fast, calibrated, staged code review")]
@@ -47,6 +48,11 @@ pub enum Command {
         /// Also write a SARIF 2.1.0 log to this path
         #[arg(long = "sarif", value_name = "PATH")]
         sarif: Option<String>,
+
+        /// Skip refinement (dedupe, taint, counterfactual, ensemble, pairwise
+        /// ranking): fewer API calls, noisier findings
+        #[arg(long)]
+        no_refine: bool,
     },
 
     /// Scan every non-ignored source file under a scope
@@ -71,6 +77,11 @@ pub enum Command {
         /// Also write a SARIF 2.1.0 log to this path
         #[arg(long = "sarif", value_name = "PATH")]
         sarif: Option<String>,
+
+        /// Skip refinement (dedupe, taint, counterfactual, ensemble, pairwise
+        /// ranking): fewer API calls, noisier findings
+        #[arg(long)]
+        no_refine: bool,
     },
 
     /// Serve the loopback dashboard
@@ -83,18 +94,29 @@ pub enum Command {
 
 pub async fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        Command::Review { paths, fail_on_blocking, exclude, follow_ups, sarif } => {
+        Command::Review { paths, fail_on_blocking, exclude, follow_ups, sarif, no_refine } => {
             let strategy = ChangesStrategy::new(Exclude::new(&exclude)?)?;
             let sarif = sarif.map(PathBuf::from);
-            run_mode(paths, fail_on_blocking, follow_ups, sarif, strategy).await
+            run_mode(paths, fail_on_blocking, options(follow_ups, no_refine), sarif, strategy).await
         }
-        Command::Scan { paths, fail_on_blocking, exclude, follow_ups, sarif } => {
+        Command::Scan { paths, fail_on_blocking, exclude, follow_ups, sarif, no_refine } => {
             let strategy = CodebaseStrategy::new(Exclude::new(&exclude)?)?;
             let sarif = sarif.map(PathBuf::from);
-            run_mode(paths, fail_on_blocking, follow_ups, sarif, strategy).await
+            run_mode(paths, fail_on_blocking, options(follow_ups, no_refine), sarif, strategy).await
         }
         Command::Dashboard { port } => crate::dashboard::serve(port).await,
     }
+}
+
+/// Review options from CLI flags plus the saved feedback log. Feedback is
+/// best-effort: an unreadable log is reported and ignored, not fatal.
+fn options(max_follow_ups: Option<usize>, no_refine: bool) -> ReviewOptions {
+    let path = feedback_path();
+    let feedback = read_feedback(&path).unwrap_or_else(|e| {
+        eprintln!("feedback ignored: {e:#}");
+        Default::default()
+    });
+    ReviewOptions { max_follow_ups, refine: !no_refine, feedback }
 }
 
 /// Runs a review, saves the report, prints JSON to stdout, and applies the
@@ -102,7 +124,7 @@ pub async fn run(cli: Cli) -> Result<()> {
 async fn run_mode<S: ReviewStrategy>(
     paths: Vec<String>,
     fail_on_blocking: bool,
-    max_follow_ups: Option<usize>,
+    options: ReviewOptions,
     sarif: Option<PathBuf>,
     strategy: S,
 ) -> Result<()> {
@@ -112,7 +134,7 @@ async fn run_mode<S: ReviewStrategy>(
         .collect::<std::io::Result<_>>()?;
     let log = |msg: &str| eprintln!("{msg}");
 
-    let report = run_review(&scopes, &log, max_follow_ups, strategy).await?;
+    let report = run_review(&scopes, &log, options, strategy).await?;
 
     let out = report_path();
     save_report(&report, &out)?;

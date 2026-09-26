@@ -28,13 +28,18 @@ Two modes, one funnel:
 Both accept one or more scope directories (unioned into one run) plus
 `--exclude GLOB` (skip vendored/third-party subtrees), `--follow-ups N`
 (opt into a follow-up budget; unlimited by default), and
-`--fail-on-blocking` (CI exit contract).
+`--fail-on-blocking` (CI exit contract), and `--no-refine` (skip the
+refinement stage below).
 
 Both run the same staged pipeline: cheap risk screening across five
 dimensions (correctness, security, reliability, compatibility, test gap),
 then focused follow-ups on the strongest signals only — evidence selection,
-mechanism classification, severity scoring, reviewer routing. Results land in
-a quiet local dashboard and machine-readable JSON.
+mechanism classification, severity scoring, reviewer routing. A refinement
+stage then folds duplicate findings, traces taint for injection classes,
+drops findings a single visible fact exonerates, flags split re-screens for a
+human, and ranks the top findings pairwise. Results land in a quiet local
+dashboard and machine-readable JSON; 👍/👎/Hide in the dashboard tunes
+per-dimension thresholds and suppresses findings on the next run.
 
 ## Why Jev, Why This Shape
 

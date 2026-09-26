@@ -80,12 +80,22 @@ pub fn to_sarif(report: &ReviewReport) -> Value {
                 location["region"] = json!({ "startLine": finding.line });
             }
 
-            json!({
+            let mut result = json!({
                 "ruleId": rule_id,
                 "level": level(finding),
                 "message": { "text": finding_title(finding) },
                 "locations": [{ "physicalLocation": location }],
-            })
+            });
+            // Line-independent identity so code scanning tracks a result
+            // across runs (see `domain::feedback::fingerprint`).
+            if !finding.fingerprint.is_empty() {
+                result["partialFingerprints"] = json!({ "momus/v1": finding.fingerprint });
+            }
+            let needs_human = finding.ensemble.as_ref().is_some_and(|e| e.needs_human);
+            if finding.rank.is_some() || needs_human {
+                result["properties"] = json!({ "rank": finding.rank, "needsHuman": needs_human });
+            }
+            result
         })
         .collect();
 
@@ -129,10 +139,7 @@ mod tests {
             owner_confidence: None,
             action,
             evidence: String::new(),
-            title: None,
-            why: None,
-            fix: None,
-            test: None,
+            ..Default::default()
         }
     }
 
@@ -174,5 +181,22 @@ mod tests {
         assert_eq!(rules[0]["id"], "security/brokenAccessControl");
         assert_eq!(rules[0]["shortDescription"]["text"], "Broken access control");
         assert!(rules[0]["help"]["text"].as_str().is_some());
+    }
+
+    #[test]
+    fn fingerprint_and_refinement_properties_are_emitted() {
+        let mut ranked = finding("xss", Action::Comment, None, 3);
+        ranked.fingerprint = "0123456789abcdef".into();
+        ranked.rank = Some(1);
+        let plain = finding("xss", Action::Comment, None, 4);
+        let report = ReviewReport { findings: vec![ranked, plain], ..Default::default() };
+
+        let value = to_sarif(&report);
+        let results = value["runs"][0]["results"].as_array().unwrap();
+        assert_eq!(results[0]["partialFingerprints"]["momus/v1"], "0123456789abcdef");
+        assert_eq!(results[0]["properties"]["rank"], 1);
+        assert_eq!(results[0]["properties"]["needsHuman"], false);
+        assert!(results[1].get("partialFingerprints").is_none());
+        assert!(results[1].get("properties").is_none());
     }
 }
