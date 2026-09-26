@@ -185,3 +185,39 @@ fn base_content_keeps_leading_whitespace() {
     let files = git::changed_files(std::slice::from_ref(&repo), &Exclude::default()).unwrap();
     assert_eq!(files[0].base, original);
 }
+
+#[test]
+fn unborn_sha256_repo_reviews_untracked_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().to_path_buf();
+    run_git(&repo, &["init", "-q", "--object-format=sha256"]);
+    write(&repo, "src/lib.rs", "pub fn f() -> i32 { 1 }\n");
+
+    let files = git::changed_files(std::slice::from_ref(&repo), &Exclude::default()).unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].path, "src/lib.rs");
+}
+
+#[test]
+fn unresolvable_detached_head_is_an_error_not_unborn() {
+    let (_dir, repo) = fixture_repo();
+    write(&repo, "src/lib.rs", "pub fn f() -> i32 { 1 }\n");
+    run_git(&repo, &["add", "-A"]);
+    run_git(&repo, &["commit", "-q", "-m", "seed"]);
+    // Point a detached HEAD at a commit id that does not exist.
+    fs::write(repo.join(".git/HEAD"), "0123456789abcdef0123456789abcdef01234567\n").unwrap();
+
+    assert!(git::changed_files(std::slice::from_ref(&repo), &Exclude::default()).is_err());
+}
+
+#[test]
+fn repo_path_with_trailing_space_is_preserved() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo ");
+    fs::create_dir(&repo).unwrap();
+    run_git(&repo, &["init", "-q"]);
+    write(&repo, "src/lib.rs", "pub fn f() -> i32 { 1 }\n");
+
+    let files = git::repository_files(std::slice::from_ref(&repo), &Exclude::default()).unwrap();
+    assert_eq!(files.len(), 1);
+}

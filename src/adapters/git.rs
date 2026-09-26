@@ -16,9 +16,6 @@ use crate::domain::patch::patch_for_new_file;
 use crate::domain::language::is_source_path;
 use crate::domain::report::{ChangedFile, SourceFile};
 
-/// Git's well-known empty tree: the diff base for an unborn repository.
-const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
-
 /// Flags that pin `git diff` to plain unified output regardless of user or
 /// repo config (`diff.external`, `color.ui=always`, textconv drivers), which
 /// would otherwise produce output `parse_hunks` cannot read.
@@ -45,9 +42,11 @@ fn git(cwd: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-/// `git` for single-value commands (`rev-parse`): trims the trailing newline.
+/// `git` for single-value commands (`rev-parse`): strips only git's
+/// terminating newline, so a repo path with leading/trailing spaces survives.
 fn git_value(cwd: &Path, args: &[&str]) -> Result<String> {
-    Ok(git(cwd, args)?.trim().to_string())
+    let out = git(cwd, args)?;
+    Ok(out.strip_suffix('\n').unwrap_or(&out).to_string())
 }
 
 /// Runs `git diff <base> <PLAIN_DIFF> <args>`.
@@ -58,13 +57,40 @@ fn git_diff(cwd: &Path, base: &str, args: &[&str]) -> Result<String> {
     git(cwd, &full)
 }
 
-/// The diff base: `HEAD`, or the empty tree when the repository has no
-/// commits yet (so an unborn repo still reviews its untracked files).
-fn diff_base(repo_root: &Path) -> &'static str {
-    match git(repo_root, &["rev-parse", "--verify", "--quiet", "HEAD"]) {
-        Ok(_) => "HEAD",
-        Err(_) => EMPTY_TREE,
+/// What changes are diffed against.
+enum DiffBase {
+    Head,
+    /// Unborn `HEAD`: the repository's empty-tree id (object-format aware).
+    EmptyTree(String),
+}
+
+impl DiffBase {
+    fn rev(&self) -> &str {
+        match self {
+            DiffBase::Head => "HEAD",
+            DiffBase::EmptyTree(id) => id,
+        }
     }
+}
+
+/// The diff base: `HEAD`, or the empty tree when the repository has no
+/// commits yet (so an unborn repo still reviews its untracked files). Falls
+/// back only for a genuinely unborn `HEAD` (a symbolic ref to a branch that
+/// does not exist yet); a detached or corrupt `HEAD` that fails to resolve is
+/// an error, not an empty repository.
+fn diff_base(repo_root: &Path) -> Result<DiffBase> {
+    if git(repo_root, &["rev-parse", "--verify", "--quiet", "HEAD"]).is_ok() {
+        return Ok(DiffBase::Head);
+    }
+    let branch = git_value(repo_root, &["symbolic-ref", "--quiet", "HEAD"])
+        .context("HEAD does not resolve to a commit and is not a branch ref")?;
+    if git(repo_root, &["show-ref", "--verify", "--quiet", &branch]).is_ok() {
+        bail!("HEAD points to {branch}, which exists but does not resolve to a commit");
+    }
+    // `hash-object` yields the empty-tree id in the repo's own object format
+    // (SHA-1 or SHA-256); stdin is closed, so it hashes an empty tree.
+    let empty_tree = git_value(repo_root, &["hash-object", "-t", "tree", "--stdin"])?;
+    Ok(DiffBase::EmptyTree(empty_tree))
 }
 
 /// Resolves the repository under `scope` to its current `HEAD` commit sha
@@ -181,7 +207,8 @@ fn changed_files_in_scope(scope: &Path, exclude: &Exclude) -> Result<Vec<Changed
         .with_context(|| "resolve repo root")?;
     let relative_scope = relative_scope(&repo_root, &real_scope);
 
-    let base_rev = diff_base(&repo_root);
+    let base_kind = diff_base(&repo_root)?;
+    let base_rev = base_kind.rev();
 
     // Rename destinations don't exist at the base; remember new→old so both
     // the patch and the base lookup can use the pre-change path. `-z` keeps
@@ -228,10 +255,11 @@ fn changed_files_in_scope(scope: &Path, exclude: &Exclude) -> Result<Vec<Changed
                 diff_args.push(base_path);
             }
             let patch = git_diff(&repo_root, base_rev, &diff_args)?.trim_end().to_string();
-            let base = if base_rev == EMPTY_TREE {
-                String::new()
-            } else {
-                git(&repo_root, &["show", &format!("HEAD:{base_path}")]).unwrap_or_default()
+            let base = match base_kind {
+                DiffBase::EmptyTree(_) => String::new(),
+                DiffBase::Head => {
+                    git(&repo_root, &["show", &format!("HEAD:{base_path}")]).unwrap_or_default()
+                }
             };
             files.push(ChangedFile { path: path.to_string(), patch, base });
         } else if let Some(content) = read_repo_file(&repo_root, path)? {

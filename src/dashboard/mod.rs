@@ -109,8 +109,10 @@ async fn api_review() -> Json<Value> {
 async fn api_history() -> Result<Json<Value>, StatusCode> {
     let mut entries = read_history().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    // Chronological (ISO-8601 strings sort correctly).
-    entries.sort_by(|a, b| a.saved_at.cmp(&b.saved_at));
+    // Chronological at full mtime precision: whole-second `saved_at` would
+    // leave same-second saves (e.g. a scan then a review) in arbitrary
+    // directory order, and `hotspots` relies on this order.
+    entries.sort_by_key(|e| e.saved_nanos);
 
     let entry_values: Vec<Value> = entries
         .iter()
@@ -252,6 +254,7 @@ mod tests {
         HistoryEntry {
             sha: "abc".into(),
             saved_at: String::new(),
+            saved_nanos: 0,
             report: ReviewReport {
                 mode,
                 matrix: screened

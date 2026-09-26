@@ -114,10 +114,12 @@ fn unique_suffix() -> String {
 }
 
 /// One saved history snapshot. `saved_at` derives from the file's mtime so a
-/// per-sha entry reflects when that review was written.
+/// per-sha entry reflects when that review was written; `saved_nanos` is the
+/// same mtime at full precision, for ordering entries saved within one second.
 pub struct HistoryEntry {
     pub sha: String,
     pub saved_at: String,
+    pub saved_nanos: u128,
     pub report: ReviewReport,
 }
 
@@ -135,8 +137,26 @@ pub fn history_dir() -> PathBuf {
 /// commit from overwriting each other; re-running the same mode on the same
 /// sha replaces that entry.
 pub fn save_history(report: &ReviewReport, sha: &str) -> Result<PathBuf> {
-    let path = history_dir().join(format!("{sha}.{}.json", mode_key(report.mode)));
+    save_history_in(&history_dir(), report, sha)
+}
+
+fn save_history_in(dir: &Path, report: &ReviewReport, sha: &str) -> Result<PathBuf> {
+    let path = dir.join(format!("{sha}.{}.json", mode_key(report.mode)));
     save_report(report, &path)?;
+
+    // A pre-mode legacy `{sha}.json` of the same mode is now superseded;
+    // leaving it would count that review twice. One of the other mode is the
+    // only record of that review, so it stays.
+    let legacy = dir.join(format!("{sha}.json"));
+    if let StoredReport::Ok { report: old, .. } = read_report(&legacy)
+        && old.mode == report.mode
+    {
+        match remove_file(&legacy) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(anyhow!("remove legacy history {}: {e}", legacy.display())),
+        }
+    }
     Ok(path)
 }
 
@@ -180,7 +200,18 @@ fn read_history_in(dir: &Path) -> Result<Vec<HistoryEntry>> {
             continue;
         };
         if let StoredReport::Ok { saved_at, report } = read_report(&path) {
-            out.push(HistoryEntry { sha: history_sha(sha).to_string(), saved_at, report });
+            let saved_nanos = metadata(&path)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_nanos())
+                .unwrap_or_default();
+            out.push(HistoryEntry {
+                sha: history_sha(sha).to_string(),
+                saved_at,
+                saved_nanos,
+                report,
+            });
         }
     }
     Ok(out)
@@ -246,5 +277,22 @@ mod tests {
                 ("legacy", ReviewMode::Changes),
             ]
         );
+    }
+
+    /// Saving supersedes a legacy `{sha}.json` of the same mode, but keeps
+    /// one of the other mode (its only record).
+    #[test]
+    fn save_history_replaces_same_mode_legacy_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let changes = ReviewReport { mode: ReviewMode::Changes, ..Default::default() };
+        let codebase = ReviewReport { mode: ReviewMode::Codebase, ..Default::default() };
+
+        save_report(&changes, &dir.path().join("same.json")).unwrap();
+        save_history_in(dir.path(), &changes, "same").unwrap();
+        assert!(!dir.path().join("same.json").exists());
+
+        save_report(&codebase, &dir.path().join("other.json")).unwrap();
+        save_history_in(dir.path(), &changes, "other").unwrap();
+        assert!(dir.path().join("other.json").exists());
     }
 }
