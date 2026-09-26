@@ -1,5 +1,6 @@
-//! Review policy: thresholds, limits, file patterns, and the vocabulary of
-//! concerns the reviewer screens for. Pure data. Mirrors `domain/config.ts`.
+//! Review policy: thresholds, limits, and the vocabulary of concerns the
+//! reviewer screens for. Pure data. Mirrors `domain/config.ts`; file
+//! patterns live in `domain/language.rs`.
 
 use std::collections::BTreeMap;
 
