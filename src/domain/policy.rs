@@ -89,6 +89,9 @@ pub const ROUTE_SEVERITY: f64 = 1.5;
 pub const BLOCKING_SEVERITY: f64 = 2.0;
 // Minimum confidence for an evidence-hunk selection to count.
 pub const MIN_LOCATION_CONFIDENCE: f64 = 0.55;
+// Minimum meta-judge probability for a located finding to survive the second
+// skeptical pass; below this the finding is dropped as an unsupported claim.
+pub const MIN_META_JUDGE_CONFIDENCE: f64 = 0.55;
 
 /// The prototype's follow-up cap (top-8). The CLI defaults to unlimited
 /// follow-ups and offers `--follow-ups N` to re-impose a cap; this constant

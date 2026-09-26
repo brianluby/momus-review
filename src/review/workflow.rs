@@ -16,6 +16,7 @@ use crate::domain::report::{
     ConfigSnapshot, FileProfile, Finding, MatrixRow, ReviewReport, WorkflowCounts,
 };
 use crate::review::explain::{self, MAX_ENRICH};
+use crate::review::merge_confidence;
 use crate::review::strategy::{Discovery, FileEntry, ReviewStrategy, Screening, Signal};
 
 /// Runs the staged funnel for a strategy. Owns concurrency, thresholding,
@@ -174,7 +175,7 @@ pub async fn run_review<S: ReviewStrategy>(
         }
     }
 
-    let matrix_rows = matrix
+    let matrix_rows: Vec<MatrixRow> = matrix
         .iter()
         .map(|s| MatrixRow {
             file: s.file.path().to_string(),
@@ -182,6 +183,8 @@ pub async fn run_review<S: ReviewStrategy>(
         })
         .collect();
     let context_paths = context_files.iter().map(|f| f.path().to_string()).collect();
+
+    let p_revert = merge_confidence::p_revert(&findings, &matrix_rows);
 
     Ok(ReviewReport {
         mode: strategy.mode(),
@@ -207,6 +210,7 @@ pub async fn run_review<S: ReviewStrategy>(
             routed_findings,
         },
         findings,
+        p_revert,
     })
 }
 
@@ -261,7 +265,7 @@ mod tests {
 
     fn sig(dim: Dimension, p: f64) -> Signal<ChangedFile> {
         Signal {
-            file: ChangedFile { path: format!("{dim:?}"), patch: String::new() },
+            file: ChangedFile { path: format!("{dim:?}"), patch: String::new(), base: String::new() },
             dimension: dim,
             probability: p,
         }

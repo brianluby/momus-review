@@ -17,11 +17,14 @@ pub enum ReviewMode {
     Codebase,
 }
 
-/// `ChangedFile { path, patch }` — a tracked/untracked diff.
+/// `ChangedFile { path, patch, base }` — a tracked/untracked diff. `base` is
+/// the pre-change (HEAD) content; empty for a newly added file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChangedFile {
     pub path: String,
     pub patch: String,
+    #[serde(default)]
+    pub base: String,
 }
 
 /// `SourceFile { path, content }` — a complete source file.
@@ -147,6 +150,10 @@ pub struct ReviewReport {
     pub profiles: Vec<FileProfile>,
     pub workflow: WorkflowCounts,
     pub findings: Vec<Finding>,
+    /// Uncalibrated heuristic P(revert) in [0, 1) from the review signals.
+    /// A spike (see `review/merge_confidence.rs`); calibration is #17.
+    #[serde(default)]
+    pub p_revert: f64,
 }
 
 #[cfg(test)]

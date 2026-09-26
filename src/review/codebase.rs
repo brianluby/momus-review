@@ -1,26 +1,53 @@
 //! Codebase-scan strategy: discovery via git ls-files, judgments via
 //! `codebase_judgments`. Mirrors `review/codebase.ts`.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use anyhow::Result;
 
 use crate::adapters::exclude::Exclude;
 use crate::adapters::git;
+use crate::adapters::imports::ImportGraph;
 use crate::domain::policy::{Probabilities, test_file};
 use crate::domain::report::{FileProfile, Finding, ReviewMode, SourceFile};
 use crate::review::codebase_judgments;
 use crate::review::strategy::{Discovery, ReviewStrategy, Screening, Signal};
 use crate::review::typesafe::TypeSafeClient;
 
+/// Cap on 1-hop import neighbors carried as screening context.
+const MAX_NEIGHBORS: usize = 4;
+
 pub struct CodebaseStrategy {
     client: TypeSafeClient,
     exclude: Exclude,
+    imports: OnceLock<ImportGraph>,
+    file_map: OnceLock<HashMap<String, SourceFile>>,
 }
 
 impl CodebaseStrategy {
     pub fn new(exclude: Exclude) -> Result<Self> {
-        Ok(Self { client: TypeSafeClient::from_env()?, exclude })
+        Ok(Self {
+            client: TypeSafeClient::from_env()?,
+            exclude,
+            imports: OnceLock::new(),
+            file_map: OnceLock::new(),
+        })
+    }
+
+    /// Resolves `path`'s 1-hop import neighbors to compact `SourceFile`s
+    /// (capped at `MAX_NEIGHBORS`, missing files skipped).
+    fn neighbor_files(&self, path: &str) -> Vec<SourceFile> {
+        let (Some(graph), Some(file_map)) = (self.imports.get(), self.file_map.get()) else {
+            return Vec::new();
+        };
+        graph
+            .neighbors(path)
+            .into_iter()
+            .filter_map(|p| file_map.get(p).cloned())
+            .take(MAX_NEIGHBORS)
+            .collect()
     }
 }
 
@@ -50,6 +77,15 @@ impl ReviewStrategy for CodebaseStrategy {
                 files.push(f);
             }
         }
+        let _ = self.imports.set(ImportGraph::build(&files));
+        // Store only a compact excerpt per neighbor, not the full file contents
+        // (which `discover` already returns for screening).
+        let _ = self.file_map.set(
+            files
+                .iter()
+                .map(|f| (f.path.clone(), codebase_judgments::compact_neighbor(f)))
+                .collect(),
+        );
         Ok(Discovery { files, context_files })
     }
 
@@ -58,7 +94,8 @@ impl ReviewStrategy for CodebaseStrategy {
         file: &SourceFile,
         context: &[SourceFile],
     ) -> Result<Screening<SourceFile>> {
-        codebase_judgments::screen_source_file(&self.client, file, context).await
+        let neighbors = self.neighbor_files(&file.path);
+        codebase_judgments::screen_source_file(&self.client, file, context, &neighbors).await
     }
 
     async fn profile(&self, file: &SourceFile, probabilities: &Probabilities) -> Result<FileProfile> {
@@ -66,7 +103,8 @@ impl ReviewStrategy for CodebaseStrategy {
     }
 
     async fn locate(&self, signal: &Signal<SourceFile>) -> Result<Option<Finding>> {
-        codebase_judgments::locate_source_signal(&self.client, signal).await
+        let neighbors = self.neighbor_files(&signal.file.path);
+        codebase_judgments::locate_source_signal(&self.client, signal, &neighbors).await
     }
 
     async fn suggestions(&self, finding: &Finding) -> Result<(Option<String>, Option<String>)> {

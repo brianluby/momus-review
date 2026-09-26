@@ -103,12 +103,16 @@ function summary(report) {
   const blocking = findings.filter((f) => f.action === "request_changes").length;
   const tests = report.contextFiles ?? report.changedTestFiles ?? [];
   const testLabel = report.mode === "codebase" ? "test files" : "changed tests";
+  const pr = report.pRevert;
+  const prDisplay =
+    findings.length === 0 && !pr ? "–" : isNum(pr) ? `${fixed(pr * 100)}%` : "–";
   const stats = [
     { value: report.screenedFiles, label: "files" },
     { value: tests.length, label: testLabel, title: tests.join("\n") || null },
     { value: report.followedSignals, label: "investigated", title: "potential concerns at or above " + THRESHOLD.toFixed(2) + " reviewed for evidence" },
     { value: findings.length, label: "findings", cls: "lead" },
     { value: blocking, label: "request changes", cls: blocking > 0 ? "alert" : "" },
+    { display: prDisplay, label: "P(revert)", title: "uncalibrated heuristic spike (see roadmap #17)" },
   ];
   return h(
     "dl",
@@ -118,7 +122,7 @@ function summary(report) {
         "div",
         { class: `stat ${stat.cls ?? ""}`, title: stat.title },
         h("dt", {}, stat.label),
-        h("dd", {}, isNum(stat.value) ? stat.value : "–"),
+        h("dd", {}, stat.display ?? (isNum(stat.value) ? stat.value : "–")),
       ),
     ),
   );
