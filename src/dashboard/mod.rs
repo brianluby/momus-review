@@ -9,7 +9,8 @@ use axum::response::{IntoResponse, Response};
 use axum::{Json, Router, routing::get};
 use serde_json::{Value, json};
 
-use crate::adapters::report_store::{StoredReport, read_report, report_path};
+use crate::adapters::report_store::{StoredReport, read_history, read_report, report_path};
+use crate::domain::report::Action;
 
 pub const DEFAULT_PORT: u16 = 4317;
 
@@ -21,6 +22,7 @@ const APP_JS: &str = include_str!("public/app.js");
 pub async fn serve(port: u16) -> anyhow::Result<()> {
     let router = Router::new()
         .route("/api/review", get(api_review))
+        .route("/api/history", get(api_history))
         .route("/", get(index).head(index))
         .route("/style.css", get(style_css).head(style_css))
         .route("/app.js", get(app_js).head(app_js))
@@ -95,6 +97,87 @@ async fn api_review() -> Json<Value> {
         }),
     };
     Json(body)
+}
+
+/// Per-sha history trend: chronological entries plus top file hotspots
+/// aggregated across every saved history report. Never 500s on a missing
+/// history dir — that is simply empty history.
+async fn api_history() -> Json<Value> {
+    let mut entries = read_history().unwrap_or_default();
+
+    // Chronological (ISO-8601 strings sort correctly).
+    entries.sort_by(|a, b| a.saved_at.cmp(&b.saved_at));
+
+    let latest = entries.last();
+
+    let entry_values: Vec<Value> = entries
+        .iter()
+        .map(|e| {
+            let findings = e.report.findings.len();
+            let blocking = e
+                .report
+                .findings
+                .iter()
+                .filter(|f| f.action == Action::RequestChanges)
+                .count();
+            let max_severity = e
+                .report
+                .findings
+                .iter()
+                .map(|f| f.severity)
+                .fold(0.0, f64::max);
+            json!({
+                "sha": e.sha,
+                "savedAt": e.saved_at,
+                "findings": findings,
+                "blocking": blocking,
+                "maxSeverity": max_severity,
+            })
+        })
+        .collect();
+
+    // Aggregate every finding across all entries by file.
+    use std::collections::BTreeMap;
+    let mut by_file: BTreeMap<String, (usize, usize, usize, f64)> = BTreeMap::new();
+    for entry in &entries {
+        let is_latest = matches!(latest, Some(l) if std::ptr::eq(l, entry));
+        for f in &entry.report.findings {
+            let slot = by_file.entry(f.file.clone()).or_insert((0, 0, 0, 0.0));
+            slot.0 += 1;
+            if is_latest {
+                slot.1 += 1;
+            }
+            if f.action == Action::RequestChanges {
+                slot.2 += 1;
+            }
+            if f.severity > slot.3 {
+                slot.3 = f.severity;
+            }
+        }
+    }
+
+    let mut hotspots: Vec<(String, usize, usize, usize, f64)> = by_file
+        .into_iter()
+        .map(|(file, (findings, latest_findings, blocking, max_severity))| {
+            (file, findings, latest_findings, blocking, max_severity)
+        })
+        .collect();
+    hotspots.sort_by_key(|h| std::cmp::Reverse(h.1));
+    let hotspot_values: Vec<Value> = hotspots
+        .into_iter()
+        .take(15)
+        .map(|(file, findings, latest_findings, blocking, max_severity)| {
+            json!({
+                "file": file,
+                "findings": findings,
+                "latestFindings": latest_findings,
+                "blocking": blocking,
+                "maxSeverity": max_severity,
+            })
+        })
+        .collect();
+
+    Json(json!({ "entries": entry_values, "hotspots": hotspot_values }))
 }
 
 async fn index() -> impl IntoResponse {

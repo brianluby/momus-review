@@ -4,3 +4,4 @@
 pub mod exclude;
 pub mod git;
 pub mod report_store;
+pub mod sarif;

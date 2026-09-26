@@ -35,6 +35,13 @@ fn git(cwd: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// Resolves the repository under `scope` to its current `HEAD` commit sha
+/// (40 hex chars). Used to key per-sha review history; fails loudly when
+/// `scope` is not inside a repository.
+pub fn head_sha(scope: &Path) -> Result<String> {
+    git(scope, &["rev-parse", "HEAD"])
+}
+
 /// Splits NUL-separated git path output. `-z` makes git emit NULs so paths
 /// containing spaces or newlines round-trip intact.
 fn nul_lines(output: &str) -> Vec<&str> {
