@@ -80,6 +80,28 @@ pub async fn screen_source_file(
                     "false": { "what": "No concrete security weakness is supported by this file", "not_for": "Code that merely handles credentials or permissions safely" },
                 }),
             ),
+            "cryptoSecrets": noul(
+                json!({
+                    "question": "Does file.content directly support a cryptographic or secret-management weakness?",
+                    "inspect": "file.content",
+                    "focus": "Weak, missing, or misused cryptography; hardcoded secrets or keys; predictable randomness",
+                }),
+                json!({
+                    "true": { "what": "Cryptography or secrets are used in a way that weakens the boundary", "examples": ["A hardcoded key or password in source", "ECB mode or a predictable IV/nonce", "A fast hash used instead of a password KDF"] },
+                    "false": { "what": "Cryptography and secret handling appear appropriate, or the file does none", "not_for": "Mere use of cryptographic APIs" },
+                }),
+            ),
+            "misconfig": noul(
+                json!({
+                    "question": "Does file.content directly support a security-relevant misconfiguration?",
+                    "inspect": "file.content",
+                    "focus": "Missing security headers, permissive CORS, debug or stack-trace output, directory listing, default or empty credentials, verbose errors",
+                }),
+                json!({
+                    "true": { "what": "A setting, or its absence, creates avoidable exposure", "examples": ["Access-Control-Allow-Origin: * on an authenticated endpoint", "Debug or verbose error output left enabled", "A default or empty password fallback"] },
+                    "false": { "what": "Security-relevant configuration appears locked down", "not_for": "Configuration that is merely unusual or non-security" },
+                }),
+            ),
             "reliability": noul(
                 json!({
                     "question": "Does file.content directly support that this code can crash, race, leak, deadlock, or recover poorly?",
@@ -117,9 +139,13 @@ pub async fn screen_source_file(
         });
 
         let response = client.system_one(state, questions).await?;
+        let security = response
+            .noul("security")?
+            .max(response.noul("cryptoSecrets")?)
+            .max(response.noul("misconfig")?);
         results.push(Probabilities::from([
             (Dimension::Correctness, response.noul("correctness")?),
-            (Dimension::Security, response.noul("security")?),
+            (Dimension::Security, security),
             (Dimension::Reliability, response.noul("reliability")?),
             (Dimension::Compatibility, response.noul("compatibility")?),
             (Dimension::TestGap, response.noul("testGap")?),

@@ -69,6 +69,40 @@ pub async fn screen_file(
                 },
             }),
         ),
+        "cryptoSecrets": noul(
+            json!({
+                "question": "Does file.patch directly support that this change introduces or relies on a cryptographic or secret-management weakness?",
+                "inspect": "file.patch",
+                "focus": "Weak, missing, or misused cryptography; hardcoded secrets or keys; predictable randomness",
+            }),
+            json!({
+                "true": {
+                    "what": "The patch uses cryptography or secrets in a way that weakens the boundary",
+                    "examples": ["A new hardcoded key or password", "ECB mode or a predictable IV/nonce", "A fast hash added where a KDF is needed"],
+                },
+                "false": {
+                    "what": "Cryptography and secret handling appear appropriate, or the patch does none",
+                    "not_for": "Mere use of cryptographic APIs",
+                },
+            }),
+        ),
+        "misconfig": noul(
+            json!({
+                "question": "Does file.patch directly support that this change introduces a security-relevant misconfiguration?",
+                "inspect": "file.patch",
+                "focus": "Missing security headers, permissive CORS, debug or stack-trace output, directory listing, default or empty credentials, verbose errors",
+            }),
+            json!({
+                "true": {
+                    "what": "The patch creates, or fails to tighten, an avoidable exposure",
+                    "examples": ["Access-Control-Allow-Origin: * added to an authenticated endpoint", "Debug or verbose error output left enabled", "A default or empty password fallback"],
+                },
+                "false": {
+                    "what": "Security-relevant configuration appears locked down",
+                    "not_for": "Configuration that is merely unusual or non-security",
+                },
+            }),
+        ),
         "reliability": noul(
             json!({
                 "question": "Does file.patch directly support that this change can crash, race, leak, deadlock, or recover poorly?",
@@ -117,9 +151,13 @@ pub async fn screen_file(
     });
 
     let response = client.system_one(state, questions).await?;
+    let security = response
+        .noul("security")?
+        .max(response.noul("cryptoSecrets")?)
+        .max(response.noul("misconfig")?);
     let probabilities = Probabilities::from([
         (Dimension::Correctness, response.noul("correctness")?),
-        (Dimension::Security, response.noul("security")?),
+        (Dimension::Security, security),
         (Dimension::Reliability, response.noul("reliability")?),
         (Dimension::Compatibility, response.noul("compatibility")?),
         (Dimension::TestGap, response.noul("testGap")?),

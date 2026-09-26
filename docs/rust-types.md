@@ -86,7 +86,8 @@ pub struct FileProfile { /* file, category, category_confidence, review_priority
 pub enum Action { Comment, RequestChanges }
 pub struct Finding { /* file, line, dimension, probability, location_confidence,
                         mechanism, mechanism_confidence, severity, severity_confidence,
-                        owner: Option<String>, owner_confidence: Option<f64>, action */ }
+                        owner: Option<String>, owner_confidence: Option<f64>, action,
+                        evidence: String (the selected hunk/region excerpt) */ }
 
 #[serde(default)]
 pub struct MatrixRow { pub file: String, #[serde(flatten)] pub probabilities: BTreeMap<Dimension, f64> }

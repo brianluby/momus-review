@@ -37,23 +37,24 @@ Key invariants:
   nodes; no `innerHTML`. Report validation (`isReviewReport`) is deliberately
   loose for forward-compat; the client null-tolerates every field.
 
-## Target (Rust, `momus-review`)
+## Rust target (shipped, `momus-review`)
 
 ```
 src/
   domain/      policy, report shapes, diff parsing (serde structs)
-  adapters/    git discovery, file guards, report store
-  review/      strategies + judgments (jev_sdk) + orchestration
-  cli/         clap subcommands (review, scan, dashboard, check)
+  adapters/    git discovery, file guards, report store, exclude globs
+  review/      strategies + judgments (thin typesafe client) + orchestration
+  cli/         clap subcommands (review, scan, dashboard)
   dashboard/   axum server + embedded public/ assets
+  bin/         momus-eval (golden-set evaluation harness)
 ```
 
 Mapping:
 
-| TS today | Rust target |
+| TS today | Rust |
 |---|---|
-| `TypeSafeClient().systemOne(...)` | `jev_sdk::TypeSafeClient::from_env()?.system_one(...).await` |
-| `mapLimit(CONCURRENCY)` | `tokio` + `Semaphore` / `buffer_unordered` |
+| `TypeSafeClient().systemOne(...)` | thin client: `TypeSafeClient::system_one(...)` in `src/review/typesafe.rs` (speaks the wire format directly; `jev_sdk` is not a dependency) |
+| `mapLimit(CONCURRENCY)` | `futures::StreamExt::buffered(CONCURRENCY)` (bounded, order-preserving) |
 | `execFileSync("git", …)` | `std::process::Command` (no shell), later `gix` |
 | `O_NOFOLLOW`/`fstat` guards | `std::os::unix::fs::OpenOptionsExt`, same checks |
 | `node:http` + `handle()` | `axum` router + middleware (Host check, CSP) |
