@@ -78,7 +78,14 @@ impl ReviewStrategy for CodebaseStrategy {
             }
         }
         let _ = self.imports.set(ImportGraph::build(&files));
-        let _ = self.file_map.set(files.iter().cloned().map(|f| (f.path.clone(), f)).collect());
+        // Store only a compact excerpt per neighbor, not the full file contents
+        // (which `discover` already returns for screening).
+        let _ = self.file_map.set(
+            files
+                .iter()
+                .map(|f| (f.path.clone(), codebase_judgments::compact_neighbor(f)))
+                .collect(),
+        );
         Ok(Discovery { files, context_files })
     }
 
@@ -96,7 +103,8 @@ impl ReviewStrategy for CodebaseStrategy {
     }
 
     async fn locate(&self, signal: &Signal<SourceFile>) -> Result<Option<Finding>> {
-        codebase_judgments::locate_source_signal(&self.client, signal).await
+        let neighbors = self.neighbor_files(&signal.file.path);
+        codebase_judgments::locate_source_signal(&self.client, signal, &neighbors).await
     }
 
     async fn suggestions(&self, finding: &Finding) -> Result<(Option<String>, Option<String>)> {

@@ -184,7 +184,7 @@ pub async fn run_review<S: ReviewStrategy>(
         .collect();
     let context_paths = context_files.iter().map(|f| f.path().to_string()).collect();
 
-    let merge_confidence = merge_confidence::estimate(&findings, &matrix_rows);
+    let p_revert = merge_confidence::p_revert(&findings, &matrix_rows);
 
     Ok(ReviewReport {
         mode: strategy.mode(),
@@ -210,7 +210,7 @@ pub async fn run_review<S: ReviewStrategy>(
             routed_findings,
         },
         findings,
-        merge_confidence,
+        p_revert,
     })
 }
 

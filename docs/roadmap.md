@@ -44,10 +44,9 @@ Completed ahead of / from this plan:
   + `reviews/history/<sha>.json` trend (risk over time, hotspots, fix
   latency).
 - ✅ README note for FIND-005 (code is uploaded to the Jev API by design).
-- ✅ Spike: `P(revert)` / merge-confidence signal per PR — an uncalibrated
-  heuristic (`review/merge_confidence.rs`) now drives a `mergeConfidence`
-  field + dashboard stat; real calibration is the merge-confidence engine
-  (#17 / Beyond Review).
+- ✅ Spike: `P(revert)` signal per PR — an uncalibrated heuristic
+  (`review/merge_confidence.rs`) now drives a `pRevert` field + dashboard
+  stat; real calibration is the merge-confidence engine (#17 / Beyond Review).
 
 Now is complete.
 

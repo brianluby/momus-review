@@ -9,9 +9,9 @@ flowchart TD
     S -->|top 5 by max p| P[profile: choice role + score priority]
     L -->|confidence >= 0.55| M[choice mechanism]
     M -->|not noIssue| V[score severity 0-3]
-    V -->|>= 0.55 meta-judge| J[meta-judge noul: evidence supports claim?]
-    J -->|>= 1.5| R[choice owner]
-    J -->|>= 2.0| A[request_changes else comment]
+    V --> J[meta-judge: noul probability >= 0.55 else drop]
+    J -->|severity >= 1.5| R[choice owner]
+    J -->|severity >= 2.0| A[request_changes else comment]
     R & V -->|top 8 by severity| E[enrich: title/why from mechanism<br/>choice fix + choice test]
 ```
 

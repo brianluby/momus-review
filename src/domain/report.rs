@@ -153,7 +153,7 @@ pub struct ReviewReport {
     /// Uncalibrated heuristic P(revert) in [0, 1) from the review signals.
     /// A spike (see `review/merge_confidence.rs`); calibration is #17.
     #[serde(default)]
-    pub merge_confidence: f64,
+    pub p_revert: f64,
 }
 
 #[cfg(test)]

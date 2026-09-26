@@ -195,9 +195,12 @@ pub async fn profile_source_file(
 }
 
 /// Locates, classifies, scores, and routes a signal from a source file.
+/// `neighbors` (1-hop callers/callees) ride along so the meta-judge sees the
+/// same surrounding context the screener did.
 pub async fn locate_source_signal(
     client: &TypeSafeClient,
     signal: &Signal<SourceFile>,
+    neighbors: &[SourceFile],
 ) -> Result<Option<Finding>> {
     let regions = function_regions(&signal.file.content, &signal.file.path, REGION_LINES);
     if regions.is_empty() {
@@ -291,7 +294,10 @@ pub async fn locate_source_signal(
     let (severity, severity_confidence) = impact.score("severity")?;
 
     // 5. Meta-judge: a second skeptical pass kills unsupported claims.
-    let evidence = json!(region);
+    let evidence = json!({
+        "region": region,
+        "neighbors": neighbors.iter().map(compact_neighbor).collect::<Vec<_>>(),
+    });
     if meta::judge(client, signal.dimension, &mechanism, &evidence).await?
         < MIN_META_JUDGE_CONFIDENCE
     {
@@ -438,7 +444,7 @@ fn compact_test(test: &SourceFile, source_stem: &str) -> SourceFile {
     SourceFile { path: test.path.clone(), content }
 }
 
-fn compact_neighbor(f: &SourceFile) -> SourceFile {
+pub(crate) fn compact_neighbor(f: &SourceFile) -> SourceFile {
     let content: String = f
         .content
         .split('\n')

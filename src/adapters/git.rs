@@ -149,6 +149,24 @@ fn changed_files_in_scope(scope: &Path, exclude: &Exclude) -> Result<Vec<Changed
         .with_context(|| "resolve repo root")?;
     let relative_scope = relative_scope(&repo_root, &real_scope);
 
+    // Rename destinations don't exist at HEAD; remember old→new so the base
+    // lookup can read a renamed file's pre-change content.
+    let mut renamed: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let rename_output = git(
+        &repo_root,
+        &["diff", "HEAD", "--name-status", "--diff-filter=R", "--", relative_scope],
+    )
+    .unwrap_or_default();
+    for line in rename_output.lines() {
+        let mut parts = line.split('\t');
+        let status = parts.next().unwrap_or("");
+        let old = parts.next().unwrap_or("");
+        let new = parts.next().unwrap_or("");
+        if status.starts_with('R') && !old.is_empty() && !new.is_empty() {
+            renamed.insert(new.to_string(), old.to_string());
+        }
+    }
+
     let tracked_output = git(
         &repo_root,
         &[
@@ -181,7 +199,8 @@ fn changed_files_in_scope(scope: &Path, exclude: &Exclude) -> Result<Vec<Changed
                 &repo_root,
                 &["diff", "HEAD", "--unified=3", "--", path],
             )?;
-            let base = git(&repo_root, &["show", &format!("HEAD:{path}")]).unwrap_or_default();
+            let base_path = renamed.get(path).map(String::as_str).unwrap_or(path);
+            let base = git(&repo_root, &["show", &format!("HEAD:{base_path}")]).unwrap_or_default();
             files.push(ChangedFile { path: path.to_string(), patch, base });
         } else if let Some(content) = read_repo_file(&repo_root, path)? {
             files.push(ChangedFile {

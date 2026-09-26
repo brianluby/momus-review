@@ -294,7 +294,7 @@ pub async fn locate_signal(
     let (severity, severity_confidence) = impact.score("severity")?;
 
     // 5. Meta-judge: a second skeptical pass kills unsupported claims.
-    let evidence = json!(hunk);
+    let evidence = json!({ "hunk": hunk, "base": signal.file.base });
     if meta::judge(client, signal.dimension, &mechanism, &evidence).await?
         < MIN_META_JUDGE_CONFIDENCE
     {
