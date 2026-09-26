@@ -13,8 +13,10 @@ with concrete evidence, severity, and owner routing.
   TypeScript prototype; a thin HTTP client speaking the `system_one` wire
   format directly in the Rust port (see `docs/rust-types.md`)
 - Status: prototype proven in TypeScript (`jev-review` fork); Rust port of the
-  core funnel (`review`/`scan`/`dashboard`) is implemented and smoke-tested
-  against a live key
+  core funnel (`review`/`scan`/`dashboard`) shipped and validated on OWASP
+  Juice Shop through a golden-set eval harness (`momus-eval`), with evidence
+  excerpts, an OWASP-aligned security mechanism vocabulary, and crypto/
+  misconfig screen steering
 
 ## What It Does
 
@@ -72,6 +74,7 @@ fixes), `docs/rust-port.md` (migration plan).
 - `docs/roadmap.md` — Now/Next/Later, metrics, open bets
 - `docs/rust-port.md` — TS→Rust conversion plan, SDK parity checklist
 - `docs/rust-types.md` — the shipped Rust types/traits + the `jev_sdk` finding
+- `docs/security-taxonomy.md` — code-findable security classes vs. screen coverage, and the steering decisions
 - `docs/distribution.md` — `cargo install`, `npx`-style runs, CI gating
 
 ## Validation
@@ -91,16 +94,18 @@ momus scan . \
 | source files screened | 299 (1,495 cells = 299 × 5 dimensions) |
 | test files used as context | 249 |
 | signals ≥ 0.7 | 357 |
-| located findings | 99 (86 routed to an owner) |
-| `request_changes` / `comment` | 34 / 65 |
+| located findings | 106 (90 routed to an owner) |
+| `request_changes` / `comment` | 31 / 75 |
 
-Findings by dimension: security 39, reliability 40, correctness 12, testGap 8,
-compatibility 0. Security breaks down 17 authorization / 13 injection / 9
-exposure, and the top
-hits are the known Juice Shop vulnerability classes — `routes/checkKeys.ts`
-exposure (2.74), `routes/search.ts` injection (2.67),
-`routes/profileImageUrlUpload.ts` injection (2.64), `routes/login.ts`
-injection (2.60), `routes/orderHistory.ts` authorization (2.60).
+Findings by dimension: security 38, reliability 41, correctness 16, testGap 9,
+compatibility 2. Security now classifies with the OWASP-aligned vocabulary —
+`brokenAccessControl` 14, `pathTraversal` 7, `brokenAuthentication` 3,
+`noSqlInjection` 3, `sqlInjection` 2, `xss` 2, `sensitiveDataExposure` 2, plus
+`xxe`, `ssrf`, and `cryptographicFailure` — and the top hits map to the known
+Juice Shop classes: `routes/checkKeys.ts` `sensitiveDataExposure` (2.81),
+`routes/search.ts` `sqlInjection` (2.68),
+`routes/profileImageUrlUpload.ts` `ssrf` (2.66), `routes/login.ts`
+`sqlInjection` (2.60), `routes/orderHistory.ts` `brokenAccessControl` (2.59).
 
 Conditions: Apple-silicon macOS, `jev-latest` model, concurrency 3 (the
 policy default), end-to-end wall time ~46 s. That time is dominated by Jev API

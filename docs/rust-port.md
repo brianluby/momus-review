@@ -49,13 +49,16 @@ The wiring checked against the live API, not fixtures: `momus review` and
 5. **Harden**: port the `docs/security.md` must-preserve list exactly
    (`OpenOptionsExt` flags, `O_EXCL` temps, fail-loud errnos).
 
-## Then, Idiomatic Upgrades (only after parity)
+## Then, Idiomatic Upgrades (after parity — status noted)
 
-- `thiserror` error types replacing string errors.
-- `gix` instead of shelling out to git (or keep `Command` — no shell either way).
-- Retry policy tuning + cost/latency metering per run.
-- `clap` subcommands: `momus review [path]`, `momus scan [path]`,
-  `momus dashboard`, `momus check`.
+- `thiserror` error types replacing string errors — *pending*.
+- `gix` instead of shelling out to git (or keep `Command` — no shell either way) — *pending*.
+- Retry policy tuning + cost/latency metering per run — *done* (transient
+  `429`/`529`/`5xx` + connection/timeout with backoff in `typesafe.rs`).
+- `clap` subcommands — *done*: `momus review [paths…]`, `momus scan [paths…]`,
+  `momus dashboard`, with `--exclude`, `--follow-ups N`, and
+  `--fail-on-blocking`; plus the `momus-eval` golden-set harness. (`momus
+  check` was never implemented — superseded by `momus-eval`.)
 
 ## Risks
 

@@ -7,6 +7,25 @@ proven on TS and Rust. Stops at triage signals where users need actionable
 findings in their workflow. Biggest ROI is not more dimensions — it's evidence
 excerpts, explanations, and meeting reviewers where they work (PRs, CI gates).
 
+## Progress (2026-09-25)
+
+Completed ahead of / from this plan:
+
+- **Rust port shipped** — `review`/`scan`/`dashboard`, a thin `system_one`
+  client, hardening, MIT + public repo.
+- **Golden-set eval harness** (`momus-eval`, from "Later") — category coverage
+  + curated known-vulnerable corroboration, run against Juice Shop.
+- **Follow-up budget fixed** — unlimited by default (the old top-8 starved real
+  findings); `--follow-ups N` opts into a per-dimension cap.
+- **Security taxonomy** — OWASP-aligned mechanism vocabulary + crypto/misconfig
+  screen steering. See `docs/security-taxonomy.md`.
+- **Evidence excerpt** — each finding now carries the selected hunk/region
+  (partial "Now" item; no generated title/why/fix yet).
+
+Still open from "Now": generated title/why/fix, the full dashboard workbench
+(filter/sort/search/file-view/copy-as-PR-comment), SARIF + history trend, and
+the P(revert) spike.
+
 ## Now (1–2 weeks): make findings actionable
 
 - Evidence excerpts + generated title / why / suggested fix / suggested test
