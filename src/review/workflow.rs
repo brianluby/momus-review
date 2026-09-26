@@ -211,7 +211,9 @@ pub async fn run_review<S: ReviewStrategy>(
     let routed_findings = findings.iter().filter(|f| f.owner.is_some()).count();
 
     // 7. Enrich: title/why for every finding (deterministic); fix/test via one
-    //    narrow Jev call each, for at most MAX_ENRICH findings by severity.
+    //    narrow Jev call each, for the first MAX_ENRICH findings in report
+    //    order: by severity, with refinement's pairwise-ranked top-K (K <=
+    //    MAX_ENRICH) re-ordered within it, so the same findings are chosen.
     for finding in &mut findings {
         explain::apply_context(finding);
     }

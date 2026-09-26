@@ -81,7 +81,7 @@ async fn chain(r: &Refiner<'_>, finding: &Finding) -> anyhow::Result<TaintChain>
     let reaches_sink = first.noul("reachesSink")?;
 
     let sanitized = if reaches_sink < MIN_SINK_PROBABILITY {
-        0.0
+        None
     } else {
         let second = r
             .client
@@ -102,7 +102,7 @@ async fn chain(r: &Refiner<'_>, finding: &Finding) -> anyhow::Result<TaintChain>
                 }),
             )
             .await?;
-        second.noul("sanitized")?
+        Some(second.noul("sanitized")?)
     };
 
     let untrusted = untrusted(&source, source_confidence);
@@ -112,7 +112,7 @@ async fn chain(r: &Refiner<'_>, finding: &Finding) -> anyhow::Result<TaintChain>
         untrusted,
         reaches_sink,
         sanitized,
-        exploitability: untrusted * reaches_sink * (1.0 - sanitized),
+        exploitability: untrusted * reaches_sink * (1.0 - sanitized.unwrap_or(0.0)),
     })
 }
 

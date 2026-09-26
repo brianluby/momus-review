@@ -146,9 +146,11 @@ pub struct TaintChain {
     pub untrusted: f64,
     /// P(the data reaches the mechanism's sink).
     pub reaches_sink: f64,
-    /// P(the data is validated, escaped, or parameterized for that sink).
-    pub sanitized: f64,
-    /// untrusted × reaches_sink × (1 − sanitized).
+    /// P(the data is validated, escaped, or parameterized for that sink);
+    /// `None` when not assessed because the sink is unlikely to be reached.
+    pub sanitized: Option<f64>,
+    /// untrusted × reaches_sink × (1 − sanitized), with an unassessed
+    /// sanitizer counted as 0 (the low `reaches_sink` already dominates).
     pub exploitability: f64,
 }
 

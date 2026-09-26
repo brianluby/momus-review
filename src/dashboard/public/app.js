@@ -751,7 +751,7 @@ function refinementDetails(finding, labels) {
         "p",
         {},
         h("strong", {}, "Taint: "),
-        `source ${humanize(t.source)} (untrusted ${fixed(t.untrusted)}) → reaches sink ${fixed(t.reachesSink)} → sanitized ${fixed(t.sanitized)} · exploitability ${fixed(t.exploitability)}`,
+        `source ${humanize(t.source)} (untrusted ${fixed(t.untrusted)}) → reaches sink ${fixed(t.reachesSink)} → sanitized ${isNum(t.sanitized) ? fixed(t.sanitized) : "not assessed"} · exploitability ${fixed(t.exploitability)}`,
       ),
     );
   }

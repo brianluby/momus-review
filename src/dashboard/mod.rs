@@ -216,6 +216,9 @@ async fn post_feedback(
     if !same_origin(&headers, port) {
         return Err((StatusCode::FORBIDDEN, "Cross-origin feedback refused"));
     }
+    if !valid_vote(&request) {
+        return Err((StatusCode::UNPROCESSABLE_ENTITY, "Only a down vote can suppress a finding"));
+    }
     let StoredReport::Ok { report, .. } = read_report(&report_path()) else {
         return Err((StatusCode::CONFLICT, "No saved report"));
     };
@@ -223,6 +226,11 @@ async fn post_feedback(
     let log = append_feedback(&feedback_path(), entry)
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Could not save feedback"))?;
     Ok(Json(votes_body(&log)))
+}
+
+/// Suppression is the "Hide" (down vote) action; an up vote cannot hide.
+fn valid_vote(request: &FeedbackRequest) -> bool {
+    !(request.suppress && request.vote == Vote::Up)
 }
 
 /// A missing `Origin` is a non-browser client (which could write the file
@@ -322,5 +330,14 @@ mod tests {
         assert!(entry.suppress);
         assert!(feedback_entry(&report, &request("nope")).is_none());
         assert!(feedback_entry(&report, &request("")).is_none());
+    }
+
+    #[test]
+    fn only_a_down_vote_can_suppress() {
+        let request = |vote, suppress| FeedbackRequest { fingerprint: "abc".into(), vote, suppress };
+        assert!(valid_vote(&request(Vote::Down, true)));
+        assert!(valid_vote(&request(Vote::Down, false)));
+        assert!(valid_vote(&request(Vote::Up, false)));
+        assert!(!valid_vote(&request(Vote::Up, true)));
     }
 }
