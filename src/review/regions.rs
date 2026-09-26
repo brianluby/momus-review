@@ -92,6 +92,7 @@ pub fn function_regions(content: &str, path: &str, max_region_lines: usize) -> V
     regions
 }
 
+/// True when `path` should use Rust declaration patterns (a `.rs` source).
 fn is_rust(path: &str) -> bool {
     path.ends_with(".rs")
 }
@@ -117,6 +118,8 @@ fn build_region(lines: &[&str], id: usize, start: usize, end: usize) -> Region {
     }
 }
 
+/// Splits `lines` into fixed `lines_per_region` windows: the fallback for
+/// declaration-free files, and the chunker for oversized regions/preambles.
 fn uniform_regions(lines: &[&str], lines_per_region: usize) -> Vec<Region> {
     let count = lines.len().div_ceil(lines_per_region);
     (0..count)
