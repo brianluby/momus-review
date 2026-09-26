@@ -33,7 +33,8 @@ const FILE_ROLES: [(&str, &str); 6] = [
     ("utility", "Shared helper, adapter, formatting, or low-level utility"),
 ];
 
-/// Screens one source file per 160-line region, then max-merges per dimension.
+/// Screens one source file per function-aware region (declaration-aligned,
+/// capped at `SCREEN_REGION_LINES`), then max-merges per dimension.
 pub async fn screen_source_file(
     client: &TypeSafeClient,
     file: &SourceFile,

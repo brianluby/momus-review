@@ -152,13 +152,22 @@ pub async fn run_review<S: ReviewStrategy>(
         let suggestions: Vec<(Option<String>, Option<String>)> = stream::iter(findings.iter().take(enrich_cap))
             .map(|finding| {
                 let strategy = &strategy;
-                async move { strategy.suggestions(finding).await }
+                async move {
+                    match strategy.suggestions(finding).await {
+                        Ok(suggestions) => suggestions,
+                        Err(err) => {
+                            log(&format!(
+                                "  enrich {} failed (fix/test left empty): {err:#}",
+                                finding.file
+                            ));
+                            (None, None)
+                        }
+                    }
+                }
             })
             .buffered(CONCURRENCY)
             .collect::<Vec<_>>()
-            .await
-            .into_iter()
-            .collect::<Result<Vec<_>>>()?;
+            .await;
         for (finding, (fix, test)) in findings.iter_mut().zip(suggestions) {
             finding.fix = fix;
             finding.test = test;

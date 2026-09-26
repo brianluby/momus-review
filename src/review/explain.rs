@@ -223,28 +223,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mechanism_title_covers_every_dimension_and_no_issue() {
-        assert_eq!(
-            mechanism_title(Dimension::Correctness, "condition"),
-            Some("Incorrect condition branch")
-        );
+    fn mechanism_title_covers_every_mechanism_key() {
+        // Exhaustive: every non-`noIssue` key in the vocabulary maps to a
+        // title, and `noIssue` maps to None, so an added key can't silently
+        // fall back to rendering the raw mechanism key.
+        for dimension in crate::domain::policy::DIMENSIONS {
+            for (key, _description) in mechanisms(dimension) {
+                if *key == "noIssue" {
+                    assert_eq!(mechanism_title(dimension, key), None);
+                } else {
+                    assert!(
+                        mechanism_title(dimension, key).is_some(),
+                        "missing title for {dimension:?}::{key}"
+                    );
+                }
+            }
+        }
+
+        // Spot-check representative titles stay human-correct.
         assert_eq!(
             mechanism_title(Dimension::Security, "sqlInjection"),
             Some("SQL injection")
         );
         assert_eq!(
-            mechanism_title(Dimension::Reliability, "cleanup"),
-            Some("Missing cleanup")
-        );
-        assert_eq!(
-            mechanism_title(Dimension::Compatibility, "api"),
-            Some("Incompatible public API change")
-        );
-        assert_eq!(
             mechanism_title(Dimension::TestGap, "boundary"),
             Some("Untested boundary case")
         );
-        assert_eq!(mechanism_title(Dimension::Security, "noIssue"), None);
+        assert_eq!(
+            mechanism_title(Dimension::Reliability, "cleanup"),
+            Some("Missing cleanup")
+        );
     }
 
     #[test]

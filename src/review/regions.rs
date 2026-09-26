@@ -19,7 +19,7 @@ pub struct Region {
 
 static RUST_DECL: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"^(pub(\((crate|super|self|in\s+[\w:]+)\))?\s+)?(async\s+)?(unsafe\s+)?(extern\s+"[^"]*"\s+)?(fn|impl|trait|struct|enum|union|mod|macro_rules!)\b"#,
+        r#"^(pub(\((crate|super|self|in\s+[\w:]+)\))?\s+)?(async\s+)?(unsafe\s+)?(extern\s+"[^"]*"\s+)?((?:fn|impl|trait|struct|enum|union|mod)\b|macro_rules!)"#,
     )
     .expect("valid Rust declaration regex")
 });
@@ -38,47 +38,55 @@ static TS_DECL: LazyLock<Regex> = LazyLock::new(|| {
 /// methods or class methods never split).
 pub fn function_regions(content: &str, path: &str, max_region_lines: usize) -> Vec<Region> {
     let lines: Vec<&str> = content.split('\n').collect();
-    let decl = if is_rust(path) { &RUST_DECL } else { &TS_DECL };
+    let is_rust = is_rust(path);
+    let decl = if is_rust { &RUST_DECL } else { &TS_DECL };
 
-    let decl_starts: Vec<usize> = lines
+    let raw_starts: Vec<usize> = lines
         .iter()
         .enumerate()
         .filter(|(_, line)| decl.is_match(line))
         .map(|(index, _)| index)
         .collect();
 
-    if decl_starts.is_empty() {
+    if raw_starts.is_empty() {
         return uniform_regions(&lines, max_region_lines);
     }
 
+    // Pull each declaration's boundary back across the contiguous attribute /
+    // doc / decorator lines immediately above it, so a declaration's evidence
+    // retains its `#[cfg]`/`#[test]` gate, `///` docs, or `@decorator`.
+    let decl_starts: Vec<usize> = raw_starts
+        .iter()
+        .map(|&start| {
+            let mut boundary = start;
+            while boundary > 0 && is_attached_attribute(lines[boundary - 1], is_rust) {
+                boundary -= 1;
+            }
+            boundary
+        })
+        .collect();
+
     let mut regions: Vec<Region> = Vec::new();
 
-    for (position, &start) in decl_starts.iter().enumerate() {
-        let end = decl_starts.get(position + 1).copied().unwrap_or(lines.len());
-        let span = end - start;
-        if span > max_region_lines {
-            let mut chunk_start = start;
-            while chunk_start < end {
-                let chunk_end = (chunk_start + max_region_lines).min(end);
-                regions.push(build_region(&lines, regions.len() + 1, chunk_start, chunk_end));
-                chunk_start = chunk_end;
-            }
-        } else {
-            regions.push(build_region(&lines, regions.len() + 1, start, end));
-        }
-    }
-
-    // Attach the leading preamble (imports/uses/comments) to the first
-    // region, unless it is empty/whitespace-only, in which case drop it.
-    let preamble_end = decl_starts[0];
-    let has_preamble = lines[..preamble_end]
+    // A non-blank leading preamble (imports, uses, comments) becomes its own
+    // region(s), chunked to stay within `max_region_lines`; the first
+    // declaration region then keeps its true `start_line`.
+    let first_decl = decl_starts[0];
+    let has_preamble = lines[..first_decl]
         .iter()
         .any(|line| !line.trim().is_empty());
     if has_preamble {
-        let preamble = lines[..preamble_end].join("\n");
-        let first = &mut regions[0];
-        first.content = format!("{preamble}\n{}", first.content);
-        first.start_line = 1;
+        regions.extend(uniform_regions(&lines[..first_decl], max_region_lines));
+    }
+
+    for (position, &start) in decl_starts.iter().enumerate() {
+        let end = decl_starts.get(position + 1).copied().unwrap_or(lines.len());
+        let mut chunk_start = start;
+        while chunk_start < end {
+            let chunk_end = (chunk_start + max_region_lines).min(end);
+            regions.push(build_region(&lines, regions.len() + 1, chunk_start, chunk_end));
+            chunk_start = chunk_end;
+        }
     }
 
     regions
@@ -88,6 +96,19 @@ fn is_rust(path: &str) -> bool {
     path.ends_with(".rs")
 }
 
+/// True when `line` annotates the *following* declaration rather than
+/// trailing after the previous one: Rust attributes (`#[…]`) and doc comments
+/// (`///`, `//!`), or TS/JS decorators (`@…`) and doc comments.
+fn is_attached_attribute(line: &str, is_rust: bool) -> bool {
+    let trimmed = line.trim_start();
+    if is_rust {
+        trimmed.starts_with("#[") || trimmed.starts_with("///") || trimmed.starts_with("//!")
+    } else {
+        trimmed.starts_with('@') || trimmed.starts_with("///")
+    }
+}
+
+/// Builds one `Region` from the `start..end` line range (1-based `start_line`).
 fn build_region(lines: &[&str], id: usize, start: usize, end: usize) -> Region {
     Region {
         id: format!("R{id}"),
@@ -115,34 +136,66 @@ mod tests {
     fn rust_declarations_split_but_nested_methods_do_not() {
         let src = "use std::io;\n\n// module comment\n\nfn alpha() {\n    body();\n}\n\nfn beta() {\n    other();\n}\n\nimpl Foo {\n    fn method(&self) {}\n}\n";
         let regions = function_regions(src, "src/lib.rs", 80);
-        assert_eq!(regions.len(), 3);
+        assert_eq!(regions.len(), 4);
 
         assert_eq!(regions[0].start_line, 1);
-        assert_eq!(
-            regions[0].content,
-            "use std::io;\n\n// module comment\n\nfn alpha() {\n    body();\n}\n"
-        );
+        assert_eq!(regions[0].content, "use std::io;\n\n// module comment\n");
 
-        assert_eq!(regions[1].start_line, 9);
-        assert_eq!(regions[1].content, "fn beta() {\n    other();\n}\n");
+        assert_eq!(regions[1].start_line, 5);
+        assert_eq!(regions[1].content, "fn alpha() {\n    body();\n}\n");
 
-        assert_eq!(regions[2].start_line, 13);
-        assert_eq!(regions[2].content, "impl Foo {\n    fn method(&self) {}\n}\n");
+        assert_eq!(regions[2].start_line, 9);
+        assert_eq!(regions[2].content, "fn beta() {\n    other();\n}\n");
+
+        assert_eq!(regions[3].start_line, 13);
+        assert_eq!(regions[3].content, "impl Foo {\n    fn method(&self) {}\n}\n");
     }
 
     #[test]
     fn ts_class_methods_stay_with_their_class() {
         let src = "import x from \"./x\";\n\nclass Foo {\n  method() {}\n  other() {}\n}\n\nfunction bar() {}\n\nconst baz = () => {};\n";
         let regions = function_regions(src, "src/a.ts", 80);
-        assert_eq!(regions.len(), 3);
+        assert_eq!(regions.len(), 4);
 
         assert_eq!(regions[0].start_line, 1);
-        assert_eq!(
-            regions[0].content,
-            "import x from \"./x\";\n\nclass Foo {\n  method() {}\n  other() {}\n}\n"
-        );
-        assert_eq!(regions[1].content, "function bar() {}\n");
-        assert_eq!(regions[2].content, "const baz = () => {};\n");
+        assert_eq!(regions[0].content, "import x from \"./x\";\n");
+        assert_eq!(regions[1].content, "class Foo {\n  method() {}\n  other() {}\n}\n");
+        assert_eq!(regions[2].content, "function bar() {}\n");
+        assert_eq!(regions[3].content, "const baz = () => {};\n");
+    }
+
+    #[test]
+    fn attributes_travel_with_their_declaration() {
+        let src = "fn alpha() {}\n\n#[cfg(test)]\n#[test]\nfn beta() {}\n";
+        let regions = function_regions(src, "src/lib.rs", 80);
+        assert_eq!(regions.len(), 2);
+        assert_eq!(regions[0].content, "fn alpha() {}\n");
+        // beta's region keeps its gate/test attributes.
+        assert_eq!(regions[1].start_line, 3);
+        assert_eq!(regions[1].content, "#[cfg(test)]\n#[test]\nfn beta() {}\n");
+    }
+
+    #[test]
+    fn long_preamble_chunks_and_decl_keeps_line() {
+        let src = "// h1\n// h2\n// h3\n// h4\n// h5\n// h6\nfn main() {}\n";
+        let regions = function_regions(src, "src/lib.rs", 3);
+        assert_eq!(regions.len(), 3);
+        assert_eq!(regions[0].start_line, 1);
+        assert_eq!(regions[0].content, "// h1\n// h2\n// h3");
+        assert_eq!(regions[1].content, "// h4\n// h5\n// h6");
+        // The first declaration keeps its true line, not the preamble's 1.
+        assert_eq!(regions[2].start_line, 7);
+        assert_eq!(regions[2].content, "fn main() {}\n");
+    }
+
+    #[test]
+    fn macro_rules_declaration_gets_its_own_region() {
+        let src = "fn first() {}\n\nmacro_rules! my_macro {\n    () => {};\n}\n\nfn after() {}\n";
+        let regions = function_regions(src, "src/lib.rs", 80);
+        assert_eq!(regions.len(), 3);
+        assert_eq!(regions[1].start_line, 3);
+        assert_eq!(regions[1].content, "macro_rules! my_macro {\n    () => {};\n}\n");
+        assert_eq!(regions[2].start_line, 7);
     }
 
     #[test]
