@@ -11,6 +11,7 @@ flowchart TD
     M -->|not noIssue| V[score severity 0-3]
     V -->|>= 1.5| R[choice owner]
     V -->|>= 2.0| A[request_changes else comment]
+    R & V -->|top 8 by severity| E[enrich: title/why from mechanism<br/>choice fix + choice test]
 ```
 
 ## Stages
@@ -29,8 +30,11 @@ flowchart TD
    priority on `reviewPriorityRubric`. Cheap triage aid, not gating.
 3. **Locate** (every signal ≥ 0.7; unlimited by default, `--follow-ups N`
    re-imposes a per-dimension budget): `choice` strongest-evidence hunk
-   (`parseHunks`, 80-line chunks for new files) or source region (80-line
-   windows; screening uses 160-line windows, max-merged). `noMatch` fallback
+   (`parseHunks`, 80-line chunks for new files) or function-aware source
+   region (`regions::function_regions`, a tree-sitter-free heuristic splitting
+   at column-0 top-level declarations; oversized declarations and
+   declaration-free files fall back to uniform windows; screening uses the
+   same regions, max-merged). `noMatch` fallback
    + `MIN_LOCATION_CONFIDENCE=0.55` kill weak attributions.
 4. **Mechanism**: `choice` over per-dimension `mechanisms` vocabulary.
    `noIssue` kills the finding — the first precision gate.
@@ -38,6 +42,12 @@ flowchart TD
 6. **Route** (severity ≥ 1.5): `choice` over `owners`
    (security/api/runtime/testing/maintainer). Action derives from severity:
    ≥ 2.0 → `request_changes`, else `comment`.
+7. **Enrich** (top 8 located findings by severity): `title` / `why` are
+   derived deterministically from the classified mechanism; `fix` / `test`
+   come from one narrow `choice` call each (`suggestedFix`, `suggestedTest`)
+   over curated strategy vocabularies. Jev offers no free-text generation
+   (only `noul`/`choice`/`score`), so "generation" is expressed as a
+   `choice` whose selected label's description is the suggestion.
 
 ## Policy Lives in Code
 
@@ -52,18 +62,20 @@ and `--follow-ups N` re-imposes a cap in code.
 `ReviewReport` (`domain/report.rs`): mode, scope, dimensions, config snapshot,
 `screenedFiles`, `contextFiles`, full probability `matrix`, `profiles`,
 workflow funnel counts, and `findings` (file, line, dimension, mechanism +
-confidences, severity + confidence, owner + confidence, action, and the
-`evidence` excerpt — the selected diff hunk or source region).
+confidences, severity + confidence, owner + confidence, action, the
+`evidence` excerpt, and generated `title` / `why` / `fix` / `test`).
 
-Known gap: findings carry the evidence excerpt but no generated title / why /
-suggested-fix — the remaining actionability upgrade (see `roadmap.md`). The
-dashboard renders the excerpt but not yet a full workbench.
+The dashboard renders each finding's evidence excerpt plus its generated
+`title`, `why`, `fix`, and `test` — the start of the review workbench
+(remaining workbench work: filter/sort/search/file-view/copy-as-PR-comment;
+see `roadmap.md`).
 
 ## Cost Model
 
 Per file: 1 screen call (5–7 questions batched — security is 3 sub-`noul`s).
 Per review: +5 profiles max, +1 locate chain per followed signal (unlimited by
-default; each up to 4 calls: evidence, mechanism, severity, owner). Codebase
-mode multiplies screening by region count (160-line windows). No caching yet —
+default; each up to 4 calls: evidence, mechanism, severity, owner), +1 enrich
+call per finding up to the top 8 by severity. Codebase mode multiplies
+screening by region count (function-aware regions). No caching yet —
 re-scans resend everything. Budgets are static globals; per-dimension
 thresholds and value-of-information selection are roadmap items.

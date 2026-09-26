@@ -66,4 +66,6 @@ pub trait ReviewStrategy: Send + Sync {
     async fn profile(&self, file: &Self::File, probabilities: &Probabilities)
         -> Result<FileProfile>;
     async fn locate(&self, signal: &Signal<Self::File>) -> Result<Option<Finding>>;
+    /// Enrich a located finding with a suggested fix and test strategy.
+    async fn suggestions(&self, finding: &Finding) -> Result<(Option<String>, Option<String>)>;
 }

@@ -68,4 +68,8 @@ impl ReviewStrategy for ChangesStrategy {
     async fn locate(&self, signal: &Signal<ChangedFile>) -> Result<Option<Finding>> {
         judgments::locate_signal(&self.client, signal).await
     }
+
+    async fn suggestions(&self, finding: &Finding) -> Result<(Option<String>, Option<String>)> {
+        crate::review::explain::enrich_suggestions(&self.client, finding).await
+    }
 }

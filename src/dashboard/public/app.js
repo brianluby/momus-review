@@ -421,7 +421,8 @@ function findings(report) {
             "td",
             { class: "dim" },
             h("span", {}, labels[finding.dimension] ?? String(finding.dimension)),
-            finding.mechanism && h("small", {}, String(finding.mechanism)),
+            (finding.title || finding.mechanism) &&
+              h("small", {}, String(finding.title || finding.mechanism)),
           ),
           h("td", { class: "sev" }, h("span", { class: "sr" }, "severity "), severityMeter(finding.severity)),
           h("td", { class: "owner" }, finding.owner ? String(finding.owner) : "–"),
@@ -444,6 +445,24 @@ function findings(report) {
                   {},
                   h("summary", {}, "Evidence"),
                   h("pre", {}, h("code", {}, String(finding.evidence))),
+                ),
+              ),
+            )
+          : null,
+        (finding.why || finding.fix || finding.test)
+          ? h(
+              "tr",
+              { class: "suggestion-row" },
+              h(
+                "td",
+                { colspan: "5" },
+                h(
+                  "details",
+                  {},
+                  h("summary", {}, "Why & how to fix"),
+                  finding.why && h("p", {}, String(finding.why)),
+                  finding.fix && h("p", {}, h("strong", {}, "Fix: "), String(finding.fix)),
+                  finding.test && h("p", {}, h("strong", {}, "Test: "), String(finding.test)),
                 ),
               ),
             )

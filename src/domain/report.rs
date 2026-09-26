@@ -83,6 +83,18 @@ pub struct Finding {
     /// supports this finding.
     #[serde(default)]
     pub evidence: String,
+    /// A concise human title derived deterministically from the mechanism.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// The matching mechanism description (why this concern matters).
+    #[serde(default)]
+    pub why: Option<String>,
+    /// A model-selected fix strategy (actionable description).
+    #[serde(default)]
+    pub fix: Option<String>,
+    /// A model-selected test strategy (actionable description).
+    #[serde(default)]
+    pub test: Option<String>,
 }
 
 /// `matrix: Array<{ file } & Record<Dimension, number>>`. The per-file
@@ -167,6 +179,10 @@ mod tests {
                 owner_confidence: Some(0.7),
                 action: Action::RequestChanges,
                 evidence: "@@ -1,2 +1,2 @@\n-foo\n+bar".into(),
+                title: None,
+                why: None,
+                fix: None,
+                test: None,
             }],
             ..Default::default()
         };
