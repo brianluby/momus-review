@@ -10,12 +10,19 @@ through those tables — there is no second extension list to keep in sync.
 
 ## Supported languages (20)
 
-The consensus set: languages in the top 20 of at least two of TIOBE
-(Sep 2026), RedMonk (Jan 2026), the Stack Overflow 2025 survey, and GitHub
-Octoverse 2025. Legacy TIOBE-only entries (COBOL, Ada, Fortran, Scratch,
-Visual Basic, Delphi, Assembly, Objective-C) and markup (HTML/CSS) are out of
-scope; `docs/security-taxonomy.md` records the per-language security classes
-this adds.
+Chosen by cross-source agreement across TIOBE (Sep 2026), RedMonk (Jan 2026),
+the Stack Overflow 2025 survey, and GitHub Octoverse 2025. Twelve languages
+rank top-20 in at least three of the four — Python, JavaScript, Java, C#, C++,
+PHP, Go, TypeScript, C, shell, Rust, Swift — six more in two (SQL, Ruby,
+PowerShell, R, Kotlin, Dart), and Lua (Stack Overflow #16) and Scala (RedMonk
+#14) round the set out on one strong axis each.
+
+Excluded despite ranking: HTML/CSS (markup, not code the five dimensions
+describe), Assembly and Objective-C (legacy, declining), and the TIOBE-only
+legacy entries (COBOL, Ada, Fortran, Scratch, Visual Basic, Delphi). Every one
+of them is a row in `language.rs` plus a mechanism table away from being
+supported. `docs/security-taxonomy.md` records the per-language security
+classes this adds.
 
 | language | extensions | test naming | test-body markers |
 |---|---|---|---|
