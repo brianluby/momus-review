@@ -2,10 +2,10 @@
 //! concerns the reviewer screens for. Pure data. Mirrors `domain/config.ts`.
 
 use std::collections::BTreeMap;
-use std::sync::LazyLock;
 
-use regex::Regex;
 use serde::{Deserialize, Serialize};
+
+use crate::domain::language::Language;
 
 // The five screening dimensions. Serialized as camelCase so `testGap` matches
 // the wire key the dashboard reads (and the `matrix` row keys).
@@ -100,25 +100,6 @@ pub const MAX_FOLLOW_UPS: usize = 8;
 pub const MAX_PROFILES: usize = 5;
 pub const CONCURRENCY: usize = 3;
 
-// The prototype uses two regex literals. `regex::Regex` is not `const`-safe,
-// so they become `LazyLock` statics with the initializer at the declaration.
-static SOURCE_FILE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\.(?:[cm]?[jt]sx?|rs)$").expect("valid regex")
-});
-
-static TEST_FILE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?:^|/)(?:tests?|__tests__)(?:/|$)|\.(?:spec|test)\.[cm]?[jt]sx?$")
-        .expect("valid regex")
-});
-
-pub fn source_file() -> &'static Regex {
-    &SOURCE_FILE
-}
-
-pub fn test_file() -> &'static Regex {
-    &TEST_FILE
-}
-
 // ---- Vocabularies (per-dimension mechanisms; rubrics; owners) ---------
 
 /// `mechanisms[d]`: the per-dimension `choice` vocabulary (name → description).
@@ -178,6 +159,475 @@ pub fn mechanisms(d: Dimension) -> &'static [(&'static str, &'static str)] {
     }
 }
 
+/// The language-specific mechanism additions, keyed by language + dimension.
+///
+/// These are the footguns that only exist in one language's idioms — Rust
+/// `unsafe`/`unwrap`, TS `any`/casts, C memory safety, Go's ignored `error`,
+/// shell word splitting. `mechanisms_for` splices them ahead of the `other`
+/// sentinel, so the generic per-dimension entries stay available as fallbacks
+/// and `other`/`noIssue` keep their position.
+///
+/// A key is shared across languages only when it means exactly the same thing
+/// in both (`useAfterFree` for C and C++, `nonNullAssertion` for TS/Kotlin/
+/// Swift/Dart), so `explain::mechanism_title` can stay keyed on
+/// dimension + key alone. Dimensions where a language adds nothing are
+/// omitted rather than padded: `testGap` is deliberately language-free — its
+/// generic `branch`/`failure`/`boundary`/`integration` entries already name
+/// every test gap worth flagging.
+const LANGUAGE_MECHANISMS: &[(Language, Dimension, &[(&str, &str)])] = &[
+    // ---- Rust (the ticket's `unsafe`/`unwrap`/`panic!`) ----
+    (
+        Language::Rust,
+        Dimension::Correctness,
+        &[
+            ("unsafeBlock", "An `unsafe` block relies on an invariant the code does not establish or check"),
+            ("unwrapPanic", "A fallible call is unwrapped, panicking on an unexpected `None` or `Err`"),
+            ("panicPath", "`panic!`/`todo!`/`unreachable!` is reachable from a normal path"),
+        ],
+    ),
+    (
+        Language::Rust,
+        Dimension::Reliability,
+        &[("lockPoisoning", "A poisoned lock is ignored, so work continues on inconsistent state")],
+    ),
+    // ---- TypeScript ----
+    (
+        Language::TypeScript,
+        Dimension::Correctness,
+        &[
+            ("anyEscape", "`any` (explicit or inferred) discards the types the rest of the code relies on"),
+            ("uncheckedCast", "A cast (`as`) is applied without validating the runtime type"),
+            ("nonNullAssertion", "A non-null assertion (`!`) skips a real null or undefined check"),
+        ],
+    ),
+    (
+        Language::TypeScript,
+        Dimension::Security,
+        &[
+            ("prototypePollution", "Untrusted keys are merged into an object, reaching its prototype"),
+            ("dynamicCodeExecution", "Untrusted text is executed as code (`eval`, `new Function`)"),
+        ],
+    ),
+    (
+        Language::TypeScript,
+        Dimension::Reliability,
+        &[("unawaitedPromise", "A promise is created but never awaited or returned, so its failure is unobserved")],
+    ),
+    // ---- JavaScript ----
+    (
+        Language::JavaScript,
+        Dimension::Correctness,
+        &[
+            ("looseEquality", "A loose `==`/`!=` comparison coerces operands instead of comparing them"),
+            ("thisBinding", "A callback loses or rebinds `this`, so the wrong object is used"),
+            ("implicitGlobal", "A missing declaration creates or clobbers a global"),
+        ],
+    ),
+    (
+        Language::JavaScript,
+        Dimension::Security,
+        &[
+            ("prototypePollution", "Untrusted keys are merged into an object, reaching its prototype"),
+            ("dynamicCodeExecution", "Untrusted text is executed as code (`eval`, `new Function`)"),
+        ],
+    ),
+    (
+        Language::JavaScript,
+        Dimension::Reliability,
+        &[("unawaitedPromise", "A promise is created but never awaited or returned, so its failure is unobserved")],
+    ),
+    // ---- Python ----
+    (
+        Language::Python,
+        Dimension::Correctness,
+        &[
+            ("mutableDefaultArgument", "A mutable default argument is created once and shared across calls"),
+            ("lateBindingClosure", "A closure captures a loop variable by reference and sees its last value"),
+        ],
+    ),
+    (
+        Language::Python,
+        Dimension::Security,
+        &[
+            ("dynamicCodeExecution", "Untrusted text is executed as code (`eval`, `exec`)"),
+            ("assertForValidation", "An input or authorization check is enforced only by `assert`, which optimized builds remove"),
+        ],
+    ),
+    (
+        Language::Python,
+        Dimension::Reliability,
+        &[
+            ("swallowedException", "A caught exception is discarded or logged instead of handled"),
+            ("resourceLeak", "A resource is not closed on every path (no `with`/`finally`)"),
+        ],
+    ),
+    // ---- Java ----
+    (
+        Language::Java,
+        Dimension::Correctness,
+        &[
+            ("nullDereference", "A possibly-null value is dereferenced without a check"),
+            ("equalsHashContract", "`equals`/`hashCode`/`compareTo` disagree, so hash collections misbehave"),
+        ],
+    ),
+    (
+        Language::Java,
+        Dimension::Security,
+        &[("unsafeReflection", "Reflection or a dynamic class load is driven by untrusted input")],
+    ),
+    (
+        Language::Java,
+        Dimension::Reliability,
+        &[
+            ("swallowedException", "A caught exception is discarded or logged instead of handled"),
+            ("resourceLeak", "A resource is not closed on every path (no try-with-resources)"),
+        ],
+    ),
+    (
+        Language::Java,
+        Dimension::Compatibility,
+        &[("serializedFormChange", "A change to a serializable class breaks previously persisted data")],
+    ),
+    // ---- C# ----
+    (
+        Language::CSharp,
+        Dimension::Correctness,
+        &[
+            ("nullDereference", "A possibly-null value is dereferenced without a check"),
+            ("structCopyMutation", "A struct is mutated through a copy, discarding the change"),
+        ],
+    ),
+    (
+        Language::CSharp,
+        Dimension::Reliability,
+        &[
+            ("asyncVoid", "An `async void` method cannot be awaited, so its failure escapes the caller"),
+            ("resourceLeak", "A resource is not closed on every path (no `using`)"),
+        ],
+    ),
+    // ---- C ----
+    (
+        Language::C,
+        Dimension::Correctness,
+        &[
+            ("uncheckedReturn", "A return value that signals failure or a short read is ignored"),
+            ("pointerArithmetic", "Pointer or index arithmetic can step outside the object it addresses"),
+        ],
+    ),
+    (
+        Language::C,
+        Dimension::Security,
+        &[
+            ("bufferOverflow", "A fixed-size buffer is written past its bounds"),
+            ("formatString", "Untrusted text is used as a format string"),
+            ("useAfterFree", "Memory is used after its lifetime ends"),
+        ],
+    ),
+    (
+        Language::C,
+        Dimension::Reliability,
+        &[("uncheckedAllocation", "An allocation result is used without checking for failure")],
+    ),
+    (
+        Language::C,
+        Dimension::Compatibility,
+        &[("abiChange", "A struct layout, signature, or calling convention changes incompatibly")],
+    ),
+    // ---- C++ ----
+    (
+        Language::Cpp,
+        Dimension::Correctness,
+        &[
+            ("uninitializedUse", "A value is read before it is initialized"),
+            ("uncheckedReturn", "A return value that signals failure or a short read is ignored"),
+        ],
+    ),
+    (
+        Language::Cpp,
+        Dimension::Security,
+        &[
+            ("useAfterFree", "Memory is used after its lifetime ends"),
+            ("outOfBoundsAccess", "A container or array element is accessed outside its bounds"),
+        ],
+    ),
+    (
+        Language::Cpp,
+        Dimension::Reliability,
+        &[
+            ("danglingReference", "A reference or iterator outlives the object it addresses"),
+            ("exceptionEscapeDestructor", "An exception escapes a destructor or another `noexcept` boundary"),
+        ],
+    ),
+    (
+        Language::Cpp,
+        Dimension::Compatibility,
+        &[("abiChange", "A struct layout, signature, or calling convention changes incompatibly")],
+    ),
+    // ---- Go ----
+    (
+        Language::Go,
+        Dimension::Correctness,
+        &[
+            ("ignoredError", "A returned error is discarded instead of handled"),
+            ("nilMapOrChannel", "A nil map, channel, or interface value is written to or selected on"),
+        ],
+    ),
+    (
+        Language::Go,
+        Dimension::Security,
+        &[("unescapedTemplate", "Untrusted data is emitted through a raw or unescaped template value")],
+    ),
+    (
+        Language::Go,
+        Dimension::Reliability,
+        &[
+            ("goroutineLeak", "A goroutine blocks forever because nothing can unblock it"),
+            ("deferInLoop", "A `defer` inside a loop runs only when the function returns"),
+        ],
+    ),
+    // ---- PHP ----
+    (
+        Language::Php,
+        Dimension::Correctness,
+        &[
+            ("looseEquality", "A loose `==`/`!=` comparison coerces operands instead of comparing them"),
+            ("truthinessCoercion", "A value's truthiness or string coercion selects the wrong branch"),
+        ],
+    ),
+    (
+        Language::Php,
+        Dimension::Security,
+        &[
+            ("fileInclusion", "A user-influenced path reaches `include`/`require`"),
+            ("massAssignment", "Request parameters are assigned to a model without an allowlist"),
+        ],
+    ),
+    (
+        Language::Php,
+        Dimension::Reliability,
+        &[("errorSuppression", "The `@` operator hides a failure the caller must see")],
+    ),
+    // ---- Ruby ----
+    (
+        Language::Ruby,
+        Dimension::Correctness,
+        &[
+            ("nilMethodCall", "A method is called on a value that may be `nil`"),
+            ("mutationOfArgument", "An argument or shared object is mutated in place, surprising its owner"),
+        ],
+    ),
+    (
+        Language::Ruby,
+        Dimension::Security,
+        &[
+            ("massAssignment", "Request parameters are assigned to a model without an allowlist"),
+            ("dynamicCodeExecution", "Untrusted text is executed as code (`eval`, `send`)"),
+        ],
+    ),
+    (
+        Language::Ruby,
+        Dimension::Reliability,
+        &[("swallowedException", "A rescued exception is discarded instead of handled")],
+    ),
+    // ---- Kotlin ----
+    (
+        Language::Kotlin,
+        Dimension::Correctness,
+        &[
+            ("nonNullAssertion", "A non-null assertion (`!!`) skips a real null check"),
+            ("platformTypeNullness", "A Java platform type is treated as non-null without a check"),
+            ("uncheckedCast", "A cast (`as`) is applied without validating the runtime type"),
+        ],
+    ),
+    (
+        Language::Kotlin,
+        Dimension::Reliability,
+        &[("blockingInAsyncContext", "A blocking call inside a coroutine or `runBlocking` stalls the threads it shares")],
+    ),
+    // ---- Swift ----
+    (
+        Language::Swift,
+        Dimension::Correctness,
+        &[
+            ("nonNullAssertion", "A forced unwrap (`!`) skips a real null check"),
+            ("forcedCast", "A forced cast (`as!`) traps instead of handling a mismatch"),
+            ("silentOptionalChain", "An optional chain short-circuits and the failure is never handled"),
+        ],
+    ),
+    (
+        Language::Swift,
+        Dimension::Reliability,
+        &[
+            ("retainCycle", "A closure captures `self` strongly, keeping the object alive"),
+            ("forcedTry", "`try!` traps instead of propagating a thrown error"),
+        ],
+    ),
+    // ---- Shell ----
+    (
+        Language::Shell,
+        Dimension::Correctness,
+        &[("subshellStateLoss", "State changed inside a subshell or pipeline does not reach the caller")],
+    ),
+    (
+        Language::Shell,
+        Dimension::Security,
+        &[
+            ("unquotedExpansion", "An unquoted expansion word-splits or globs, so untrusted text becomes extra arguments"),
+            ("dynamicCodeExecution", "Untrusted text is executed as code (`eval`, `sh -c`)"),
+        ],
+    ),
+    (
+        Language::Shell,
+        Dimension::Reliability,
+        &[
+            ("ignoredExitStatus", "A failing command's exit status is ignored and the script continues"),
+            ("partialPipelineFailure", "Only the last command of a pipeline is checked"),
+        ],
+    ),
+    // ---- SQL ----
+    (
+        Language::Sql,
+        Dimension::Correctness,
+        &[
+            ("missingWhereClause", "An `UPDATE`/`DELETE` affects every row because a predicate is missing or vacuous"),
+            ("nullComparison", "A comparison against `NULL` never matches as intended"),
+        ],
+    ),
+    (
+        Language::Sql,
+        Dimension::Security,
+        &[("overbroadGrant", "A role or grant is broader than the operation needs")],
+    ),
+    (
+        Language::Sql,
+        Dimension::Compatibility,
+        &[("destructiveMigration", "A migration drops or rewrites data that existing rows or callers cannot survive")],
+    ),
+    // ---- R ----
+    (
+        Language::R,
+        Dimension::Correctness,
+        &[
+            ("vectorRecycling", "Vectors of unequal length are combined, silently recycling values"),
+            ("naPropagation", "A missing value propagates through the result unchecked"),
+        ],
+    ),
+    // ---- Scala ----
+    (
+        Language::Scala,
+        Dimension::Correctness,
+        &[
+            ("platformTypeNullness", "A Java platform type is treated as non-null without a check"),
+            ("uncheckedCast", "A cast (`asInstanceOf`) is applied without validating the runtime type"),
+        ],
+    ),
+    (
+        Language::Scala,
+        Dimension::Reliability,
+        &[("blockingInAsyncContext", "A blocking call inside a `Future` or execution context stalls the threads it shares")],
+    ),
+    // ---- Dart ----
+    (
+        Language::Dart,
+        Dimension::Correctness,
+        &[
+            ("nonNullAssertion", "A non-null assertion (`!`) skips a real null check"),
+            ("uncheckedCast", "A cast (`as`) is applied without validating the runtime type"),
+        ],
+    ),
+    (
+        Language::Dart,
+        Dimension::Reliability,
+        &[("unawaitedPromise", "A future is created but never awaited or returned, so its failure is unobserved")],
+    ),
+    // ---- Lua ----
+    (
+        Language::Lua,
+        Dimension::Correctness,
+        &[
+            ("implicitGlobal", "A missing `local` creates or clobbers a global"),
+            ("nilArithmetic", "A field or upvalue that may be `nil` is used in arithmetic or indexing"),
+        ],
+    ),
+    // ---- PowerShell ----
+    (
+        Language::PowerShell,
+        Dimension::Correctness,
+        &[("truthinessCoercion", "A value's truthiness or string coercion selects the wrong branch")],
+    ),
+    (
+        Language::PowerShell,
+        Dimension::Security,
+        &[
+            ("unquotedExpansion", "An unquoted argument splits or globs, so untrusted text becomes extra arguments"),
+            ("dynamicCodeExecution", "Untrusted text is executed as code (`Invoke-Expression`, `&`)"),
+        ],
+    ),
+    (
+        Language::PowerShell,
+        Dimension::Reliability,
+        &[("silentErrorContinuation", "`-ErrorAction SilentlyContinue` or a widened preference hides a failed command")],
+    ),
+];
+
+/// The mechanism additions for one language and dimension (`&[]` when the
+/// language adds nothing there).
+pub fn language_mechanisms(d: Dimension, language: Language) -> &'static [(&'static str, &'static str)] {
+    LANGUAGE_MECHANISMS
+        .iter()
+        .find(|(lang, dimension, _)| *lang == language && *dimension == d)
+        .map_or(&[], |(_, _, entries)| *entries)
+}
+
+/// Every `(language, dimension, entries)` row, for vocabulary-wide checks.
+pub fn language_mechanism_rows() -> &'static [(Language, Dimension, &'static [(&'static str, &'static str)])] {
+    LANGUAGE_MECHANISMS
+}
+
+/// The full `choice` vocabulary for a dimension: the generic entries plus the
+/// file's language-specific ones, spliced ahead of the `other` sentinel so
+/// `other` and `noIssue` stay in their established positions. Pass `None` when
+/// the file's language is unknown.
+pub fn mechanisms_for(d: Dimension, language: Option<Language>) -> Vec<(&'static str, &'static str)> {
+    let generic = mechanisms(d);
+    let additions = language.map_or(&[][..], |lang| language_mechanisms(d, lang));
+    if additions.is_empty() {
+        return generic.to_vec();
+    }
+    let sentinel = generic
+        .iter()
+        .position(|(key, _)| *key == "other")
+        .unwrap_or(generic.len());
+    let mut entries = Vec::with_capacity(generic.len() + additions.len());
+    entries.extend_from_slice(&generic[..sentinel]);
+    entries.extend_from_slice(additions);
+    entries.extend_from_slice(&generic[sentinel..]);
+    entries
+}
+
+/// The description for a mechanism key as it applies to `language`, searching
+/// the language's vocabulary first and falling back to the generic entries
+/// (a report written before the language vocabulary existed, or a finding
+/// whose language was inferred differently).
+pub fn mechanism_description(
+    d: Dimension,
+    language: Option<Language>,
+    key: &str,
+) -> Option<&'static str> {
+    if let Some(lang) = language {
+        if let Some((_, description)) = language_mechanisms(d, lang)
+            .iter()
+            .find(|(candidate, _)| *candidate == key)
+        {
+            return Some(description);
+        }
+    }
+    mechanisms(d)
+        .iter()
+        .find(|(candidate, _)| *candidate == key)
+        .map(|(_, description)| *description)
+}
+
 /// `reviewPriorityRubric` — ordered score levels (index = score, 0→3).
 pub const REVIEW_PRIORITY_RUBRIC: [&str; 4] = [
     "Routine review is sufficient",
@@ -206,34 +656,103 @@ pub const OWNERS: [(&str, &str); 5] = [
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::language::languages;
 
-    /// Pins the discovery contract from `docs/language-support.md`: the
-    /// `tests/`/`__tests__/` directory half is language-agnostic; the
-    /// `.(spec|test).` file half is JS/TS-only. This is what gives the
-    /// `testGap` dimension its related-test context.
+    /// The full vocabulary of a dimension for every language: generic keys
+    /// plus whatever that language adds.
+    fn vocabulary(d: Dimension, language: Language) -> Vec<(&'static str, &'static str)> {
+        mechanisms_for(d, Some(language))
+    }
+
+    /// The `other`/`noIssue` sentinels close every vocabulary — they are what
+    /// the criteria map and the classifier's fallback depend on, so language
+    /// additions must never land after them.
     #[test]
-    fn test_file_matches_rust_test_dir_only() {
-        assert!(test_file().is_match("tests/lib_test.rs"));
-        assert!(test_file().is_match("__tests__/foo.rs"));
-        assert!(test_file().is_match("src/__tests__/helpers.ts"));
-        assert!(!test_file().is_match("src/lib.rs"));
-        assert!(!test_file().is_match("testing_util.rs"));
+    fn language_additions_splice_before_the_sentinels() {
+        for language in languages() {
+            for d in DIMENSIONS {
+                let entries = vocabulary(d, language);
+                let keys: Vec<&str> = entries.iter().map(|(key, _)| *key).collect();
+                let tail = &keys[keys.len() - 2..];
+                assert_eq!(tail, ["other", "noIssue"], "{language:?} {d:?}");
+                for (key, _) in mechanisms(d) {
+                    assert!(keys.contains(key), "{language:?} {d:?} dropped {key}");
+                }
+            }
+        }
+        // An unknown language degrades to the generic vocabulary exactly.
+        assert_eq!(mechanisms_for(Dimension::Security, None), mechanisms(Dimension::Security).to_vec());
+    }
+
+    /// One key per vocabulary, and a language addition may not shadow a
+    /// generic entry (a duplicate key would make the model's `choice` and the
+    /// description lookup ambiguous).
+    #[test]
+    fn language_keys_are_unique_and_do_not_shadow_generic_ones() {
+        for language in languages() {
+            for d in DIMENSIONS {
+                let mut keys: Vec<&str> = Vec::new();
+                for (key, description) in vocabulary(d, language) {
+                    assert!(!description.is_empty(), "{language:?} {d:?} {key}");
+                    assert!(!keys.contains(&key), "duplicate {language:?} {d:?}::{key}");
+                    keys.push(key);
+                }
+            }
+        }
+    }
+
+    /// Every supported language carries at least one mechanism, so adding a
+    /// language forces a deliberate vocabulary decision rather than silently
+    /// inheriting the generic list.
+    #[test]
+    fn every_language_contributes_mechanisms() {
+        for language in languages() {
+            let total: usize = DIMENSIONS
+                .iter()
+                .map(|d| language_mechanisms(*d, language).len())
+                .sum();
+            assert!(total > 0, "{language:?} adds no mechanisms");
+        }
+    }
+
+    /// The ticket's motivating examples, pinned: Rust `unsafe`/`unwrap`/
+    /// `panic!` and the TS `any`/cast pair reach the classifier's vocabulary
+    /// for a `.rs` / `.ts` file.
+    #[test]
+    fn rust_and_typescript_mechanisms_reach_the_vocabulary() {
+        let rust: Vec<&str> = vocabulary(Dimension::Correctness, Language::Rust)
+            .iter()
+            .map(|(key, _)| *key)
+            .collect();
+        assert!(rust.contains(&"unsafeBlock"));
+        assert!(rust.contains(&"unwrapPanic"));
+        assert!(rust.contains(&"panicPath"));
+
+        let ts: Vec<&str> = vocabulary(Dimension::Correctness, Language::TypeScript)
+            .iter()
+            .map(|(key, _)| *key)
+            .collect();
+        assert!(ts.contains(&"anyEscape"));
+        assert!(ts.contains(&"uncheckedCast"));
     }
 
     #[test]
-    fn test_file_js_suffix_only_for_js() {
-        assert!(test_file().is_match("foo.spec.ts"));
-        assert!(test_file().is_match("foo.test.js"));
-        // `foo_test.go` has no `tests/` dir and the suffix half is JS-only.
-        assert!(!test_file().is_match("foo_test.go"));
-    }
-
-    #[test]
-    fn source_file_matches_rust_and_ts() {
-        assert!(source_file().is_match("src/lib.rs"));
-        assert!(source_file().is_match("a/file.tsx"));
-        assert!(source_file().is_match("a/file.mjs"));
-        assert!(!source_file().is_match("a/file.py"));
-        assert!(!source_file().is_match("a/file.go"));
+    fn mechanism_description_finds_generic_and_language_keys() {
+        assert_eq!(
+            mechanism_description(Dimension::Security, Some(Language::C), "bufferOverflow"),
+            Some("A fixed-size buffer is written past its bounds")
+        );
+        // Generic keys stay reachable with a language set.
+        assert_eq!(
+            mechanism_description(Dimension::Security, Some(Language::C), "sqlInjection"),
+            mechanisms(Dimension::Security)
+                .iter()
+                .find(|(key, _)| *key == "sqlInjection")
+                .map(|(_, description)| *description)
+        );
+        // A language that does not define the key falls back to generic, and
+        // an unknown key resolves to nothing rather than an empty description.
+        assert!(mechanism_description(Dimension::Correctness, Some(Language::Go), "anyEscape").is_none());
+        assert!(mechanism_description(Dimension::Correctness, None, "nope").is_none());
     }
 }

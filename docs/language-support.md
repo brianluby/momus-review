@@ -1,46 +1,117 @@
 # Language Support
 
-Discovery is two regexes in `domain/config.ts` plus test-context helpers.
-All judgments inspect raw text (`file.patch`, `file.content`) — no parsing —
-so new languages are mostly configuration.
+Discovery is extension-based (no parsing), and `domain/language.rs` is the
+single source of truth: `Language::from_path` decides whether a file is
+reviewed, `Language::is_test_name` / `domain::language::is_test_path` decide
+whether it is test context, and `policy::mechanisms_for` decides which
+mechanisms the classifier may choose for it. Change discovery
+(`adapters/git.rs`), codebase discovery, and test-context selection all route
+through those tables — there is no second extension list to keep in sync.
 
-## Current State
+## Supported languages (20)
 
-- `SOURCE_FILE = /\.(?:[cm]?[jt]sx?|rs)$/` — JS/TS (+m/c variants) and Rust.
-  Consumed by `adapters/git.ts` (changes) and `adapters/repository-files.ts`
-  (codebase). Non-matching files are silently skipped; empty result throws
-  `No <subject> files found under <scope>` (`review/workflow.ts`).
-- `TEST_FILE = /(?:^|\/)(?:tests?|__tests__)(?:\/|$)|\.(?:spec|test)\.[cm]?[jt]sx?$/`
-  — directory half is language-agnostic (`tests/`, `__tests__/`); the
-  `.(spec|test).` half is JS-only.
-- `compactTest` (`review/codebase-judgments.ts`) trims related tests to
-  ±2 lines around markers: stem match, `describe(`/`test(`/`it(`,
-  plus Rust `#[test]`, `#[tokio::test]`, `fn `, `assert`. Falls back to
-  full content capped at 1800 chars (head/tail split).
-- `selectRelatedTests`: stem-in-path (+2) and same-directory (+1), top 4.
-- Rust inline `#[cfg(test)]` modules ride along in the source file; `tests/`
-  dirs match `TEST_FILE` and serve as test-gap context.
+The consensus set: languages in the top 20 of at least two of TIOBE
+(Sep 2026), RedMonk (Jan 2026), the Stack Overflow 2025 survey, and GitHub
+Octoverse 2025. Legacy TIOBE-only entries (COBOL, Ada, Fortran, Scratch,
+Visual Basic, Delphi, Assembly, Objective-C) and markup (HTML/CSS) are out of
+scope; `docs/security-taxonomy.md` records the per-language security classes
+this adds.
 
-Verified on a fixture crate: codebase scan finds `src/*.rs` + `tests/*.rs`,
-change scan diffs edited `.rs`, `skip.go` ignored.
+| language | extensions | test naming | test-body markers |
+|---|---|---|---|
+| Python | `.py` `.pyi` `.pyw` | `test_*`, `*_test` | `def test`, `self.assert`, `pytest.raises`, `unittest` |
+| JavaScript | `.js` `.jsx` `.mjs` `.cjs` | `*.spec.*`, `*.test.*` | `describe(`, `it(`, `test(`, `expect(` |
+| TypeScript | `.ts` `.tsx` `.mts` `.cts` | `*.spec.*`, `*.test.*` | as JavaScript |
+| Java | `.java` | `*Test`, `*Tests`, `*IT`, `*Spec` | `@Test`, `assertEquals`, `assertThat(`, `assertThrows(` |
+| C# | `.cs` | `*Test`, `*Tests` | `[Fact]`, `[Theory]`, `Assert.` |
+| C++ | `.cpp` `.cc` `.cxx` `.hpp` `.hh` `.hxx` `.h` | `test_*`, `*_test`, `*Test` | `TEST(`, `TEST_F(`, `EXPECT_`, `ASSERT_` |
+| C | `.c` | `test_*`, `*_test`, `*Test` | as C++ |
+| Go | `.go` | `*_test` | `func Test`, `t.Error`, `t.Fatal`, `t.Run(` |
+| Rust | `.rs` | `*_test` | `#[test]`, `#[tokio::test]`, `#[cfg(test)]` |
+| PHP | `.php` | `*Test` | `function test`, `assertSame(`, `@test` |
+| Ruby | `.rb` `.rake` | `*_spec`, `*_test` | `describe `, `context `, `it `, `expect(` |
+| Kotlin | `.kt` `.kts` | `*Test`, `*Tests`, `*Spec` | `@Test`, `assertEquals`, `assertThat(` |
+| Swift | `.swift` | `*Test`, `*Tests` | `XCTAssert`, `func test` |
+| Shell | `.sh` `.bash` `.zsh` `.bats` | `*.bats`, `test_*` | `@test`, `assert_`, `bats_` |
+| SQL | `.sql` | — | — |
+| R | `.r` | `test-*` | `test_that(`, `expect_`, `context(` |
+| Scala | `.scala` `.sc` | `*Spec`, `*Test`, `*Suite` | `"should"`, `should `, `expect(`, `assert(` |
+| Dart | `.dart` | `*_test` | `test(`, `expect(`, `group(` |
+| Lua | `.lua` | `*_spec` | `describe(`, `it(`, `assert_equal` |
+| PowerShell | `.ps1` `.psm1` `.psd1` | `*Tests.ps1`, `*.tests.*` | `describe `, `should `, `assert-` |
+
+Directory conventions are language-agnostic and always count as test context:
+`test/`, `tests/`, `__tests__/`, `spec/`, `specs/`, `testdata/` at any depth.
+
+Extensions match case-insensitively, so `.R` is R and `.H` is C++. `.h` is
+shared with C and maps to C++ (headers in current repositories are
+overwhelmingly C++, and the two vocabularies share `useAfterFree`).
+
+## Per-language mechanisms
+
+Dimensions stay fixed (correctness, security, reliability, compatibility, test
+gap); the `choice` vocabulary for the mechanism question sharpens per language.
+`policy::mechanisms_for(dimension, language)` returns the generic entries with
+the language's additions spliced ahead of the `other` sentinel, so `other` and
+`noIssue` keep their positions and a language never shadows a generic key.
+
+Examples: Rust `unsafeBlock` / `unwrapPanic` / `panicPath`, TypeScript
+`anyEscape` / `uncheckedCast` / `nonNullAssertion`, Go `ignoredError` /
+`goroutineLeak`, C `bufferOverflow` / `formatString` / `useAfterFree`, shell
+`unquotedExpansion` / `ignoredExitStatus`, SQL `missingWhereClause`. A key is
+shared across languages only when it means the same thing in both
+(`useAfterFree` for C and C++, `nonNullAssertion` for TS/Kotlin/Swift/Dart),
+which lets `explain::mechanism_title` stay keyed on dimension + key.
+
+`testGap` deliberately has no language additions: its generic
+`branch`/`failure`/`boundary`/`integration` entries already name every test gap
+worth flagging.
+
+Every vocabulary is checked exhaustively by tests: keys are unique within a
+(language, dimension) and never shadow a generic key; each language contributes
+at least one mechanism; every key has a title
+(`review/explain.rs`); every **security** key maps to an evaluator category
+(`bin/momus-eval.rs`).
 
 ## Adding a Language
 
-1. Extend `SOURCE_FILE` with the extension(s).
-2. Extend `TEST_FILE` if the ecosystem has file-level test conventions
-   (`test_*.py`, `*_test.go`, `*Test.java`, …). Directory conventions are
-   usually already covered.
-3. Add test-body markers to `compactTest` (attribute/annotation + assert
-   keywords). Keep the fallback: full content, capped.
-4. Consider per-language `mechanisms` (e.g. Rust `unsafe`/`unwrap`/`panic!`,
-   TS `any`/casts). Dimensions stay fixed; choices sharpen.
-5. Smoke-test: fixture repo with src + tests + a non-matching file; assert
-   discovery sets for both modes.
+1. Add a `LanguageSpec` row to `SPECS` in `domain/language.rs`: key,
+   extensions, test-name conventions, test-body markers.
+2. Add its mechanism rows to `policy::LANGUAGE_MECHANISMS` — at least one, and
+   a title per key in `explain::mechanism_title` (the exhaustive test enforces
+   both).
+3. **Security** keys additionally need a branch in
+   `bin/momus-eval.rs::mechanism_categories`, or the evaluator stops counting
+   that class (also enforced by a test).
+4. Extend the docs table above and, if the language's footguns change the
+   security picture, `docs/security-taxonomy.md`.
+5. Smoke-test: a fixture repo with a file in the new language plus a non-source
+   file; assert discovery (matrix) and, where possible, that a mechanism the
+   language owns comes back classified.
 
 ## Limits
 
-- Chunking is 80 dumb lines (`domain/patch.ts`, `sourceRegions`) — splits
-  mid-function. Function-aware regions (tree-sitter or heuristic) are a
-  roadmap item and matter more as languages grow.
+- **Import graph** (`adapters/imports.rs`) extracts edges for Rust and JS/TS
+  only. Every other language contributes no edges — a missing neighborhood
+  rather than a neighborhood guessed with another language's patterns.
+- **Region splitting** (`review/regions.rs`) uses Rust declaration patterns for
+  `.rs` and the generic JS/TS-ish patterns for everything else; a language it
+  does not recognize falls back to fixed-size windows (80 lines, 160 for
+  screening), the same as before.
 - No generated-file detection, no secret redaction before upload.
-- Both adapters require git (`rev-parse`/`diff`/`ls-files`); non-git scopes fail.
+- Both adapters require git (`rev-parse`/`diff`/`ls-files`); non-git scopes
+  fail.
+
+## Verification
+
+`cargo test` covers the discovery tables, the vocabulary invariants, and the
+path → language → criteria chain (`review/typesafe.rs`). Beyond that, a
+seven-language fixture (Rust, Go, C, shell, Python, TypeScript, SQL) scanned
+with `momus scan`:
+
+- `matrix` lists every fixture file — `.c`, `.go`, `.py`, `.rs`, `.sh`, `.sql`,
+  `.ts` are all discovered and screened.
+- Classified language mechanisms come back with their own titles and
+  descriptions: `py/app.py` → `dynamicCodeExecution` ("Untrusted text is
+  executed as code (`eval`, `exec`)"), `sh/deploy.sh` → `ignoredExitStatus`
+  ("A failing command's exit status is ignored and the script continues").

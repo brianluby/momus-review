@@ -13,6 +13,9 @@ use anyhow::{Result, bail};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
+use crate::domain::language::Language;
+use crate::domain::policy::{Dimension, mechanisms_for};
+
 const DEFAULT_BASE_URL: &str = "https://api.typesafe.ai";
 const DEFAULT_MODEL: &str = "jev-latest";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -179,6 +182,14 @@ pub fn score(instructions: Value, criteria: Value) -> Value {
     json!({ "type": "score", "instructions": instructions, "criteria": criteria })
 }
 
+/// The mechanism `choice` criteria for `dimension` over the file at `path`:
+/// the generic per-dimension vocabulary plus the mechanisms of the file's own
+/// language (#7). One home for the path → language → vocabulary mapping, so
+/// both review modes send the classifier the same criteria for a given file.
+pub fn mechanism_criteria(path: &str, dimension: Dimension) -> Value {
+    choice_criteria(&mechanisms_for(dimension, Language::from_path(path)))
+}
+
 /// Builds a `choice` criteria map from a name→description slice, preserving
 /// order (the prototype keeps `noIssue` last).
 pub fn choice_criteria(entries: &[(&str, &str)]) -> Value {
@@ -192,4 +203,41 @@ pub fn choice_criteria(entries: &[(&str, &str)]) -> Value {
 /// Builds a `score` criteria array from an ordered rubric of levels.
 pub fn score_criteria(levels: &[&str]) -> Value {
     Value::Array(levels.iter().map(|l| Value::String((*l).to_string())).collect())
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The chain that gives #7 its teeth: a file's path selects a vocabulary,
+    /// and the classifier sees the language's own mechanisms *plus* the
+    /// generic entries and the `noIssue` sentinel.
+    #[test]
+    fn mechanism_criteria_carry_the_file_languages_vocabulary() {
+        let keys = |value: &Value| -> Vec<String> {
+            value.as_object().expect("criteria is a map").keys().cloned().collect()
+        };
+
+        let rust = keys(&mechanism_criteria("src/lib.rs", Dimension::Correctness));
+        assert!(rust.contains(&"unsafeBlock".to_string()));
+        assert!(rust.contains(&"unwrapPanic".to_string()));
+        // Generic entries and the sentinel survive alongside them.
+        assert!(rust.contains(&"condition".to_string()));
+        assert!(rust.contains(&"noIssue".to_string()));
+
+        let go = keys(&mechanism_criteria("cmd/main.go", Dimension::Correctness));
+        assert!(go.contains(&"ignoredError".to_string()));
+        assert!(
+            !go.contains(&"unsafeBlock".to_string()),
+            "another language's vocabulary leaked into a Go file"
+        );
+
+        let python = keys(&mechanism_criteria("pkg/app.py", Dimension::Security));
+        assert!(python.contains(&"dynamicCodeExecution".to_string()));
+        assert!(python.contains(&"sqlInjection".to_string()));
+
+        // A language we do not review still gets a usable generic vocabulary.
+        let unknown = keys(&mechanism_criteria("README.md", Dimension::Correctness));
+        assert!(unknown.contains(&"condition".to_string()));
+        assert!(!unknown.contains(&"unsafeBlock".to_string()));
+    }
 }
