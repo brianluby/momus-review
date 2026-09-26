@@ -58,8 +58,8 @@ dilutes model attention and risks regressing the covered classes. Three shapes:
 
 **Option B**, first increment scoped to the high-precision, low-noise classes:
 
-- `securityCrypto` — weak/missing/rolled crypto + hardcoded secrets (#6, #7)
-- `securityMisconfig` — misconfiguration breadth (#8)
+- `cryptoSecrets` — weak/missing/rolled crypto + hardcoded secrets (#6, #7)
+- `misconfig` — misconfiguration breadth (#8)
 
 Input-validation (#9), SSRF/open-redirect/CSRF/deserialization (#10–14) are
 deferred: input validation is the biggest bucket but the fuzziest (prone to
@@ -80,7 +80,7 @@ Re-scanned Juice Shop (`1618a611b`, same scope/excludes) after adding the two
 | security findings | 39 | 38 |
 | **Cryptography** (A02) | **0** | **1** |
 | Security Misconfiguration (A05) | 0 | 0 (juice-shop scan) / **fires** on a pure-misconfig fixture |
-| injection-family labels | 13 flat `injection` | 19 split |
+| injection-family labels | 13 flat `injection` | 16 granular (`sqlInjection` 2, `noSqlInjection` 3, `xss` 2, `xxe` 1, `ssrf` 1, `pathTraversal` 7) |
 
 Read:
 
