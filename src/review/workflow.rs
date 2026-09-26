@@ -25,8 +25,9 @@ use crate::review::merge_confidence;
 use crate::review::refine::{self, RefineCounts, Refiner};
 use crate::review::strategy::{Discovery, FileEntry, ReviewStrategy, Screening, Signal};
 
-/// Per-run knobs beyond the scope and strategy.
-#[derive(Debug, Default)]
+/// Per-run knobs beyond the scope and strategy. The default matches the CLI:
+/// unlimited follow-ups, refinement on, no feedback.
+#[derive(Debug)]
 pub struct ReviewOptions {
     /// Cap follow-ups per `select_follow_ups`; `None` follows every signal.
     pub max_follow_ups: Option<usize>,
@@ -35,6 +36,12 @@ pub struct ReviewOptions {
     /// Reviewer feedback: tunes per-dimension thresholds and suppresses
     /// findings (`domain::feedback`).
     pub feedback: FeedbackLog,
+}
+
+impl Default for ReviewOptions {
+    fn default() -> Self {
+        Self { max_follow_ups: None, refine: true, feedback: FeedbackLog::default() }
+    }
 }
 
 /// Runs the staged funnel for a strategy. Owns concurrency, thresholding,
@@ -366,6 +373,13 @@ mod tests {
             sig(Dimension::Security, 0.98),
         ];
         assert_eq!(select_follow_ups(&signals, Some(1)).len(), 1);
+    }
+
+    #[test]
+    fn default_options_refine_like_the_cli() {
+        let options = ReviewOptions::default();
+        assert!(options.refine);
+        assert_eq!(options.max_follow_ups, None);
     }
 
     #[test]

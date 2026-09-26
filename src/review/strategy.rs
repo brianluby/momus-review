@@ -48,15 +48,17 @@ impl FileEntry for SourceFile {
 
 /// The 1-based lines of `text` within `radius` of `line`, and the first line's
 /// number.
+/// Only the requested lines are collected, so large files stay cheap.
 fn window(text: &str, line: usize, radius: usize) -> (usize, String) {
-    let lines: Vec<&str> = text.lines().collect();
-    if lines.is_empty() {
+    let total = text.lines().count();
+    if total == 0 {
         return (1, String::new());
     }
-    let center = line.clamp(1, lines.len()) - 1;
+    let center = line.clamp(1, total) - 1;
     let start = center.saturating_sub(radius);
-    let end = (center + radius + 1).min(lines.len());
-    (start + 1, lines[start..end].join("\n"))
+    let end = (center + radius + 1).min(total);
+    let lines: Vec<&str> = text.lines().skip(start).take(end - start).collect();
+    (start + 1, lines.join("\n"))
 }
 
 /// The files a mode discovers, split into review subjects and test context.

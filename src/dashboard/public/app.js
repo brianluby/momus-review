@@ -804,12 +804,19 @@ function feedbackButtons(finding) {
   const button = (label, title, vote, suppress, active) =>
     h(
       "button",
-      { type: "button", class: `fb-btn${active ? " active" : ""}`, title, "aria-pressed": active ? "true" : "false", onclick: send(vote, suppress) },
+      {
+        type: "button",
+        class: `fb-btn${active ? " active" : ""}`,
+        title,
+        "aria-label": title,
+        "aria-pressed": active ? "true" : "false",
+        onclick: send(vote, suppress),
+      },
       label,
     );
   return h(
     "span",
-    { class: "feedback" },
+    { class: "feedback", role: "group", "aria-label": "Finding feedback" },
     button("👍", "Useful finding", "up", false, current?.vote === "up"),
     button("👎", "Not useful (tunes this concern's threshold)", "down", false, current?.vote === "down" && !current?.suppress),
     button("Hide", "Not useful, and hide it in future runs", "down", true, current?.suppress === true),
