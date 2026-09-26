@@ -100,10 +100,12 @@ async fn api_review() -> Json<Value> {
 }
 
 /// Per-sha history trend: chronological entries plus top file hotspots
-/// aggregated across every saved history report. Never 500s on a missing
-/// history dir — that is simply empty history.
-async fn api_history() -> Json<Value> {
-    let mut entries = read_history().unwrap_or_default();
+/// aggregated across every saved history report. A missing history dir is
+/// empty history (`read_history` returns `Ok(vec![])`); a genuine read
+/// failure (e.g. permission denied) surfaces as a 500 rather than a silent
+/// empty list.
+async fn api_history() -> Result<Json<Value>, StatusCode> {
+    let mut entries = read_history().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Chronological (ISO-8601 strings sort correctly).
     entries.sort_by(|a, b| a.saved_at.cmp(&b.saved_at));
@@ -177,7 +179,7 @@ async fn api_history() -> Json<Value> {
         })
         .collect();
 
-    Json(json!({ "entries": entry_values, "hotspots": hotspot_values }))
+    Ok(Json(json!({ "entries": entry_values, "hotspots": hotspot_values })))
 }
 
 async fn index() -> impl IntoResponse {

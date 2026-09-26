@@ -56,17 +56,15 @@ pub fn read_report(path: &Path) -> StoredReport {
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// Writes to a unique temp file created with `O_EXCL` and renames into place,
-/// so readers never see a partial report and a planted symlink is never
-/// followed.
-pub fn save_report(report: &ReviewReport, path: &Path) -> Result<()> {
+/// Writes `data` to `path` atomically: a unique `O_EXCL` temp file renamed
+/// into place, so readers never see a partial file and a planted symlink is
+/// never followed.
+fn write_atomic(path: &Path, data: &str) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
         create_dir_all(parent)?;
     }
-
-    let data = format!("{}\n", serde_json::to_string_pretty(report)?);
 
     for _ in 0..10 {
         let temp = format!("{}.{}.tmp", path.display(), unique_suffix());
@@ -75,23 +73,34 @@ pub fn save_report(report: &ReviewReport, path: &Path) -> Result<()> {
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => {
                 let _ = remove_file(&temp);
-                return Err(anyhow!("save report: {e}"));
+                return Err(anyhow!("atomic write: {e}"));
             }
         };
         if let Err(e) = f.write_all(data.as_bytes()) {
             let _ = remove_file(&temp);
-            return Err(anyhow!("save report: {e}"));
+            return Err(anyhow!("atomic write: {e}"));
         }
         drop(f);
         match rename(&temp, path) {
             Ok(()) => return Ok(()),
             Err(e) => {
                 let _ = remove_file(&temp);
-                return Err(anyhow!("save report: {e}"));
+                return Err(anyhow!("atomic write: {e}"));
             }
         }
     }
-    bail!("Could not save report: temp file collisions")
+    bail!("Could not save file: temp file collisions")
+}
+
+/// Saves a review report as JSON, atomically (see `write_atomic`).
+pub fn save_report(report: &ReviewReport, path: &Path) -> Result<()> {
+    write_atomic(path, &format!("{}\n", serde_json::to_string_pretty(report)?))
+}
+
+/// Saves an arbitrary JSON value (e.g. a SARIF log) atomically, with the same
+/// `O_EXCL` + rename discipline as `save_report`.
+pub fn save_json(value: &serde_json::Value, path: &Path) -> Result<()> {
+    write_atomic(path, &format!("{}\n", serde_json::to_string_pretty(value)?))
 }
 
 fn unique_suffix() -> String {

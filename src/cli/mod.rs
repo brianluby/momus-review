@@ -3,11 +3,11 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::adapters::exclude::Exclude;
 use crate::adapters::git;
-use crate::adapters::report_store::{report_path, save_history, save_report};
+use crate::adapters::report_store::{report_path, save_history, save_json, save_report};
 use crate::adapters::sarif;
 use crate::domain::report::Action;
 use crate::review::changes::ChangesStrategy;
@@ -119,44 +119,21 @@ async fn run_mode<S: ReviewStrategy>(
     eprintln!("saved {}", out.display());
 
     if let Some(path) = &sarif {
-        write_atomic_json(&sarif::to_sarif(&report), path)?;
+        save_json(&sarif::to_sarif(&report), path)?;
         eprintln!("saved {}", path.display());
     }
 
-    // Always save per-sha history for the dashboard trend.
-    let sha = git::head_sha(&scopes[0])?;
-    save_history(&report, &sha)?;
-    let short = &sha[..sha.len().min(8)];
-    eprintln!("saved reviews/history/{short}.json");
+    // History is best-effort: an unborn repo or an I/O failure must not
+    // discard an already-produced report.
+    match git::head_sha(&scopes[0]).and_then(|sha| save_history(&report, &sha)) {
+        Ok(path) => eprintln!("saved {}", path.display()),
+        Err(e) => eprintln!("history not saved: {e:#}"),
+    }
 
     println!("{}", serde_json::to_string_pretty(&report)?);
 
     if fail_on_blocking && report.findings.iter().any(|f| f.action == Action::RequestChanges) {
         std::process::exit(1);
     }
-    Ok(())
-}
-
-/// Writes a JSON value to `path` atomically (unique temp + rename), mirroring
-/// the report store's discipline so a concurrent dashboard reader never sees
-/// a partial SARIF log.
-fn write_atomic_json(value: &serde_json::Value, path: &Path) -> Result<()> {
-    use std::io::Write as _;
-
-    let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
-    if let Some(parent) = parent {
-        std::fs::create_dir_all(parent)?;
-    }
-    let data = format!("{}\n", serde_json::to_string_pretty(value)?);
-    let temp = format!("{}.{}.tmp", path.display(), std::process::id());
-    {
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .create(true)
-            .open(&temp)?;
-        f.write_all(data.as_bytes())?;
-    }
-    std::fs::rename(&temp, path)?;
     Ok(())
 }

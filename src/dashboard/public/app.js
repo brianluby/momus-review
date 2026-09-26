@@ -425,7 +425,7 @@ function findings(report) {
       },
     },
     h("option", { value: "all", selected: view.severity === "all" }, "Any severity"),
-    h("option", { value: "routed", selected: view.severity === "routed" }, "Routed (≥ 1.5)"),
+    h("option", { value: "routed", selected: view.severity === "routed" }, "Severity ≥ 1.5"),
     h("option", { value: "blocking", selected: view.severity === "blocking" }, "Blocking (request changes)"),
   );
 
@@ -567,11 +567,19 @@ function copyButton(finding, label) {
       class: "copy-btn",
       title: "Copy as PR comment",
       onclick: () => {
-        if (navigator.clipboard?.writeText) {
-          navigator.clipboard.writeText(text).catch(() => {});
-        }
-        button.textContent = "Copied";
-        button.classList.add("copied");
+        const write = navigator.clipboard?.writeText
+          ? navigator.clipboard.writeText(text)
+          : Promise.reject(new Error("clipboard unavailable"));
+        write.then(
+          () => {
+            button.textContent = "Copied";
+            button.classList.add("copied");
+          },
+          () => {
+            button.textContent = "Copy failed";
+            button.classList.remove("copied");
+          },
+        );
         window.clearTimeout(timer);
         timer = window.setTimeout(() => {
           button.textContent = "Copy";
@@ -606,7 +614,7 @@ function findingRows(finding, labels, onFileClick) {
           },
           h(
             "code",
-            { title: `${finding.file}:${finding.line}` },
+            { title: `${finding.file}:${finding.line ?? "?"}` },
             h("span", { class: "dir" }, dir),
             h("span", { class: "base" }, base),
             h("span", { class: "line" }, `:${finding.line ?? "?"}`),

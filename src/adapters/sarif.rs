@@ -73,21 +73,18 @@ pub fn to_sarif(report: &ReviewReport) -> Value {
                 }));
             }
 
-            let mut region = json!({});
+            // A SARIF `region` must carry a location property; omit it
+            // entirely when there is no line rather than emit `{}`.
+            let mut location = json!({ "artifactLocation": { "uri": finding.file } });
             if finding.line != 0 {
-                region["startLine"] = finding.line.into();
+                location["region"] = json!({ "startLine": finding.line });
             }
 
             json!({
                 "ruleId": rule_id,
                 "level": level(finding),
                 "message": { "text": finding_title(finding) },
-                "locations": [{
-                    "physicalLocation": {
-                        "artifactLocation": { "uri": finding.file },
-                        "region": region,
-                    },
-                }],
+                "locations": [{ "physicalLocation": location }],
             })
         })
         .collect();
@@ -167,9 +164,9 @@ mod tests {
 
         let comment = &results[1];
         assert_eq!(comment["level"], "note");
-        // line == 0 omits `startLine`.
-        let region = &comment["locations"][0]["physicalLocation"]["region"];
-        assert!(region.get("startLine").is_none());
+        // line == 0 omits `region` entirely (SARIF regions need a location
+        // property); emitting `{}` would be invalid.
+        assert!(comment["locations"][0]["physicalLocation"].get("region").is_none());
 
         // One rule per distinct ruleId, with the deterministic title.
         let rules = value["runs"][0]["tool"]["driver"]["rules"].as_array().unwrap();
