@@ -52,7 +52,10 @@ pub fn base_line(patch: &str, new_line: usize) -> usize {
         let Some((old_start, old_len, new_start, new_len)) = hunk_ranges(header) else {
             continue;
         };
-        if new_line < new_start {
+        // A zero-length new range (pure deletion) names the line *before*
+        // the change, which keeps its pre-hunk position.
+        let before = if new_len == 0 { new_line <= new_start } else { new_line < new_start };
+        if before {
             break;
         }
         if new_line < new_start + new_len {
@@ -128,6 +131,8 @@ mod tests {
         assert_eq!(base_line("@@ -0,0 +1,2 @@\n+a\n+b", 1), 1);
         // Old lines 3-4 deleted: new 3 is old 5.
         assert_eq!(base_line("@@ -3,2 +2,0 @@\n-x\n-y", 3), 5);
+        // ...and new 2, the line before the deletion, is still old 2.
+        assert_eq!(base_line("@@ -3,2 +2,0 @@\n-x\n-y", 2), 2);
         // Old 10-12 replaced by new 10-14: inside maps by offset (clamped),
         // after shifts by -2.
         let edit = "@@ -10,3 +10,5 @@\n-a\n-b\n-c\n+1\n+2\n+3\n+4\n+5";

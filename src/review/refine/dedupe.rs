@@ -6,6 +6,8 @@
 //! at `MIN_CLUSTER_CONFIDENCE` folds it into that candidate's `related` list.
 //! Files are independent, so they are processed concurrently.
 
+use std::collections::HashMap;
+
 use futures::{StreamExt, stream};
 use serde_json::{Map, Value, json};
 
@@ -19,10 +21,14 @@ const DISTINCT: &str = "distinct";
 /// Returns the kept findings and how many were folded into another.
 pub async fn dedupe(r: &Refiner<'_>, findings: Vec<Finding>) -> (Vec<Finding>, usize) {
     let mut groups: Vec<Vec<Finding>> = Vec::new();
+    let mut by_file: HashMap<String, usize> = HashMap::new();
     for finding in findings {
-        match groups.iter_mut().find(|g| g[0].file == finding.file) {
-            Some(group) => group.push(finding),
-            None => groups.push(vec![finding]),
+        match by_file.get(&finding.file) {
+            Some(&i) => groups[i].push(finding),
+            None => {
+                by_file.insert(finding.file.clone(), groups.len());
+                groups.push(vec![finding]);
+            }
         }
     }
 

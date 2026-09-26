@@ -62,6 +62,9 @@ pub async fn refine(r: &Refiner<'_>, mut findings: Vec<Finding>) -> (Vec<Finding
     (r.log)(&format!("Refining {} findings...", findings.len()));
     let (mut findings, clustered) = dedupe::dedupe(r, findings).await;
     counts.clustered = clustered;
+    // Dedupe returns findings grouped by file; the budgeted stages below take
+    // the first N, so restore severity order first.
+    sort_by_severity(&mut findings);
 
     taint::trace(r, &mut findings).await;
 
