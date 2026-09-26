@@ -6,11 +6,11 @@ use serde_json::{Map, Value, json};
 
 use crate::domain::patch::parse_hunks;
 use crate::domain::policy::{
-    BLOCKING_SEVERITY, MIN_LOCATION_CONFIDENCE, Probabilities, REVIEW_PRIORITY_RUBRIC,
-    ROUTE_SEVERITY, SEVERITY_RUBRIC, Dimension, mechanisms,
+    BLOCKING_SEVERITY, MIN_LOCATION_CONFIDENCE, MIN_META_JUDGE_CONFIDENCE, Probabilities,
+    REVIEW_PRIORITY_RUBRIC, ROUTE_SEVERITY, SEVERITY_RUBRIC, Dimension, mechanisms,
 };
 use crate::domain::report::{Action, ChangedFile, FileProfile, Finding};
-use crate::review::strategy::{Screening, Signal};
+use crate::review::{meta, strategy::{Screening, Signal}};
 use crate::review::typesafe::{
     TypeSafeClient, choice, choice_criteria, noul, score, score_criteria,
 };
@@ -37,7 +37,7 @@ pub async fn screen_file(
         "correctness": noul(
             json!({
                 "question": "Does file.patch directly support that this change likely introduces incorrect runtime behavior?",
-                "inspect": "file.patch",
+                "compare": ["file.base", "file.patch"],
                 "focus": "Concrete behavior, state, data-flow, or async errors introduced by added or modified lines",
                 "ignore": ["Style preferences", "Naming concerns", "Unsupported speculation"],
             }),
@@ -293,7 +293,15 @@ pub async fn locate_signal(
         .await?;
     let (severity, severity_confidence) = impact.score("severity")?;
 
-    // 4. Route: assign an owner only above the routing threshold.
+    // 5. Meta-judge: a second skeptical pass kills unsupported claims.
+    let evidence = json!(hunk);
+    if meta::judge(client, signal.dimension, &mechanism, &evidence).await?
+        < MIN_META_JUDGE_CONFIDENCE
+    {
+        return Ok(None);
+    }
+
+    // 6. Route: assign an owner only above the routing threshold.
     let mut owner = None;
     let mut owner_confidence = None;
     if severity >= ROUTE_SEVERITY {

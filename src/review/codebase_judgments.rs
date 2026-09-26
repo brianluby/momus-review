@@ -8,12 +8,12 @@ use anyhow::Result;
 use serde_json::{Map, Value, json};
 
 use crate::domain::policy::{
-    BLOCKING_SEVERITY, DIMENSIONS, MIN_LOCATION_CONFIDENCE, Probabilities, REVIEW_PRIORITY_RUBRIC,
-    ROUTE_SEVERITY, SEVERITY_RUBRIC, Dimension, mechanisms,
+    BLOCKING_SEVERITY, DIMENSIONS, MIN_LOCATION_CONFIDENCE, MIN_META_JUDGE_CONFIDENCE, Probabilities,
+    REVIEW_PRIORITY_RUBRIC, ROUTE_SEVERITY, SEVERITY_RUBRIC, Dimension, mechanisms,
 };
 use crate::domain::report::{Action, FileProfile, Finding, SourceFile};
 use crate::review::regions::function_regions;
-use crate::review::strategy::{Screening, Signal};
+use crate::review::{meta, strategy::{Screening, Signal}};
 use crate::review::typesafe::{
     TypeSafeClient, choice, choice_criteria, noul, score, score_criteria,
 };
@@ -22,6 +22,8 @@ const REGION_LINES: usize = 80;
 const SCREEN_REGION_LINES: usize = 160;
 const MAX_RELATED_TESTS: usize = 4;
 const MAX_TEST_SNIPPET_CHARS: usize = 1_800;
+const MAX_NEIGHBOR_LINES: usize = 40;
+const MAX_NEIGHBOR_CHARS: usize = 1_800;
 
 /// `fileRoles` — the source-file role vocabulary.
 const FILE_ROLES: [(&str, &str); 6] = [
@@ -39,14 +41,17 @@ pub async fn screen_source_file(
     client: &TypeSafeClient,
     file: &SourceFile,
     test_files: &[SourceFile],
+    neighbors: &[SourceFile],
 ) -> Result<Screening<SourceFile>> {
     let related_tests = select_related_tests(file, test_files);
+    let compact_neighbors: Vec<SourceFile> = neighbors.iter().map(compact_neighbor).collect();
     let mut results: Vec<Probabilities> = Vec::new();
 
     for region in function_regions(&file.content, &file.path, SCREEN_REGION_LINES) {
         let state = json!({
             "file": { "path": file.path, "startLine": region.start_line, "content": region.content },
             "relatedTests": related_tests,
+            "neighbors": compact_neighbors,
         });
         let questions = json!({
             "correctness": noul(
@@ -109,7 +114,7 @@ pub async fn screen_source_file(
                 json!({
                     "question": "Does file.content directly support an internal inconsistency that can break a caller, format, protocol, or documented behavior?",
                     "inspect": "file.content",
-                    "focus": "Contradictions visible in this source, not guesses about unknown historical versions",
+                    "focus": "Contradictions between file.content and its callers/callees in neighbors, or visible in this source — not guesses about unknown historical versions",
                 }),
                 json!({
                     "true": { "what": "The source contains conflicting contracts or a concrete caller-facing mismatch", "examples": ["A parser and serializer disagree on a required field", "An exported type contradicts runtime behavior"] },
@@ -285,7 +290,15 @@ pub async fn locate_source_signal(
         .await?;
     let (severity, severity_confidence) = impact.score("severity")?;
 
-    // 4. Route.
+    // 5. Meta-judge: a second skeptical pass kills unsupported claims.
+    let evidence = json!(region);
+    if meta::judge(client, signal.dimension, &mechanism, &evidence).await?
+        < MIN_META_JUDGE_CONFIDENCE
+    {
+        return Ok(None);
+    }
+
+    // 6. Route.
     let mut owner = None;
     let mut owner_confidence = None;
     if severity >= ROUTE_SEVERITY {
@@ -423,4 +436,20 @@ fn compact_test(test: &SourceFile, source_stem: &str) -> SourceFile {
     }
 
     SourceFile { path: test.path.clone(), content }
+}
+
+fn compact_neighbor(f: &SourceFile) -> SourceFile {
+    let content: String = f
+        .content
+        .split('\n')
+        .take(MAX_NEIGHBOR_LINES)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let content = if content.len() > MAX_NEIGHBOR_CHARS {
+        content.chars().take(MAX_NEIGHBOR_CHARS).collect()
+    } else {
+        content
+    };
+
+    SourceFile { path: f.path.clone(), content }
 }

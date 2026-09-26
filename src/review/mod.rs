@@ -6,6 +6,8 @@ pub mod codebase;
 pub mod codebase_judgments;
 pub mod explain;
 pub mod judgments;
+pub mod merge_confidence;
+pub mod meta;
 pub mod regions;
 pub mod strategy;
 pub mod typesafe;

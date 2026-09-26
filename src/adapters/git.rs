@@ -181,9 +181,14 @@ fn changed_files_in_scope(scope: &Path, exclude: &Exclude) -> Result<Vec<Changed
                 &repo_root,
                 &["diff", "HEAD", "--unified=3", "--", path],
             )?;
-            files.push(ChangedFile { path: path.to_string(), patch });
+            let base = git(&repo_root, &["show", &format!("HEAD:{path}")]).unwrap_or_default();
+            files.push(ChangedFile { path: path.to_string(), patch, base });
         } else if let Some(content) = read_repo_file(&repo_root, path)? {
-            files.push(ChangedFile { path: path.to_string(), patch: patch_for_new_file(&content) });
+            files.push(ChangedFile {
+                path: path.to_string(),
+                patch: patch_for_new_file(&content),
+                base: String::new(),
+            });
         }
     }
     Ok(files)

@@ -9,8 +9,9 @@ flowchart TD
     S -->|top 5 by max p| P[profile: choice role + score priority]
     L -->|confidence >= 0.55| M[choice mechanism]
     M -->|not noIssue| V[score severity 0-3]
-    V -->|>= 1.5| R[choice owner]
-    V -->|>= 2.0| A[request_changes else comment]
+    V -->|>= 0.55 meta-judge| J[meta-judge noul: evidence supports claim?]
+    J -->|>= 1.5| R[choice owner]
+    J -->|>= 2.0| A[request_changes else comment]
     R & V -->|top 8 by severity| E[enrich: title/why from mechanism<br/>choice fix + choice test]
 ```
 
@@ -23,7 +24,10 @@ flowchart TD
    `docs/security-taxonomy.md`). Each carries `inspect`/`focus`/`ignore` hints
    plus true/false criteria with examples and counterexamples. Test context
    rides along for testGap (`changedTests` in changes mode;
-   `selectRelatedTests` + `compactTest` in codebase mode). Output:
+   `selectRelatedTests` + `compactTest` in codebase mode). Changes mode also
+   sends `file.base` alongside `file.patch` (correctness compares the two);
+   codebase mode attaches 1-hop callers/callees (`neighbors`) resolved via the
+   heuristic import graph in `adapters/imports.rs`. Output:
    `Record<Dimension, number>`.
 2. **Profile** (top 5 by max probability): `choice` file role
    (`changeTypes` for diffs, `fileRoles` for sources) + `score` review
@@ -39,10 +43,14 @@ flowchart TD
 4. **Mechanism**: `choice` over per-dimension `mechanisms` vocabulary.
    `noIssue` kills the finding — the first precision gate.
 5. **Severity**: `score` on `severityRubric` (0 none → 3 critical).
-6. **Route** (severity ≥ 1.5): `choice` over `owners`
+6. **Meta-judge** (`meta::judge`): a second, independent skeptical `noul`
+   ("does selectedEvidence concretely support this mechanism?"). Below
+   `MIN_META_JUDGE_CONFIDENCE` the finding is dropped as an unsupported claim
+   — the FP filter.
+7. **Route** (severity ≥ 1.5): `choice` over `owners`
    (security/api/runtime/testing/maintainer). Action derives from severity:
    ≥ 2.0 → `request_changes`, else `comment`.
-7. **Enrich** (top 8 located findings by severity): `title` / `why` are
+8. **Enrich** (top 8 located findings by severity): `title` / `why` are
    derived deterministically from the classified mechanism; `fix` / `test`
    come from one narrow `choice` call each (`suggestedFix`, `suggestedTest`)
    over curated strategy vocabularies. Jev offers no free-text generation

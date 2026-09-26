@@ -28,8 +28,10 @@ Completed ahead of / from this plan:
   searchable with per-file focus and copy-as-PR-comment; SARIF 2.1.0 emission
   (`--sarif`) and per-sha `reviews/history/<sha>.json` trend (risk over time,
   hotspots, fix latency) feed CI and the dashboard History view.
-
-Still open from "Now": the P(revert) spike.
+- **Noise + context (Now complete; Next underway)** — a meta-judge skeptic
+  pass drops unsupported findings; changes mode sends the base file and
+  codebase mode attaches 1-hop callers/callees; a spiked `P(revert)` heuristic
+  drives a merge-confidence stat.
 
 ## Now (1–2 weeks): make findings actionable
 
@@ -42,15 +44,21 @@ Still open from "Now": the P(revert) spike.
   + `reviews/history/<sha>.json` trend (risk over time, hotspots, fix
   latency).
 - ✅ README note for FIND-005 (code is uploaded to the Jev API by design).
-- Spike: `P(revert)` / merge-confidence signal per PR.
+- ✅ Spike: `P(revert)` / merge-confidence signal per PR — an uncalibrated
+  heuristic (`review/merge_confidence.rs`) now drives a `mergeConfidence`
+  field + dashboard stat; real calibration is the merge-confidence engine
+  (#17 / Beyond Review).
+
+Now is complete.
 
 ## Next (2–4 weeks): kill noise, add context
 
-- Meta-judge FP filter: skeptical second Jev pass
-  ("does this evidence concretely support the claim?"); disagreement with the
-  first pass is the uncertainty signal; kill below bar.
-- Base + neighbor context: changes mode sends base file + diff; codebase mode
-  attaches 1-hop callers/callees via import graph.
+- ✅ Meta-judge FP filter: a second skeptical Jev pass ("does this evidence
+  concretely support the claim?"); below `MIN_META_JUDGE_CONFIDENCE` the
+  finding is dropped.
+- ✅ Base + neighbor context: changes mode sends base file + diff; codebase
+  mode attaches 1-hop callers/callees via a heuristic import graph
+  (`adapters/imports.rs`).
 - Per-language mechanisms (Rust `unsafe`/`unwrap`/`panic!`, TS `any`/casts…).
 - Finding feedback (thumbs up/down) → per-repo threshold auto-tune +
   suppression list.
