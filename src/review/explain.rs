@@ -5,8 +5,8 @@
 //!
 //! * `title` and `why` are deterministic. `title` is a concise human label
 //!   mapped from the already-classified mechanism, and `why` is the matching
-//!   description from the per-dimension `policy::mechanisms` vocabulary the
-//!   classifier chose from.
+//!   description from the per-dimension, per-language
+//!   `policy::mechanisms_for` vocabulary the classifier chose from.
 //! * `fix` and `test` are the only model work: two `choice` questions over
 //!   curated, actionable strategy vocabularies, resolved in a single
 //!   `system_one` call (see `enrich_suggestions`).
@@ -18,7 +18,8 @@ use anyhow::Result;
 
 use serde_json::{Value, json};
 
-use crate::domain::policy::{Dimension, mechanisms};
+use crate::domain::language::Language;
+use crate::domain::policy::{Dimension, mechanism_description};
 use crate::domain::report::Finding;
 use crate::review::typesafe::{TypeSafeClient, choice, choice_criteria};
 
@@ -28,9 +29,10 @@ use crate::review::typesafe::{TypeSafeClient, choice, choice_criteria};
 pub const MAX_ENRICH: usize = 8;
 
 /// A concise human title for a mechanism key, used as the finding title.
-/// Covers every key in `crate::domain::policy::mechanisms(..)`; `noIssue`
-/// maps to `None` (it is never an emitted finding) and each `other` maps to
-/// the dimension's generic issue title.
+/// Covers every key in the full per-language vocabulary
+/// (`crate::domain::policy::mechanisms_for(..)` for each supported language);
+/// `noIssue` maps to `None` (it is never an emitted finding) and each `other`
+/// maps to the dimension's generic issue title.
 pub fn mechanism_title(dimension: Dimension, key: &str) -> Option<&'static str> {
     match (dimension, key) {
         (Dimension::Correctness, "condition") => Some("Incorrect condition branch"),
@@ -38,6 +40,47 @@ pub fn mechanism_title(dimension: Dimension, key: &str) -> Option<&'static str> 
         (Dimension::Correctness, "dataFlow") => Some("Incorrect data flow"),
         (Dimension::Correctness, "asyncControl") => Some("Incorrect async/error handling"),
         (Dimension::Correctness, "other") => Some("Correctness issue"),
+        // Language-specific: Rust.
+        (Dimension::Correctness, "unsafeBlock") => Some("Unsound `unsafe` block"),
+        (Dimension::Correctness, "unwrapPanic") => Some("Panic on unwrapped failure"),
+        (Dimension::Correctness, "panicPath") => Some("Reachable panic"),
+        // TypeScript / Kotlin / Swift / Dart.
+        (Dimension::Correctness, "anyEscape") => Some("`any` escapes the type system"),
+        (Dimension::Correctness, "uncheckedCast") => Some("Unchecked cast"),
+        (Dimension::Correctness, "nonNullAssertion") => Some("Non-null assertion skips a check"),
+        (Dimension::Correctness, "forcedCast") => Some("Forced cast traps"),
+        (Dimension::Correctness, "silentOptionalChain") => Some("Optional chain hides the failure"),
+        (Dimension::Correctness, "platformTypeNullness") => Some("Platform-type nullness ignored"),
+        // JavaScript / PHP / PowerShell.
+        (Dimension::Correctness, "looseEquality") => Some("Loose equality comparison"),
+        (Dimension::Correctness, "truthinessCoercion") => Some("Coercion picks the wrong branch"),
+        (Dimension::Correctness, "thisBinding") => Some("Wrong `this` binding"),
+        // Python / Lua.
+        (Dimension::Correctness, "mutableDefaultArgument") => Some("Shared mutable default argument"),
+        (Dimension::Correctness, "lateBindingClosure") => Some("Closure captures the loop variable"),
+        (Dimension::Correctness, "implicitGlobal") => Some("Accidental global"),
+        (Dimension::Correctness, "nilArithmetic") => Some("Nil used in arithmetic or indexing"),
+        // Java / C# / Ruby.
+        (Dimension::Correctness, "nullDereference") => Some("Null dereference"),
+        (Dimension::Correctness, "equalsHashContract") => Some("Broken equality/hash contract"),
+        (Dimension::Correctness, "structCopyMutation") => Some("Mutation lost on a struct copy"),
+        (Dimension::Correctness, "nilMethodCall") => Some("Call on a possibly-nil value"),
+        (Dimension::Correctness, "mutationOfArgument") => Some("In-place mutation of shared state"),
+        // C / C++.
+        (Dimension::Correctness, "uncheckedReturn") => Some("Ignored return value"),
+        (Dimension::Correctness, "pointerArithmetic") => Some("Unsafe pointer arithmetic"),
+        (Dimension::Correctness, "uninitializedUse") => Some("Use of an uninitialized value"),
+        // Go.
+        (Dimension::Correctness, "ignoredError") => Some("Ignored error return"),
+        (Dimension::Correctness, "nilMapOrChannel") => Some("Nil map/channel misuse"),
+        // Shell.
+        (Dimension::Correctness, "subshellStateLoss") => Some("Subshell state is discarded"),
+        // SQL.
+        (Dimension::Correctness, "missingWhereClause") => Some("Missing or vacuous WHERE clause"),
+        (Dimension::Correctness, "nullComparison") => Some("Comparison against NULL"),
+        // R.
+        (Dimension::Correctness, "vectorRecycling") => Some("Silent vector recycling"),
+        (Dimension::Correctness, "naPropagation") => Some("Unchecked NA propagation"),
         (Dimension::Security, "brokenAccessControl") => Some("Broken access control"),
         (Dimension::Security, "brokenAuthentication") => Some("Broken authentication"),
         (Dimension::Security, "sqlInjection") => Some("SQL injection"),
@@ -52,16 +95,55 @@ pub fn mechanism_title(dimension: Dimension, key: &str) -> Option<&'static str> 
         (Dimension::Security, "sensitiveDataExposure") => Some("Sensitive data exposure"),
         (Dimension::Security, "securityMisconfiguration") => Some("Security misconfiguration"),
         (Dimension::Security, "other") => Some("Security issue"),
+        // JavaScript / TypeScript / Python / Ruby / Shell / PowerShell.
+        (Dimension::Security, "dynamicCodeExecution") => Some("Dynamic code execution"),
+        (Dimension::Security, "prototypePollution") => Some("Prototype pollution"),
+        (Dimension::Security, "massAssignment") => Some("Mass assignment"),
+        (Dimension::Security, "unquotedExpansion") => Some("Unquoted expansion (argument injection)"),
+        // Python / Java.
+        (Dimension::Security, "assertForValidation") => Some("Validation enforced by `assert`"),
+        (Dimension::Security, "unsafeReflection") => Some("Untrusted reflection"),
+        // C / C++ memory safety.
+        (Dimension::Security, "bufferOverflow") => Some("Buffer overflow"),
+        (Dimension::Security, "formatString") => Some("Format-string vulnerability"),
+        (Dimension::Security, "useAfterFree") => Some("Use after free"),
+        (Dimension::Security, "outOfBoundsAccess") => Some("Out-of-bounds access"),
+        // Go / PHP / SQL.
+        (Dimension::Security, "unescapedTemplate") => Some("Unescaped template output"),
+        (Dimension::Security, "fileInclusion") => Some("Local/remote file inclusion"),
+        (Dimension::Security, "overbroadGrant") => Some("Overbroad grant"),
         (Dimension::Reliability, "cleanup") => Some("Missing cleanup"),
         (Dimension::Reliability, "concurrency") => Some("Concurrency / race risk"),
         (Dimension::Reliability, "recovery") => Some("Incomplete failure recovery"),
         (Dimension::Reliability, "crash") => Some("Crash / unexpected termination"),
         (Dimension::Reliability, "other") => Some("Reliability issue"),
+        // Rust / JS / TS / Dart / Python / Java / C# / Ruby / Swift / Shell.
+        (Dimension::Reliability, "lockPoisoning") => Some("Poisoned lock ignored"),
+        (Dimension::Reliability, "unawaitedPromise") => Some("Unawaited promise"),
+        (Dimension::Reliability, "swallowedException") => Some("Swallowed exception"),
+        (Dimension::Reliability, "resourceLeak") => Some("Resource not closed on all paths"),
+        (Dimension::Reliability, "asyncVoid") => Some("`async void` hides failures"),
+        (Dimension::Reliability, "uncheckedAllocation") => Some("Unchecked allocation"),
+        (Dimension::Reliability, "danglingReference") => Some("Dangling reference or iterator"),
+        (Dimension::Reliability, "exceptionEscapeDestructor") => Some("Exception escapes a noexcept boundary"),
+        (Dimension::Reliability, "goroutineLeak") => Some("Goroutine leak"),
+        (Dimension::Reliability, "deferInLoop") => Some("Deferred cleanup runs too late"),
+        (Dimension::Reliability, "errorSuppression") => Some("Suppressed error"),
+        (Dimension::Reliability, "blockingInAsyncContext") => Some("Blocking call in async context"),
+        (Dimension::Reliability, "retainCycle") => Some("Retain cycle"),
+        (Dimension::Reliability, "forcedTry") => Some("Forced `try!`"),
+        (Dimension::Reliability, "ignoredExitStatus") => Some("Ignored exit status"),
+        (Dimension::Reliability, "partialPipelineFailure") => Some("Pipeline failure masked"),
+        (Dimension::Reliability, "silentErrorContinuation") => Some("Suppressed non-terminating error"),
         (Dimension::Compatibility, "api") => Some("Incompatible public API change"),
         (Dimension::Compatibility, "behavior") => Some("Changed caller-visible behavior"),
         (Dimension::Compatibility, "dataFormat") => Some("Incompatible format change"),
         (Dimension::Compatibility, "protocol") => Some("Incompatible protocol change"),
         (Dimension::Compatibility, "other") => Some("Compatibility issue"),
+        // C / C++ / Java / SQL.
+        (Dimension::Compatibility, "abiChange") => Some("ABI-breaking change"),
+        (Dimension::Compatibility, "serializedFormChange") => Some("Serialized form changed"),
+        (Dimension::Compatibility, "destructiveMigration") => Some("Destructive migration"),
         (Dimension::TestGap, "branch") => Some("Untested branch"),
         (Dimension::TestGap, "failure") => Some("Untested failure path"),
         (Dimension::TestGap, "boundary") => Some("Untested boundary case"),
@@ -73,13 +155,17 @@ pub fn mechanism_title(dimension: Dimension, key: &str) -> Option<&'static str> 
 }
 
 /// Sets `title` and `why` deterministically from the classified mechanism.
-/// Pure: performs no IO.
+/// The vocabulary is the finding's own language (from its path) plus the
+/// generic entries, so a Rust `unwrapPanic` explains itself as one. Pure:
+/// performs no IO.
 pub fn apply_context(finding: &mut Finding) {
     finding.title = mechanism_title(finding.dimension, &finding.mechanism).map(String::from);
-    finding.why = mechanisms(finding.dimension)
-        .iter()
-        .find(|(k, _)| *k == finding.mechanism)
-        .map(|(_, desc)| desc.to_string());
+    finding.why = mechanism_description(
+        finding.dimension,
+        Language::from_path(&finding.file),
+        &finding.mechanism,
+    )
+    .map(String::from);
 }
 
 /// The fix-strategy vocabulary (label → human actionable description). The
@@ -221,21 +307,24 @@ pub async fn enrich_suggestions(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::policy::mechanisms_for;
 
     #[test]
     fn mechanism_title_covers_every_mechanism_key() {
         // Exhaustive: every non-`noIssue` key in the vocabulary maps to a
         // title, and `noIssue` maps to None, so an added key can't silently
         // fall back to rendering the raw mechanism key.
-        for dimension in crate::domain::policy::DIMENSIONS {
-            for (key, _description) in mechanisms(dimension) {
-                if *key == "noIssue" {
-                    assert_eq!(mechanism_title(dimension, key), None);
-                } else {
-                    assert!(
-                        mechanism_title(dimension, key).is_some(),
-                        "missing title for {dimension:?}::{key}"
-                    );
+        for language in crate::domain::language::languages() {
+            for dimension in crate::domain::policy::DIMENSIONS {
+                for (key, _description) in mechanisms_for(dimension, Some(language)) {
+                    if key == "noIssue" {
+                        assert_eq!(mechanism_title(dimension, key), None);
+                    } else {
+                        assert!(
+                            mechanism_title(dimension, key).is_some(),
+                            "missing title for {language:?} {dimension:?}::{key}"
+                        );
+                    }
                 }
             }
         }

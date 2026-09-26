@@ -7,12 +7,12 @@ use serde_json::{Map, Value, json};
 use crate::domain::patch::parse_hunks;
 use crate::domain::policy::{
     BLOCKING_SEVERITY, MIN_LOCATION_CONFIDENCE, MIN_META_JUDGE_CONFIDENCE, Probabilities,
-    REVIEW_PRIORITY_RUBRIC, ROUTE_SEVERITY, SEVERITY_RUBRIC, Dimension, mechanisms,
+    REVIEW_PRIORITY_RUBRIC, ROUTE_SEVERITY, SEVERITY_RUBRIC, Dimension,
 };
 use crate::domain::report::{Action, ChangedFile, FileProfile, Finding};
 use crate::review::{meta, strategy::{Screening, Signal}};
 use crate::review::typesafe::{
-    TypeSafeClient, choice, choice_criteria, noul, score, score_criteria,
+    TypeSafeClient, choice, choice_criteria, mechanism_criteria, noul, score, score_criteria,
 };
 
 /// `changeTypes` — the diff-file category vocabulary.
@@ -265,7 +265,7 @@ pub async fn locate_signal(
             json!({
                 "mechanism": choice(
                     Value::String("Which mechanism best describes the suspected concern supported by selectedEvidence?".into()),
-                    choice_criteria(mechanisms(signal.dimension)),
+                    mechanism_criteria(&signal.file.path, signal.dimension),
                 ),
             }),
         )

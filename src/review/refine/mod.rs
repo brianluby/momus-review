@@ -27,7 +27,8 @@ use std::cmp::Ordering;
 
 use serde_json::{Value, json};
 
-use crate::domain::policy::mechanisms;
+use crate::domain::language::Language;
+use crate::domain::policy;
 use crate::domain::report::Finding;
 use crate::review::explain::mechanism_title;
 use crate::review::typesafe::TypeSafeClient;
@@ -86,13 +87,15 @@ fn sort_by_severity(findings: &mut [Finding]) {
     findings.sort_by(|a, b| b.severity.partial_cmp(&a.severity).unwrap_or(Ordering::Equal));
 }
 
-/// The description of `finding`'s mechanism from the policy vocabulary.
+/// The description of `finding`'s mechanism, from its language's vocabulary
+/// first and then the generic one.
 fn mechanism_description(finding: &Finding) -> &'static str {
-    mechanisms(finding.dimension)
-        .iter()
-        .find(|(key, _)| *key == finding.mechanism)
-        .map(|(_, desc)| *desc)
-        .unwrap_or("")
+    policy::mechanism_description(
+        finding.dimension,
+        Language::from_path(&finding.file),
+        &finding.mechanism,
+    )
+    .unwrap_or("")
 }
 
 /// The concern a single-finding judgment is about.

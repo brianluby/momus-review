@@ -11,7 +11,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::adapters::feedback_store::{append_feedback, feedback_path, read_feedback};
-use crate::adapters::report_store::{StoredReport, read_history, read_report, report_path};
+use crate::adapters::report_store::{
+    HistoryEntry, StoredReport, read_history, read_report, report_path,
+};
 use crate::domain::feedback::{FeedbackEntry, FeedbackLog, Vote};
 use crate::domain::report::{Action, ReviewReport};
 
@@ -112,10 +114,10 @@ async fn api_review() -> Json<Value> {
 async fn api_history() -> Result<Json<Value>, StatusCode> {
     let mut entries = read_history().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    // Chronological (ISO-8601 strings sort correctly).
-    entries.sort_by(|a, b| a.saved_at.cmp(&b.saved_at));
-
-    let latest = entries.last();
+    // Chronological at full mtime precision: whole-second `saved_at` would
+    // leave same-second saves (e.g. a scan then a review) in arbitrary
+    // directory order, and `hotspots` relies on this order.
+    entries.sort_by_key(|e| e.saved_nanos);
 
     let entry_values: Vec<Value> = entries
         .iter()
@@ -135,6 +137,7 @@ async fn api_history() -> Result<Json<Value>, StatusCode> {
                 .fold(0.0, f64::max);
             json!({
                 "sha": e.sha,
+                "mode": e.report.mode,
                 "savedAt": e.saved_at,
                 "findings": findings,
                 "blocking": blocking,
@@ -143,48 +146,67 @@ async fn api_history() -> Result<Json<Value>, StatusCode> {
         })
         .collect();
 
-    // Aggregate every finding across all entries by file.
+    let hotspot_values = hotspots(&entries);
+
+    Ok(Json(json!({ "entries": entry_values, "hotspots": hotspot_values })))
+}
+
+/// Top file hotspots aggregated across `entries` (chronological). A file's
+/// open/resolved state comes from the most recent entry that actually
+/// screened it (its matrix covers the file), not simply the newest entry: a
+/// diff review touching three files says nothing about the rest of the repo,
+/// so it must not mark their earlier findings resolved.
+fn hotspots(entries: &[HistoryEntry]) -> Vec<Value> {
     use std::collections::BTreeMap;
-    let mut by_file: BTreeMap<String, (usize, usize, usize, f64)> = BTreeMap::new();
-    for entry in &entries {
-        let is_latest = matches!(latest, Some(l) if std::ptr::eq(l, entry));
+
+    #[derive(Default)]
+    struct Hotspot {
+        findings: usize,
+        latest_findings: usize,
+        blocking: usize,
+        max_severity: f64,
+    }
+
+    let mut by_file: BTreeMap<String, Hotspot> = BTreeMap::new();
+    for entry in entries {
+        let mut current: BTreeMap<&str, usize> = BTreeMap::new();
+        for row in &entry.report.matrix {
+            current.insert(row.file.as_str(), 0);
+        }
         for f in &entry.report.findings {
-            let slot = by_file.entry(f.file.clone()).or_insert((0, 0, 0, 0.0));
-            slot.0 += 1;
-            if is_latest {
-                slot.1 += 1;
-            }
+            *current.entry(f.file.as_str()).or_insert(0) += 1;
+            let slot = by_file.entry(f.file.clone()).or_default();
+            slot.findings += 1;
             if f.action == Action::RequestChanges {
-                slot.2 += 1;
+                slot.blocking += 1;
             }
-            if f.severity > slot.3 {
-                slot.3 = f.severity;
+            if f.severity > slot.max_severity {
+                slot.max_severity = f.severity;
+            }
+        }
+        // This entry covered these files: it is now their latest word.
+        for (file, count) in current {
+            if let Some(slot) = by_file.get_mut(file) {
+                slot.latest_findings = count;
             }
         }
     }
 
-    let mut hotspots: Vec<(String, usize, usize, usize, f64)> = by_file
-        .into_iter()
-        .map(|(file, (findings, latest_findings, blocking, max_severity))| {
-            (file, findings, latest_findings, blocking, max_severity)
-        })
-        .collect();
-    hotspots.sort_by_key(|h| std::cmp::Reverse(h.1));
-    let hotspot_values: Vec<Value> = hotspots
+    let mut ranked: Vec<(String, Hotspot)> = by_file.into_iter().collect();
+    ranked.sort_by_key(|(_, h)| std::cmp::Reverse(h.findings));
+    ranked
         .into_iter()
         .take(15)
-        .map(|(file, findings, latest_findings, blocking, max_severity)| {
+        .map(|(file, h)| {
             json!({
                 "file": file,
-                "findings": findings,
-                "latestFindings": latest_findings,
-                "blocking": blocking,
-                "maxSeverity": max_severity,
+                "findings": h.findings,
+                "latestFindings": h.latest_findings,
+                "blocking": h.blocking,
+                "maxSeverity": h.max_severity,
             })
         })
-        .collect();
-
-    Ok(Json(json!({ "entries": entry_values, "hotspots": hotspot_values })))
+        .collect()
 }
 
 /// A thumbs up/down from the dashboard. Only the fingerprint and verdict come
@@ -294,7 +316,8 @@ async fn not_found() -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::report::Finding;
+    use crate::domain::policy::Dimension;
+    use crate::domain::report::{Finding, MatrixRow, ReviewMode};
 
     #[test]
     fn origin_must_be_this_dashboard_when_present() {
@@ -339,5 +362,57 @@ mod tests {
         assert!(valid_vote(&request(Vote::Down, false)));
         assert!(valid_vote(&request(Vote::Up, false)));
         assert!(!valid_vote(&request(Vote::Up, true)));
+    }
+
+    fn finding(file: &str) -> Finding {
+        Finding {
+            file: file.into(),
+            line: 1,
+            dimension: Dimension::Correctness,
+            probability: 0.9,
+            location_confidence: 0.9,
+            mechanism: "condition".into(),
+            mechanism_confidence: 0.8,
+            severity: 2.5,
+            severity_confidence: 0.8,
+            owner: None,
+            owner_confidence: None,
+            action: Action::RequestChanges,
+            evidence: String::new(),
+            ..Default::default()
+        }
+    }
+
+    fn entry(mode: ReviewMode, screened: &[&str], findings: &[&str]) -> HistoryEntry {
+        HistoryEntry {
+            sha: "abc".into(),
+            saved_at: String::new(),
+            saved_nanos: 0,
+            report: ReviewReport {
+                mode,
+                matrix: screened
+                    .iter()
+                    .map(|f| MatrixRow { file: (*f).into(), probabilities: Default::default() })
+                    .collect(),
+                findings: findings.iter().map(|f| finding(f)).collect(),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn narrow_review_does_not_resolve_unscreened_files() {
+        let entries = vec![
+            entry(ReviewMode::Codebase, &["a.rs", "b.rs", "c.rs"], &["a.rs", "b.rs"]),
+            // A later diff review screens only b.rs and c.rs, and b.rs is clean.
+            entry(ReviewMode::Changes, &["b.rs", "c.rs"], &[]),
+        ];
+        let spots = hotspots(&entries);
+        let latest = |file: &str| {
+            spots.iter().find(|h| h["file"] == file).unwrap()["latestFindings"].as_u64().unwrap()
+        };
+        // a.rs was never re-screened: still open. b.rs was, and is clean.
+        assert_eq!(latest("a.rs"), 1);
+        assert_eq!(latest("b.rs"), 0);
     }
 }

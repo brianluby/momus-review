@@ -5,7 +5,8 @@
 
 use serde_json::{Value, json};
 
-use crate::domain::policy::{Dimension, mechanisms};
+use crate::domain::language::Language;
+use crate::domain::policy::{Dimension, mechanism_description};
 use crate::domain::report::{Action, Finding, ReviewReport};
 use crate::review::explain::mechanism_title;
 
@@ -40,13 +41,18 @@ fn finding_title(finding: &Finding) -> String {
 }
 
 /// The mechanism description (`why` vocabulary) for a finding, reused as the
-/// rule's `help.text`.
-fn mechanism_description(finding: &Finding) -> String {
-    mechanisms(finding.dimension)
-        .iter()
-        .find(|(key, _)| *key == finding.mechanism)
-        .map(|(_, description)| description.to_string())
-        .unwrap_or_default()
+/// rule's `help.text`. The finding's path selects the vocabulary that named
+/// the mechanism; a key shared across languages has one definition
+/// (`policy::each_mechanism_key_has_one_definition`), so the text cannot
+/// depend on which finding created the rule.
+fn rule_help_text(finding: &Finding) -> String {
+    mechanism_description(
+        finding.dimension,
+        Language::from_path(&finding.file),
+        &finding.mechanism,
+    )
+    .unwrap_or_default()
+    .to_string()
 }
 
 /// Renders `report` as a SARIF 2.1.0 log. One `result` per finding; distinct
@@ -69,7 +75,7 @@ pub fn to_sarif(report: &ReviewReport) -> Value {
                 rules.push(json!({
                     "id": rule_id,
                     "shortDescription": { "text": short },
-                    "help": { "text": mechanism_description(finding) },
+                    "help": { "text": rule_help_text(finding) },
                 }));
             }
 

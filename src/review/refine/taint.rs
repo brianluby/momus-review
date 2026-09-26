@@ -140,6 +140,19 @@ mod tests {
     }
 
     #[test]
+    fn every_taint_mechanism_is_a_security_mechanism() {
+        use crate::domain::policy::{language_mechanism_rows, mechanisms};
+        for key in TAINT_MECHANISMS {
+            let generic = mechanisms(Dimension::Security).iter().any(|(k, _)| *k == key);
+            let per_language = language_mechanism_rows()
+                .iter()
+                .filter(|(_, d, _)| *d == Dimension::Security)
+                .any(|(_, _, entries)| entries.iter().any(|(k, _)| *k == key));
+            assert!(generic || per_language, "{key} is not a security mechanism");
+        }
+    }
+
+    #[test]
     fn every_untrusted_source_is_in_the_vocabulary() {
         for s in UNTRUSTED_SOURCES {
             assert!(TAINT_SOURCES.iter().any(|(k, _)| *k == s), "{s}");

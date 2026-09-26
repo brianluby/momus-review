@@ -50,18 +50,21 @@ pub type Probabilities = BTreeMap<Dimension, f64>;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DimensionMeta { pub key: Dimension, pub label: String, pub short: String }
 
-// Thresholds/budgets/patterns consts: SCREEN_THRESHOLD, SEVERITY_MAX,
+// Thresholds/budgets consts: SCREEN_THRESHOLD, SEVERITY_MAX,
 // ROUTE_SEVERITY, BLOCKING_SEVERITY, MIN_LOCATION_CONFIDENCE, MAX_FOLLOW_UPS,
 // MAX_PROFILES, CONCURRENCY.
 
-// The two regex literals become LazyLock statics (Regex isn't const-safe).
-static SOURCE_FILE: LazyLock<Regex> = LazyLock::new(/* … */);
-static TEST_FILE: LazyLock<Regex> = LazyLock::new(/* … */);
-pub fn source_file() -> &'static Regex { &SOURCE_FILE }
-
 // mechanisms(d: Dimension) -> &'static [(&str, &str)]   (order preserved, noIssue last)
+// mechanisms_for(d: Dimension, lang: Option<Language>) -> Vec<(&str, &str)>
+//   — the generic entries plus that language's own mechanisms, spliced ahead
+//   of the `other` sentinel; LANGUAGE_MECHANISMS holds the per-language rows.
 // REVIEW_PRIORITY_RUBRIC: [&str; 4], SEVERITY_RUBRIC: [&str; 4], OWNERS: [(&str, &str); 5]
 ```
+
+File patterns are no longer regexes here: `domain/language.rs` owns them as a
+single `SPECS` table (extensions, test-name conventions, test-body markers)
+behind `Language::from_path`, `is_source_path`, and `is_test_path`. See
+`docs/language-support.md`.
 
 `Dimension` also carries `key()` (`"testGap"`, …) and `definition()` (the
 `dimensions` record string used in `locate` state).
