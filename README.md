@@ -28,13 +28,23 @@ Two modes, one funnel:
 Both accept one or more scope directories (unioned into one run) plus
 `--exclude GLOB` (skip vendored/third-party subtrees), `--follow-ups N`
 (opt into a follow-up budget; unlimited by default), and
-`--fail-on-blocking` (CI exit contract).
+`--fail-on-blocking` (CI exit contract), and `--no-refine` (skip the
+refinement stage below).
+
+Source languages: the 20-language consensus set (Python, JavaScript,
+TypeScript, Java, C#, C++, C, Go, Rust, PHP, Ruby, Kotlin, Swift, shell, SQL,
+R, Scala, Dart, Lua, PowerShell), each with its own mechanism vocabulary — see
+`docs/language-support.md`.
 
 Both run the same staged pipeline: cheap risk screening across five
 dimensions (correctness, security, reliability, compatibility, test gap),
 then focused follow-ups on the strongest signals only — evidence selection,
-mechanism classification, severity scoring, reviewer routing. Results land in
-a quiet local dashboard and machine-readable JSON.
+mechanism classification, severity scoring, reviewer routing. A refinement
+stage then folds duplicate findings, traces taint for injection classes,
+drops findings a single visible fact exonerates, flags split re-screens for a
+human, and ranks the top findings pairwise. Results land in a quiet local
+dashboard and machine-readable JSON; 👍/👎/Hide in the dashboard tunes
+per-dimension thresholds and suppresses findings on the next run.
 
 ## Configuration
 
@@ -86,7 +96,8 @@ Built from a hardened TypeScript prototype:
 - Fork: `brianluby/jev-review` — security hardening (symlink-safe reads,
   atomic report writes, dashboard Host/CSP hardening) submitted upstream as
   [PR #10](https://github.com/devagrawal09/jev-review/pull/10)
-- Prototype also proved Rust language support (`.rs` discovery + test markers)
+- Prototype also proved Rust language support (`.rs` discovery + test markers);
+  the Rust port now carries the full 20-language consensus set
 
 See `docs/architecture.md` (what exists), `docs/security.md` (threat model +
 fixes), `docs/rust-port.md` (migration plan).

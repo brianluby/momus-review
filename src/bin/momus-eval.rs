@@ -45,6 +45,16 @@ fn mechanism_categories(m: &str) -> &'static [&'static str] {
         "cryptographicFailure" => &["Cryptographic Issues"],
         "sensitiveDataExposure" => &["Sensitive Data Exposure"],
         "securityMisconfiguration" => &["Security Misconfiguration"],
+        // Per-language mechanisms (#7). Memory-safety classes have no Juice
+        // Shop category (the benchmark is JS/TS), so they map to the
+        // benchmark's catch-all rather than reporting nothing.
+        "prototypePollution" | "dynamicCodeExecution" | "unsafeReflection" | "formatString"
+        | "unquotedExpansion" => &["Injection"],
+        "assertForValidation" => &["Improper Input Validation"],
+        "fileInclusion" | "massAssignment" => &["Broken Access Control"],
+        "unescapedTemplate" => &["XSS"],
+        "overbroadGrant" => &["Security Misconfiguration"],
+        "bufferOverflow" | "useAfterFree" | "outOfBoundsAccess" => &["Miscellaneous"],
         // Legacy pre-Lever-1 names: kept so older reports remain evaluable,
         // mapped to their original (coarse) categories.
         "authorization" => &["Broken Access Control", "Broken Authentication", "Unvalidated Redirects"],
@@ -159,7 +169,8 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::mechanism_categories;
-    use momus_review::domain::policy::{Dimension, mechanisms};
+    use momus_review::domain::language::languages;
+    use momus_review::domain::policy::{Dimension, mechanisms_for};
 
     /// Mechanism names that existed before the Lever-1 vocabulary expansion
     /// and can still appear in older reports.
@@ -170,14 +181,20 @@ mod tests {
     /// a class (the `other → empty` bug reviewers flagged twice).
     #[test]
     fn every_security_mechanism_maps_to_a_category() {
-        for (name, _) in mechanisms(Dimension::Security) {
-            if *name == "noIssue" {
-                continue; // never appears in a finding's mechanism field
+        // The generic vocabulary and every language's additions: a mechanism
+        // the classifier can pick must be counted by the evaluator, whichever
+        // language produced it.
+        let vocabularies = std::iter::once(None).chain(languages().map(Some));
+        for language in vocabularies {
+            for (name, _) in mechanisms_for(Dimension::Security, language) {
+                if name == "noIssue" {
+                    continue; // never appears in a finding's mechanism field
+                }
+                assert!(
+                    !mechanism_categories(name).is_empty(),
+                    "security mechanism {name:?} ({language:?}) maps to no category"
+                );
             }
-            assert!(
-                !mechanism_categories(name).is_empty(),
-                "security mechanism {name:?} maps to no category"
-            );
         }
         for name in LEGACY_MECHANISMS {
             assert!(

@@ -2,6 +2,7 @@
 //! atomic report store.
 
 pub mod exclude;
+pub mod feedback_store;
 pub mod git;
 pub mod imports;
 pub mod report_store;

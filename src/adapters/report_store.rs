@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, anyhow, bail};
 
-use crate::domain::report::ReviewReport;
+use crate::domain::report::{ReviewMode, ReviewReport};
 
 /// The result of reading a saved report, mirroring the prototype's
 /// `StoredReport` shape consumed by the dashboard client.
@@ -59,7 +59,7 @@ static COUNTER: AtomicU64 = AtomicU64::new(0);
 /// Writes `data` to `path` atomically: a unique `O_EXCL` temp file renamed
 /// into place, so readers never see a partial file and a planted symlink is
 /// never followed.
-fn write_atomic(path: &Path, data: &str) -> Result<()> {
+pub(crate) fn write_atomic(path: &Path, data: &str) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -114,30 +114,68 @@ fn unique_suffix() -> String {
 }
 
 /// One saved history snapshot. `saved_at` derives from the file's mtime so a
-/// per-sha entry reflects when that review was written.
+/// per-sha entry reflects when that review was written; `saved_nanos` is the
+/// same mtime at full precision, for ordering entries saved within one second.
 pub struct HistoryEntry {
     pub sha: String,
     pub saved_at: String,
+    pub saved_nanos: u128,
     pub report: ReviewReport,
 }
 
-/// Fixed `./reviews/history` directory holding one report per reviewed sha.
+/// Fixed `./reviews/history` directory holding one report per reviewed
+/// (sha, mode) pair.
 /// Deliberately not overridden by `MOMUS_REPORT` (which points at the single
 /// `latest.json` the dashboard's review view reads); history is always a dir.
 pub fn history_dir() -> PathBuf {
     PathBuf::from("reviews").join("history")
 }
 
-/// Writes the report to `reviews/history/{sha}.json` using the same atomic
-/// `save_report` flow (unique `O_EXCL` temp + rename). Returns the written
-/// path; overwriting an existing sha replaces it.
+/// Writes the report to `reviews/history/{sha}.{mode}.json` using the same
+/// atomic `save_report` flow (unique `O_EXCL` temp + rename). Returns the
+/// written path. Keying by mode keeps a `scan` and a `review` of the same
+/// commit from overwriting each other; re-running the same mode on the same
+/// sha replaces that entry.
 pub fn save_history(report: &ReviewReport, sha: &str) -> Result<PathBuf> {
-    let path = history_dir().join(format!("{sha}.json"));
+    save_history_in(&history_dir(), report, sha)
+}
+
+fn save_history_in(dir: &Path, report: &ReviewReport, sha: &str) -> Result<PathBuf> {
+    let path = dir.join(format!("{sha}.{}.json", mode_key(report.mode)));
     save_report(report, &path)?;
+
+    // A pre-mode legacy `{sha}.json` of the same mode is now superseded;
+    // leaving it would count that review twice. One of the other mode is the
+    // only record of that review, so it stays.
+    let legacy = dir.join(format!("{sha}.json"));
+    if let StoredReport::Ok { report: old, .. } = read_report(&legacy)
+        && old.mode == report.mode
+    {
+        match remove_file(&legacy) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(anyhow!("remove legacy history {}: {e}", legacy.display())),
+        }
+    }
     Ok(path)
 }
 
-/// Lists `reviews/history/*.json` (filename stem = sha) and reads each via
+fn mode_key(mode: ReviewMode) -> &'static str {
+    match mode {
+        ReviewMode::Changes => "changes",
+        ReviewMode::Codebase => "codebase",
+    }
+}
+
+/// The sha from a history file stem: `{sha}.{mode}` or legacy `{sha}`.
+fn history_sha(stem: &str) -> &str {
+    stem.strip_suffix(".changes")
+        .or_else(|| stem.strip_suffix(".codebase"))
+        .unwrap_or(stem)
+}
+
+/// Lists `reviews/history/*.json` (stem = `{sha}.{mode}`, or a legacy bare
+/// `{sha}`) and reads each via
 /// the tolerant `read_report`; files that are not valid review output are
 /// skipped. Unordered — the dashboard sorts by `saved_at`. A missing (or
 /// empty) directory is empty history, not an error.
@@ -162,7 +200,18 @@ fn read_history_in(dir: &Path) -> Result<Vec<HistoryEntry>> {
             continue;
         };
         if let StoredReport::Ok { saved_at, report } = read_report(&path) {
-            out.push(HistoryEntry { sha: sha.to_string(), saved_at, report });
+            let saved_nanos = metadata(&path)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_nanos())
+                .unwrap_or_default();
+            out.push(HistoryEntry {
+                sha: history_sha(sha).to_string(),
+                saved_at,
+                saved_nanos,
+                report,
+            });
         }
     }
     Ok(out)
@@ -171,7 +220,7 @@ fn read_history_in(dir: &Path) -> Result<Vec<HistoryEntry>> {
 /// Formats a `SystemTime` as a UTC ISO-8601 string (`YYYY-MM-DDTHH:MM:SSZ`),
 /// the format the dashboard client feeds to `new Date(...)`. Dependency-free
 /// via the civil-from-days algorithm.
-fn iso8601(t: SystemTime) -> String {
+pub(crate) fn iso8601(t: SystemTime) -> String {
     let secs = t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
     let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
     let (h, m, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);
@@ -202,5 +251,48 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("momus-review-no-such-history-{}", std::process::id()));
         let entries = read_history_in(&dir).unwrap();
         assert!(entries.is_empty());
+    }
+
+    /// A scan and a review of the same sha land in separate files, and both
+    /// read back with the bare sha.
+    #[test]
+    fn history_is_keyed_by_sha_and_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        for mode in [ReviewMode::Changes, ReviewMode::Codebase] {
+            let report = ReviewReport { mode, ..Default::default() };
+            let path = dir.path().join(format!("abc123.{}.json", mode_key(mode)));
+            save_report(&report, &path).unwrap();
+        }
+        save_report(&ReviewReport::default(), &dir.path().join("legacy.json")).unwrap();
+
+        let mut entries = read_history_in(dir.path()).unwrap();
+        entries.sort_by_key(|e| (e.sha.clone(), mode_key(e.report.mode)));
+        let keys: Vec<(&str, ReviewMode)> =
+            entries.iter().map(|e| (e.sha.as_str(), e.report.mode)).collect();
+        assert_eq!(
+            keys,
+            vec![
+                ("abc123", ReviewMode::Changes),
+                ("abc123", ReviewMode::Codebase),
+                ("legacy", ReviewMode::Changes),
+            ]
+        );
+    }
+
+    /// Saving supersedes a legacy `{sha}.json` of the same mode, but keeps
+    /// one of the other mode (its only record).
+    #[test]
+    fn save_history_replaces_same_mode_legacy_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let changes = ReviewReport { mode: ReviewMode::Changes, ..Default::default() };
+        let codebase = ReviewReport { mode: ReviewMode::Codebase, ..Default::default() };
+
+        save_report(&changes, &dir.path().join("same.json")).unwrap();
+        save_history_in(dir.path(), &changes, "same").unwrap();
+        assert!(!dir.path().join("same.json").exists());
+
+        save_report(&codebase, &dir.path().join("other.json")).unwrap();
+        save_history_in(dir.path(), &changes, "other").unwrap();
+        assert!(dir.path().join("other.json").exists());
     }
 }

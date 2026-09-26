@@ -10,7 +10,8 @@ use anyhow::Result;
 use crate::adapters::exclude::Exclude;
 use crate::adapters::git;
 use crate::adapters::imports::ImportGraph;
-use crate::domain::policy::{Probabilities, test_file};
+use crate::domain::language::is_test_path;
+use crate::domain::policy::Probabilities;
 use crate::domain::report::{FileProfile, Finding, ReviewMode, SourceFile};
 use crate::review::codebase_judgments;
 use crate::review::strategy::{Discovery, ReviewStrategy, Screening, Signal};
@@ -54,6 +55,19 @@ impl CodebaseStrategy {
 impl ReviewStrategy for CodebaseStrategy {
     type File = SourceFile;
 
+    fn client(&self) -> &TypeSafeClient {
+        &self.client
+    }
+
+    fn neighbor_context(&self, path: &str) -> serde_json::Value {
+        let neighbors: Vec<SourceFile> = self
+            .neighbor_files(path)
+            .iter()
+            .map(codebase_judgments::compact_neighbor)
+            .collect();
+        serde_json::json!(neighbors)
+    }
+
     fn mode(&self) -> ReviewMode {
         ReviewMode::Codebase
     }
@@ -71,7 +85,7 @@ impl ReviewStrategy for CodebaseStrategy {
         let mut files = Vec::new();
         let mut context_files = Vec::new();
         for f in repository {
-            if test_file().is_match(&f.path) {
+            if is_test_path(&f.path) {
                 context_files.push(f);
             } else {
                 files.push(f);

@@ -49,7 +49,8 @@ fn repository_files_discovers_only_source_files() {
     write(&repo, "src/lib.rs", "pub fn f() -> i32 { 1 }\n");
     write(&repo, "tests/lib_test.rs", "#[test]\nfn it_works() {}\n");
     write(&repo, "README.md", "# hi\n");
-    write(&repo, "notes.py", "x = 1\n");
+    write(&repo, "data.csv", "a,b\n1,2\n");
+    write(&repo, "src/worker.go", "package main\n");
     run_git(&repo, &["add", "-A"]);
     run_git(&repo, &["commit", "-q", "-m", "seed"]);
 
@@ -58,8 +59,8 @@ fn repository_files_discovers_only_source_files() {
     paths.sort();
 
     // Test files are returned too (they become test-gap context); non-source
-    // files are silently skipped.
-    assert_eq!(paths, vec!["src/lib.rs", "tests/lib_test.rs"]);
+    // files are silently skipped, and every supported language is discovered.
+    assert_eq!(paths, vec!["src/lib.rs", "src/worker.go", "tests/lib_test.rs"]);
 }
 
 #[test]
@@ -124,4 +125,99 @@ fn multi_scope_unions_and_dedupes() {
 
     // Union of both scopes, deduped; frontend/app.js is outside the scopes.
     assert_eq!(paths, vec!["server/app.js", "server/routes/search.js"]);
+}
+#[test]
+fn renamed_file_diffs_against_its_old_path() {
+    let (_dir, repo) = fixture_repo();
+    write(&repo, "src/old.rs", "fn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\n");
+    run_git(&repo, &["add", "-A"]);
+    run_git(&repo, &["commit", "-q", "-m", "seed"]);
+
+    run_git(&repo, &["mv", "src/old.rs", "src/new.rs"]);
+    write(&repo, "src/new.rs", "fn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\nfn z() {}\n");
+
+    let files = git::changed_files(std::slice::from_ref(&repo), &Exclude::default()).unwrap();
+    let renamed = files.iter().find(|f| f.path == "src/new.rs").unwrap();
+    // Only the added line is a change; the carried-over lines are context,
+    // not a whole-file `@@ -0,0` addition.
+    assert!(!renamed.patch.contains("@@ -0,0"), "patch: {}", renamed.patch);
+    assert!(renamed.patch.contains("+fn z() {}"));
+    assert!(renamed.patch.contains("\n fn d() {}"));
+    assert!(renamed.base.starts_with("fn a() {}"));
+}
+
+#[test]
+fn unborn_repo_reviews_untracked_files() {
+    let (_dir, repo) = fixture_repo();
+    write(&repo, "src/lib.rs", "pub fn f() -> i32 { 1 }\n");
+
+    let files = git::changed_files(std::slice::from_ref(&repo), &Exclude::default()).unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].path, "src/lib.rs");
+    assert!(files[0].patch.contains("+pub fn f() -> i32 { 1 }"));
+}
+
+#[test]
+fn diff_ignores_color_and_external_diff_config() {
+    let (_dir, repo) = fixture_repo();
+    write(&repo, "src/lib.rs", "pub fn f() -> i32 { 1 }\n");
+    run_git(&repo, &["add", "-A"]);
+    run_git(&repo, &["commit", "-q", "-m", "seed"]);
+    run_git(&repo, &["config", "color.ui", "always"]);
+    run_git(&repo, &["config", "diff.external", "false"]);
+
+    write(&repo, "src/lib.rs", "pub fn f() -> i32 { 2 }\n");
+    let files = git::changed_files(std::slice::from_ref(&repo), &Exclude::default()).unwrap();
+    let patch = &files[0].patch;
+    assert!(!patch.contains('\x1b'), "patch has ANSI escapes: {patch:?}");
+    assert!(patch.contains("\n@@ -1 +1 @@"), "patch: {patch:?}");
+}
+
+#[test]
+fn base_content_keeps_leading_whitespace() {
+    let (_dir, repo) = fixture_repo();
+    let original = "\n\n    // indented header\npub fn f() -> i32 { 1 }\n";
+    write(&repo, "src/lib.rs", original);
+    run_git(&repo, &["add", "-A"]);
+    run_git(&repo, &["commit", "-q", "-m", "seed"]);
+
+    write(&repo, "src/lib.rs", "\n\n    // indented header\npub fn f() -> i32 { 2 }\n");
+    let files = git::changed_files(std::slice::from_ref(&repo), &Exclude::default()).unwrap();
+    assert_eq!(files[0].base, original);
+}
+
+#[test]
+fn unborn_sha256_repo_reviews_untracked_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().to_path_buf();
+    run_git(&repo, &["init", "-q", "--object-format=sha256"]);
+    write(&repo, "src/lib.rs", "pub fn f() -> i32 { 1 }\n");
+
+    let files = git::changed_files(std::slice::from_ref(&repo), &Exclude::default()).unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].path, "src/lib.rs");
+}
+
+#[test]
+fn unresolvable_detached_head_is_an_error_not_unborn() {
+    let (_dir, repo) = fixture_repo();
+    write(&repo, "src/lib.rs", "pub fn f() -> i32 { 1 }\n");
+    run_git(&repo, &["add", "-A"]);
+    run_git(&repo, &["commit", "-q", "-m", "seed"]);
+    // Point a detached HEAD at a commit id that does not exist.
+    fs::write(repo.join(".git/HEAD"), "0123456789abcdef0123456789abcdef01234567\n").unwrap();
+
+    assert!(git::changed_files(std::slice::from_ref(&repo), &Exclude::default()).is_err());
+}
+
+#[test]
+fn repo_path_with_trailing_space_is_preserved() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo ");
+    fs::create_dir(&repo).unwrap();
+    run_git(&repo, &["init", "-q"]);
+    write(&repo, "src/lib.rs", "pub fn f() -> i32 { 1 }\n");
+
+    let files = git::repository_files(std::slice::from_ref(&repo), &Exclude::default()).unwrap();
+    assert_eq!(files.len(), 1);
 }

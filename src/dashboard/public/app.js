@@ -23,6 +23,8 @@ let showValues = false;
 let lastState = null;
 let lastKey = "";
 let view = { search: "", dimension: "all", severity: "all", sort: "severity-desc", groupByFile: false };
+// Latest reviewer vote per finding fingerprint: { vote: "up" | "down", suppress }.
+let votes = {};
 
 // All untrusted text goes through text nodes, never innerHTML.
 function h(tag, props = {}, ...children) {
@@ -167,6 +169,13 @@ function workflow(report) {
     },
   ];
 
+  const refined = [
+    [flow.clusteredFindings, "folded as duplicates"],
+    [flow.exoneratedFindings, "exonerated"],
+    [flow.suppressedFindings, "suppressed by feedback"],
+    [flow.needsHumanFindings, "need a human"],
+  ].filter(([value]) => isNum(value) && value > 0);
+
   return section(
     "Review funnel",
     null,
@@ -193,6 +202,12 @@ function workflow(report) {
         ),
       ),
     ),
+    refined.length > 0 &&
+      h(
+        "p",
+        { class: "section-note refine-note" },
+        "Refinement: " + refined.map(([value, label]) => value + " " + label).join(" · "),
+      ),
   );
 }
 
@@ -628,7 +643,13 @@ function findingRows(finding, labels, onFileClick) {
       h(
         "td",
         { class: "dim" },
-        h("span", {}, labels[finding.dimension] ?? String(finding.dimension)),
+        h(
+          "span",
+          {},
+          isNum(finding.rank) &&
+            h("span", { class: "rank", title: "Fix-first rank from pairwise comparison" }, "#" + finding.rank),
+          labels[finding.dimension] ?? String(finding.dimension),
+        ),
         (finding.title || finding.mechanism) &&
           h("small", {}, String(finding.title || finding.mechanism)),
       ),
@@ -639,7 +660,10 @@ function findingRows(finding, labels, onFileClick) {
         { class: `act ${blocking ? "blocking" : "comment"}` },
         h("span", { class: "glyph", "aria-hidden": "true" }),
         blocking ? "Request changes" : finding.action === "comment" ? "Comment" : String(finding.action),
+        finding.ensemble?.needsHuman &&
+          h("span", { class: "needs-human", title: "Re-screens disagreed; a human should decide" }, "Needs human"),
         copyButton(finding, labels[finding.dimension]),
+        finding.fingerprint && feedbackButtons(finding),
       ),
     ),
   ];
@@ -684,7 +708,120 @@ function findingRows(finding, labels, onFileClick) {
     );
   }
 
+  const refinement = refinementDetails(finding, labels);
+  if (refinement.length > 0) {
+    rows.push(
+      h(
+        "tr",
+        { class: "refine-row" },
+        h("td", { colspan: "5" }, h("details", {}, h("summary", {}, "Refinement"), refinement)),
+      ),
+    );
+  }
+
   return rows;
+}
+
+// "validatedUpstream" -> "validated upstream"
+function humanize(key) {
+  return String(key)
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase();
+}
+
+function refinementDetails(finding, labels) {
+  const out = [];
+  const related = Array.isArray(finding.related) ? finding.related : [];
+  if (related.length > 0) {
+    out.push(
+      h(
+        "p",
+        {},
+        h("strong", {}, "Same root cause: "),
+        related
+          .map((r) => `${r.file}:${r.line} ${labels[r.dimension] ?? r.dimension} (${humanize(r.mechanism)}, ${fixed(r.confidence)})`)
+          .join("; "),
+      ),
+    );
+  }
+  const t = finding.taint;
+  if (t) {
+    out.push(
+      h(
+        "p",
+        {},
+        h("strong", {}, "Taint: "),
+        `source ${humanize(t.source)} (untrusted ${fixed(t.untrusted)}) → reaches sink ${fixed(t.reachesSink)} → sanitized ${isNum(t.sanitized) ? fixed(t.sanitized) : "not assessed"} · exploitability ${fixed(t.exploitability)}`,
+      ),
+    );
+  }
+  const x = finding.exoneration;
+  if (x) {
+    out.push(
+      h(
+        "p",
+        {},
+        h("strong", {}, "Counterfactual: "),
+        x.fact === "none"
+          ? `no single fact would exonerate this (${fixed(x.factConfidence)})`
+          : `false positive if ${humanize(x.fact)}; context shows it ${fixed(x.holds)}`,
+      ),
+    );
+  }
+  const e = finding.ensemble;
+  if (e && Array.isArray(e.votes)) {
+    out.push(
+      h(
+        "p",
+        {},
+        h("strong", {}, "Re-screen votes: "),
+        `${e.votes.map((v) => fixed(v)).join(" / ")} (mean ${fixed(e.mean)}, spread ${fixed(e.spread)})`,
+        e.needsHuman ? " · needs a human" : "",
+      ),
+    );
+  }
+  return out;
+}
+
+function feedbackButtons(finding) {
+  const current = votes[finding.fingerprint];
+  const status = h("span", { class: "fb-status", role: "status" });
+  const send = (vote, suppress) => async () => {
+    status.textContent = "Saving…";
+    try {
+      const res = await fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fingerprint: finding.fingerprint, vote, suppress }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      votes = (await res.json()).votes ?? votes;
+      if (lastState) render(lastState);
+    } catch {
+      status.textContent = "Not saved";
+    }
+  };
+  const button = (label, title, vote, suppress, active) =>
+    h(
+      "button",
+      {
+        type: "button",
+        class: `fb-btn${active ? " active" : ""}`,
+        title,
+        "aria-label": title,
+        "aria-pressed": active ? "true" : "false",
+        onclick: send(vote, suppress),
+      },
+      label,
+    );
+  return h(
+    "span",
+    { class: "feedback", role: "group", "aria-label": "Finding feedback" },
+    button("👍", "Useful finding", "up", false, current?.vote === "up"),
+    button("👎", "Not useful (tunes this concern's threshold)", "down", false, current?.vote === "down" && !current?.suppress),
+    button("Hide", "Not useful, and hide it in future runs", "down", true, current?.suppress === true),
+    status,
+  );
 }
 
 function findingsTable(items, labels, onFileClick) {
@@ -808,6 +945,7 @@ function historyRisks(entries) {
           h(
             "span",
             { class: "history-counts" },
+            h("span", { class: "badge" }, entry.mode === "codebase" ? "scan" : "review"),
             h("span", { class: "badge" }, `${entry.findings} finding${entry.findings === 1 ? "" : "s"}`),
             entry.blocking > 0 && h("span", { class: "badge badge-block" }, `${entry.blocking} blocking`),
           ),
@@ -909,6 +1047,15 @@ function render(state) {
   }
 }
 
+async function loadVotes() {
+  try {
+    const res = await fetch("/api/feedback", { cache: "no-store" });
+    if (res.ok) votes = (await res.json()).votes ?? {};
+  } catch {
+    // Feedback is optional; the review still renders without it.
+  }
+}
+
 async function load() {
   let state;
   try {
@@ -917,7 +1064,9 @@ async function load() {
   } catch {
     state = { status: "offline" };
   }
-  const key = JSON.stringify(state);
+  await loadVotes();
+  const voteKey = JSON.stringify(votes);
+  const key = JSON.stringify(state) + voteKey;
   if (key === lastKey) return renderMeta(state);
   lastKey = key;
   render(state);
