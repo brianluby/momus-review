@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use serde_json::{Value, json};
 
+use crate::domain::patch::base_line;
 use crate::domain::policy::{Dimension, Probabilities};
 use crate::domain::report::{ChangedFile, FileProfile, Finding, ReviewMode, SourceFile};
 use crate::review::typesafe::TypeSafeClient;
@@ -28,9 +29,11 @@ impl FileEntry for ChangedFile {
         &self.path
     }
 
+    /// `line` is a new-file line (from the patch's `+` ranges); the base
+    /// window is centered on the matching pre-change line.
     fn context_around(&self, line: usize) -> Value {
         let patch: String = self.patch.chars().take(MAX_CONTEXT_PATCH_CHARS).collect();
-        let (base_start, base) = window(&self.base, line, CONTEXT_RADIUS);
+        let (base_start, base) = window(&self.base, base_line(&self.patch, line), CONTEXT_RADIUS);
         json!({ "path": self.path, "patch": patch, "baseStartLine": base_start, "base": base })
     }
 }
