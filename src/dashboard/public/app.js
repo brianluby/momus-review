@@ -22,6 +22,7 @@ const meta = document.getElementById("meta");
 let showValues = false;
 let lastState = null;
 let lastKey = "";
+let view = { search: "", dimension: "all", severity: "all", sort: "severity-desc", groupByFile: false };
 
 // All untrusted text goes through text nodes, never innerHTML.
 function h(tag, props = {}, ...children) {
@@ -383,101 +384,480 @@ function findings(report) {
     );
   }
 
-  const table = h(
-    "table",
-    { class: "findings" },
-    h(
-      "thead",
-      {},
-      h(
-        "tr",
-        {},
-        ["Location", "Concern", "Severity", "Owner", "Action"].map((label) => h("th", { scope: "col" }, label)),
-      ),
-    ),
-    h(
-      "tbody",
-      {},
-      list.flatMap((finding) => {
-        const [dir, base] = splitPath(finding.file);
-        const blocking = finding.action === "request_changes";
-        return [h(
-          "tr",
-          {
-            title: `location confidence ${fixed(finding.locationConfidence)} · severity confidence ${fixed(finding.severityConfidence)}`,
-          },
-          h(
-            "td",
-            { class: "loc" },
-            h(
-              "code",
-              { title: `${finding.file}:${finding.line}` },
-              h("span", { class: "dir" }, dir),
-              h("span", { class: "base" }, base),
-              h("span", { class: "line" }, `:${finding.line ?? "?"}`),
-            ),
-          ),
-          h(
-            "td",
-            { class: "dim" },
-            h("span", {}, labels[finding.dimension] ?? String(finding.dimension)),
-            (finding.title || finding.mechanism) &&
-              h("small", {}, String(finding.title || finding.mechanism)),
-          ),
-          h("td", { class: "sev" }, h("span", { class: "sr" }, "severity "), severityMeter(finding.severity)),
-          h("td", { class: "owner" }, finding.owner ? String(finding.owner) : "–"),
-          h(
-            "td",
-            { class: `act ${blocking ? "blocking" : "comment"}` },
-            h("span", { class: "glyph", "aria-hidden": "true" }),
-            blocking ? "Request changes" : finding.action === "comment" ? "Comment" : String(finding.action),
-          ),
-        ),
-        finding.evidence
-          ? h(
-              "tr",
-              { class: "evidence-row" },
-              h(
-                "td",
-                { colspan: "5" },
-                h(
-                  "details",
-                  {},
-                  h("summary", {}, "Evidence"),
-                  h("pre", {}, h("code", {}, String(finding.evidence))),
-                ),
-              ),
-            )
-          : null,
-        (finding.why || finding.fix || finding.test)
-          ? h(
-              "tr",
-              { class: "suggestion-row" },
-              h(
-                "td",
-                { colspan: "5" },
-                h(
-                  "details",
-                  {},
-                  h("summary", {}, "Why & how to fix"),
-                  finding.why && h("p", {}, String(finding.why)),
-                  finding.fix && h("p", {}, h("strong", {}, "Fix: "), String(finding.fix)),
-                  finding.test && h("p", {}, h("strong", {}, "Test: "), String(finding.test)),
-                ),
-              ),
-            )
-          : null,
-      ];
-      }),
+  const body = h("div", { class: "findings-body" });
+
+  const searchInput = h("input", {
+    type: "search",
+    class: "tool-search",
+    placeholder: "Search findings",
+    "aria-label": "Search findings",
+    value: view.search,
+    oninput: (event) => {
+      view.search = event.target.value;
+      refresh();
+    },
+  });
+
+  const dimensionSelect = h(
+    "select",
+    {
+      class: "tool-select",
+      "aria-label": "Filter by concern",
+      onchange: (event) => {
+        view.dimension = event.target.value;
+        refresh();
+      },
+    },
+    h("option", { value: "all", selected: view.dimension === "all" }, "All concerns"),
+    dimensionsFor(report).map(([key, label]) =>
+      h("option", { value: key, selected: view.dimension === key }, label),
     ),
   );
+
+  const severitySelect = h(
+    "select",
+    {
+      class: "tool-select",
+      "aria-label": "Filter by severity",
+      onchange: (event) => {
+        view.severity = event.target.value;
+        refresh();
+      },
+    },
+    h("option", { value: "all", selected: view.severity === "all" }, "Any severity"),
+    h("option", { value: "routed", selected: view.severity === "routed" }, "Severity ≥ 1.5"),
+    h("option", { value: "blocking", selected: view.severity === "blocking" }, "Blocking (request changes)"),
+  );
+
+  const sortSelect = h(
+    "select",
+    {
+      class: "tool-select",
+      "aria-label": "Sort findings",
+      onchange: (event) => {
+        view.sort = event.target.value;
+        refresh();
+      },
+    },
+    h("option", { value: "severity-desc", selected: view.sort === "severity-desc" }, "Severity ↓"),
+    h("option", { value: "severity-asc", selected: view.sort === "severity-asc" }, "Severity ↑"),
+    h("option", { value: "file", selected: view.sort === "file" }, "File"),
+    h("option", { value: "dimension", selected: view.sort === "dimension" }, "Dimension"),
+  );
+
+  const groupToggle = h(
+    "label",
+    { class: "group-toggle" },
+    h("input", {
+      type: "checkbox",
+      checked: view.groupByFile,
+      onchange: (event) => {
+        view.groupByFile = event.target.checked;
+        refresh();
+      },
+    }),
+    "Group by file",
+  );
+
+  const toolbar = h(
+    "div",
+    { class: "findings-toolbar" },
+    searchInput,
+    dimensionSelect,
+    severitySelect,
+    sortSelect,
+    groupToggle,
+  );
+
+  function refresh() {
+    const visible = filterFindings(report, view);
+    count.textContent = String(visible.length);
+    if (document.activeElement !== searchInput && searchInput.value !== view.search) {
+      searchInput.value = view.search;
+    }
+    body.replaceChildren(
+      visible.length === 0
+        ? quiet("No findings match", "Try clearing the search or widening the filters.")
+        : view.groupByFile
+          ? findingsByFile(visible, labels, setSearch)
+          : findingsTable(visible, labels, setSearch),
+    );
+  }
+
+  function setSearch(term) {
+    view.search = term;
+    refresh();
+  }
+
+  refresh();
 
   return section(
     "Findings",
     count,
     h("p", { class: "section-note" }, findingsNote),
-    table,
+    toolbar,
+    body,
   );
+}
+
+function filterFindings(report, view) {
+  const q = view.search.trim().toLowerCase();
+  let out = report.findings.slice();
+
+  if (q) {
+    out = out.filter((finding) =>
+      [finding.file, finding.title, finding.mechanism, finding.why, finding.fix, finding.test].some(
+        (value) => value != null && String(value).toLowerCase().includes(q),
+      ),
+    );
+  }
+
+  if (view.dimension !== "all") {
+    out = out.filter((finding) => finding.dimension === view.dimension);
+  }
+
+  if (view.severity === "routed") {
+    out = out.filter((finding) => isNum(finding.severity) && finding.severity >= 1.5);
+  } else if (view.severity === "blocking") {
+    out = out.filter((finding) => finding.action === "request_changes");
+  }
+
+  const severity = (finding) => (isNum(finding.severity) ? finding.severity : -1);
+  switch (view.sort) {
+    case "severity-asc":
+      out.sort((a, b) => severity(a) - severity(b));
+      break;
+    case "file":
+      out.sort((a, b) => String(a.file ?? "").localeCompare(String(b.file ?? "")));
+      break;
+    case "dimension":
+      out.sort(
+        (a, b) =>
+          String(a.dimension ?? "").localeCompare(String(b.dimension ?? "")) ||
+          severity(b) - severity(a),
+      );
+      break;
+    default:
+      out.sort((a, b) => severity(b) - severity(a));
+  }
+
+  return out;
+}
+
+function formatPrComment(finding, label = null) {
+  const dimension = label ?? String(finding.dimension ?? "concern");
+  const heading = String(finding.title ?? dimension);
+  const lines = [`**${heading}** (${dimension}, severity ${fixed(finding.severity, 1)})`];
+  if (finding.file != null) {
+    lines.push(`\`${finding.file}${finding.line != null ? ":" + finding.line : ""}\``);
+  }
+  if (finding.why) lines.push(`> ${finding.why}`);
+  if (finding.fix) lines.push(`- Fix: ${finding.fix}`);
+  if (finding.test) lines.push(`- Test: ${finding.test}`);
+  return lines.join("\n");
+}
+
+function copyButton(finding, label) {
+  const text = formatPrComment(finding, label);
+  let timer = null;
+  const button = h(
+    "button",
+    {
+      type: "button",
+      class: "copy-btn",
+      title: "Copy as PR comment",
+      onclick: () => {
+        const write = navigator.clipboard?.writeText
+          ? navigator.clipboard.writeText(text)
+          : Promise.reject(new Error("clipboard unavailable"));
+        write.then(
+          () => {
+            button.textContent = "Copied";
+            button.classList.add("copied");
+          },
+          () => {
+            button.textContent = "Copy failed";
+            button.classList.remove("copied");
+          },
+        );
+        window.clearTimeout(timer);
+        timer = window.setTimeout(() => {
+          button.textContent = "Copy";
+          button.classList.remove("copied");
+        }, 1500);
+      },
+    },
+    "Copy",
+  );
+  return button;
+}
+
+function findingRows(finding, labels, onFileClick) {
+  const [dir, base] = splitPath(finding.file);
+  const blocking = finding.action === "request_changes";
+  const rows = [
+    h(
+      "tr",
+      {
+        title: `location confidence ${fixed(finding.locationConfidence)} · severity confidence ${fixed(finding.severityConfidence)}`,
+      },
+      h(
+        "td",
+        { class: "loc" },
+        h(
+          "button",
+          {
+            type: "button",
+            class: "loc-link",
+            title: "Search for this file",
+            onclick: () => onFileClick(base),
+          },
+          h(
+            "code",
+            { title: `${finding.file}:${finding.line ?? "?"}` },
+            h("span", { class: "dir" }, dir),
+            h("span", { class: "base" }, base),
+            h("span", { class: "line" }, `:${finding.line ?? "?"}`),
+          ),
+        ),
+      ),
+      h(
+        "td",
+        { class: "dim" },
+        h("span", {}, labels[finding.dimension] ?? String(finding.dimension)),
+        (finding.title || finding.mechanism) &&
+          h("small", {}, String(finding.title || finding.mechanism)),
+      ),
+      h("td", { class: "sev" }, h("span", { class: "sr" }, "severity "), severityMeter(finding.severity)),
+      h("td", { class: "owner" }, finding.owner ? String(finding.owner) : "–"),
+      h(
+        "td",
+        { class: `act ${blocking ? "blocking" : "comment"}` },
+        h("span", { class: "glyph", "aria-hidden": "true" }),
+        blocking ? "Request changes" : finding.action === "comment" ? "Comment" : String(finding.action),
+        copyButton(finding, labels[finding.dimension]),
+      ),
+    ),
+  ];
+
+  if (finding.evidence) {
+    rows.push(
+      h(
+        "tr",
+        { class: "evidence-row" },
+        h(
+          "td",
+          { colspan: "5" },
+          h(
+            "details",
+            {},
+            h("summary", {}, "Evidence"),
+            h("pre", {}, h("code", {}, String(finding.evidence))),
+          ),
+        ),
+      ),
+    );
+  }
+
+  if (finding.why || finding.fix || finding.test) {
+    rows.push(
+      h(
+        "tr",
+        { class: "suggestion-row" },
+        h(
+          "td",
+          { colspan: "5" },
+          h(
+            "details",
+            {},
+            h("summary", {}, "Why & how to fix"),
+            finding.why && h("p", {}, String(finding.why)),
+            finding.fix && h("p", {}, h("strong", {}, "Fix: "), String(finding.fix)),
+            finding.test && h("p", {}, h("strong", {}, "Test: "), String(finding.test)),
+          ),
+        ),
+      ),
+    );
+  }
+
+  return rows;
+}
+
+function findingsTable(items, labels, onFileClick) {
+  return h(
+    "table",
+    { class: "findings" },
+    h(
+      "thead",
+      {},
+      h("tr", {}, ["Location", "Concern", "Severity", "Owner", "Action"].map((label) => h("th", { scope: "col" }, label))),
+    ),
+    h("tbody", {}, items.flatMap((finding) => findingRows(finding, labels, onFileClick))),
+  );
+}
+
+function findingsByFile(items, labels, onFileClick) {
+  const groups = [];
+  const index = new Map();
+  for (const finding of items) {
+    const file = finding.file ?? "?";
+    let group = index.get(file);
+    if (!group) {
+      group = { file, findings: [] };
+      index.set(file, group);
+      groups.push(group);
+    }
+    group.findings.push(finding);
+  }
+  return h(
+    "div",
+    { class: "findings-groups" },
+    groups.map((group) => {
+      const [dir, base] = splitPath(group.file);
+      return h(
+        "div",
+        { class: "finding-group" },
+        h(
+          "h3",
+          { class: "finding-group-head" },
+          h(
+            "code",
+            { class: "finding-group-file", title: group.file },
+            h("span", { class: "dir" }, dir),
+            h("span", { class: "base" }, base),
+          ),
+          h("span", { class: "count" }, group.findings.length),
+        ),
+        findingsTable(group.findings, labels, onFileClick),
+      );
+    }),
+  );
+}
+
+async function history() {
+  const root = document.getElementById("history");
+  if (!root) return;
+
+  let data;
+  try {
+    const res = await fetch("/api/history", { cache: "no-store" });
+    data = res.ok ? await res.json() : null;
+  } catch {
+    data = null;
+  }
+
+  if (data == null) {
+    root.replaceChildren(section("History", null, quiet("History unavailable", "Could not load saved review history.")));
+    return;
+  }
+
+  const entries = Array.isArray(data.entries) ? data.entries : [];
+  const hotspots = Array.isArray(data.hotspots) ? data.hotspots : [];
+
+  if (entries.length === 0) {
+    root.replaceChildren(
+      section(
+        "History",
+        h("span", { class: "count" }, "0"),
+        quiet("No review history yet", "Saved scans will appear here as they complete."),
+      ),
+    );
+    return;
+  }
+
+  root.replaceChildren(
+    section(
+      "History",
+      h("span", { class: "count" }, entries.length),
+      h(
+        "p",
+        { class: "section-note" },
+        "Risk across saved reviews, oldest first, with the files that have drawn the most findings over time.",
+      ),
+      historyRisks(entries),
+      historyHotspots(hotspots),
+    ),
+  );
+}
+
+function historyRisks(entries) {
+  return [
+    h("h3", { class: "history-subhead" }, "Risk over time"),
+    h(
+      "ol",
+      { class: "history-list" },
+      entries.map((entry) =>
+        h(
+          "li",
+          { class: "history-row" },
+          h("code", { class: "history-sha", title: entry.sha }, String(entry.sha ?? "").slice(0, 7) || "–"),
+          h(
+            "time",
+            {
+              class: "history-when",
+              datetime: entry.savedAt,
+              title: entry.savedAt ? new Date(entry.savedAt).toLocaleString() : null,
+            },
+            ago(entry.savedAt),
+          ),
+          severityMeter(entry.maxSeverity),
+          h(
+            "span",
+            { class: "history-counts" },
+            h("span", { class: "badge" }, `${entry.findings} finding${entry.findings === 1 ? "" : "s"}`),
+            entry.blocking > 0 && h("span", { class: "badge badge-block" }, `${entry.blocking} blocking`),
+          ),
+        ),
+      ),
+    ),
+  ];
+}
+
+function historyHotspots(hotspots) {
+  if (hotspots.length === 0) return null;
+  return [
+    h("h3", { class: "history-subhead" }, "Hotspots & fix latency"),
+    h(
+      "div",
+      { class: "history-wrap" },
+      h(
+        "table",
+        { class: "hotspots" },
+        h("thead", {}, h("tr", {}, ["File", "Risk", "Findings", "State"].map((label) => h("th", { scope: "col" }, label)))),
+        h(
+          "tbody",
+          {},
+          hotspots.map((hotspot) => {
+            const [dir, base] = splitPath(hotspot.file);
+            const open = hotspot.latestFindings > 0;
+            return h(
+              "tr",
+              {},
+              h(
+                "td",
+                { class: "loc" },
+                h(
+                  "code",
+                  { title: hotspot.file },
+                  h("span", { class: "dir" }, dir),
+                  h("span", { class: "base" }, base),
+                ),
+              ),
+              h("td", { class: "sev" }, severityMeter(hotspot.maxSeverity)),
+              h("td", { class: "prob" }, String(hotspot.findings)),
+              h(
+                "td",
+                {},
+                open
+                  ? h("span", { class: "badge badge-open" }, "open")
+                  : h("span", { class: "badge badge-resolved" }, "resolved"),
+              ),
+            );
+          }),
+        ),
+      ),
+    ),
+  ];
 }
 
 function renderMeta(state) {
@@ -509,8 +889,10 @@ function render(state) {
           profiles(state.report),
           matrix(state.report),
           findings(state.report),
+          h("div", { id: "history" }),
         ].filter(Boolean),
       );
+      history();
       break;
     case "empty":
       app.replaceChildren(quiet("No review yet", null, "momus review <path>"));

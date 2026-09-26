@@ -3,9 +3,12 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 use crate::adapters::exclude::Exclude;
-use crate::adapters::report_store::{report_path, save_report};
+use crate::adapters::git;
+use crate::adapters::report_store::{report_path, save_history, save_json, save_report};
+use crate::adapters::sarif;
 use crate::domain::report::Action;
 use crate::review::changes::ChangesStrategy;
 use crate::review::codebase::CodebaseStrategy;
@@ -40,6 +43,10 @@ pub enum Command {
         /// Cap follow-ups at N signals (default: follow every threshold signal)
         #[arg(long = "follow-ups", value_name = "N")]
         follow_ups: Option<usize>,
+
+        /// Also write a SARIF 2.1.0 log to this path
+        #[arg(long = "sarif", value_name = "PATH")]
+        sarif: Option<String>,
     },
 
     /// Scan every non-ignored source file under a scope
@@ -60,6 +67,10 @@ pub enum Command {
         /// Cap follow-ups at N signals (default: follow every threshold signal)
         #[arg(long = "follow-ups", value_name = "N")]
         follow_ups: Option<usize>,
+
+        /// Also write a SARIF 2.1.0 log to this path
+        #[arg(long = "sarif", value_name = "PATH")]
+        sarif: Option<String>,
     },
 
     /// Serve the loopback dashboard
@@ -72,24 +83,27 @@ pub enum Command {
 
 pub async fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        Command::Review { paths, fail_on_blocking, exclude, follow_ups } => {
+        Command::Review { paths, fail_on_blocking, exclude, follow_ups, sarif } => {
             let strategy = ChangesStrategy::new(Exclude::new(&exclude)?)?;
-            run_mode(paths, fail_on_blocking, follow_ups, strategy).await
+            let sarif = sarif.map(PathBuf::from);
+            run_mode(paths, fail_on_blocking, follow_ups, sarif, strategy).await
         }
-        Command::Scan { paths, fail_on_blocking, exclude, follow_ups } => {
+        Command::Scan { paths, fail_on_blocking, exclude, follow_ups, sarif } => {
             let strategy = CodebaseStrategy::new(Exclude::new(&exclude)?)?;
-            run_mode(paths, fail_on_blocking, follow_ups, strategy).await
+            let sarif = sarif.map(PathBuf::from);
+            run_mode(paths, fail_on_blocking, follow_ups, sarif, strategy).await
         }
         Command::Dashboard { port } => crate::dashboard::serve(port).await,
     }
 }
 
 /// Runs a review, saves the report, prints JSON to stdout, and applies the
-/// CI exit contract.
+/// CI exit contract. Also writes history (always) and SARIF (when requested).
 async fn run_mode<S: ReviewStrategy>(
     paths: Vec<String>,
     fail_on_blocking: bool,
     max_follow_ups: Option<usize>,
+    sarif: Option<PathBuf>,
     strategy: S,
 ) -> Result<()> {
     let scopes: Vec<std::path::PathBuf> = paths
@@ -103,6 +117,18 @@ async fn run_mode<S: ReviewStrategy>(
     let out = report_path();
     save_report(&report, &out)?;
     eprintln!("saved {}", out.display());
+
+    if let Some(path) = &sarif {
+        save_json(&sarif::to_sarif(&report), path)?;
+        eprintln!("saved {}", path.display());
+    }
+
+    // History is best-effort: an unborn repo or an I/O failure must not
+    // discard an already-produced report.
+    match git::head_sha(&scopes[0]).and_then(|sha| save_history(&report, &sha)) {
+        Ok(path) => eprintln!("saved {}", path.display()),
+        Err(e) => eprintln!("history not saved: {e:#}"),
+    }
 
     println!("{}", serde_json::to_string_pretty(&report)?);
 

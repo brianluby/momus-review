@@ -66,9 +66,13 @@ confidences, severity + confidence, owner + confidence, action, the
 `evidence` excerpt, and generated `title` / `why` / `fix` / `test`).
 
 The dashboard renders each finding's evidence excerpt plus its generated
-`title`, `why`, `fix`, and `test` — the start of the review workbench
-(remaining workbench work: filter/sort/search/file-view/copy-as-PR-comment;
-see `roadmap.md`).
+`title`, `why`, `fix`, and `test`, with filter/sort/search, per-file focus,
+and copy-as-PR-comment.
+
+The same report is also emitted as **SARIF 2.1.0** (`--sarif <path>`, for
+GitHub code scanning) and archived per-revision under
+`reviews/history/<sha>.json`; the dashboard's History view aggregates those
+snapshots into risk-over-time, hotspots, and fix-latency (open vs. resolved).
 
 ## Cost Model
 

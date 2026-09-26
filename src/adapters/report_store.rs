@@ -2,7 +2,7 @@
 //! Writes are atomic: unique `O_EXCL` temp file then rename. Mirrors
 //! `adapters/report-store.ts`.
 
-use std::fs::{OpenOptions, create_dir_all, metadata, read_to_string, remove_file, rename};
+use std::fs::{OpenOptions, create_dir_all, metadata, read_dir, read_to_string, remove_file, rename};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -56,17 +56,15 @@ pub fn read_report(path: &Path) -> StoredReport {
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// Writes to a unique temp file created with `O_EXCL` and renames into place,
-/// so readers never see a partial report and a planted symlink is never
-/// followed.
-pub fn save_report(report: &ReviewReport, path: &Path) -> Result<()> {
+/// Writes `data` to `path` atomically: a unique `O_EXCL` temp file renamed
+/// into place, so readers never see a partial file and a planted symlink is
+/// never followed.
+fn write_atomic(path: &Path, data: &str) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
         create_dir_all(parent)?;
     }
-
-    let data = format!("{}\n", serde_json::to_string_pretty(report)?);
 
     for _ in 0..10 {
         let temp = format!("{}.{}.tmp", path.display(), unique_suffix());
@@ -75,23 +73,34 @@ pub fn save_report(report: &ReviewReport, path: &Path) -> Result<()> {
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => {
                 let _ = remove_file(&temp);
-                return Err(anyhow!("save report: {e}"));
+                return Err(anyhow!("atomic write: {e}"));
             }
         };
         if let Err(e) = f.write_all(data.as_bytes()) {
             let _ = remove_file(&temp);
-            return Err(anyhow!("save report: {e}"));
+            return Err(anyhow!("atomic write: {e}"));
         }
         drop(f);
         match rename(&temp, path) {
             Ok(()) => return Ok(()),
             Err(e) => {
                 let _ = remove_file(&temp);
-                return Err(anyhow!("save report: {e}"));
+                return Err(anyhow!("atomic write: {e}"));
             }
         }
     }
-    bail!("Could not save report: temp file collisions")
+    bail!("Could not save file: temp file collisions")
+}
+
+/// Saves a review report as JSON, atomically (see `write_atomic`).
+pub fn save_report(report: &ReviewReport, path: &Path) -> Result<()> {
+    write_atomic(path, &format!("{}\n", serde_json::to_string_pretty(report)?))
+}
+
+/// Saves an arbitrary JSON value (e.g. a SARIF log) atomically, with the same
+/// `O_EXCL` + rename discipline as `save_report`.
+pub fn save_json(value: &serde_json::Value, path: &Path) -> Result<()> {
+    write_atomic(path, &format!("{}\n", serde_json::to_string_pretty(value)?))
 }
 
 fn unique_suffix() -> String {
@@ -102,6 +111,61 @@ fn unique_suffix() -> String {
         .as_nanos();
     let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("{pid}.{nanos}.{counter}")
+}
+
+/// One saved history snapshot. `saved_at` derives from the file's mtime so a
+/// per-sha entry reflects when that review was written.
+pub struct HistoryEntry {
+    pub sha: String,
+    pub saved_at: String,
+    pub report: ReviewReport,
+}
+
+/// Fixed `./reviews/history` directory holding one report per reviewed sha.
+/// Deliberately not overridden by `MOMUS_REPORT` (which points at the single
+/// `latest.json` the dashboard's review view reads); history is always a dir.
+pub fn history_dir() -> PathBuf {
+    PathBuf::from("reviews").join("history")
+}
+
+/// Writes the report to `reviews/history/{sha}.json` using the same atomic
+/// `save_report` flow (unique `O_EXCL` temp + rename). Returns the written
+/// path; overwriting an existing sha replaces it.
+pub fn save_history(report: &ReviewReport, sha: &str) -> Result<PathBuf> {
+    let path = history_dir().join(format!("{sha}.json"));
+    save_report(report, &path)?;
+    Ok(path)
+}
+
+/// Lists `reviews/history/*.json` (filename stem = sha) and reads each via
+/// the tolerant `read_report`; files that are not valid review output are
+/// skipped. Unordered — the dashboard sorts by `saved_at`. A missing (or
+/// empty) directory is empty history, not an error.
+pub fn read_history() -> Result<Vec<HistoryEntry>> {
+    read_history_in(&history_dir())
+}
+
+fn read_history_in(dir: &Path) -> Result<Vec<HistoryEntry>> {
+    let entries = match read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(anyhow!("read history: {e}")),
+    };
+
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Some(sha) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if let StoredReport::Ok { saved_at, report } = read_report(&path) {
+            out.push(HistoryEntry { sha: sha.to_string(), saved_at, report });
+        }
+    }
+    Ok(out)
 }
 
 /// Formats a `SystemTime` as a UTC ISO-8601 string (`YYYY-MM-DDTHH:MM:SSZ`),
@@ -126,4 +190,17 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
     let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// History over a nonexistent directory is empty, not an error.
+    #[test]
+    fn read_history_missing_dir_is_empty() {
+        let dir = std::env::temp_dir().join(format!("momus-review-no-such-history-{}", std::process::id()));
+        let entries = read_history_in(&dir).unwrap();
+        assert!(entries.is_empty());
+    }
 }

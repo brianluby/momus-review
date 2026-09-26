@@ -24,19 +24,23 @@ Completed ahead of / from this plan:
   mechanism), and model-chosen fix/test suggestions (one narrow Jev call each,
   top 8 by severity). Function-aware region splitting (tree-sitter-free
   heuristic) replaces 80-line slicing.
+- **Dashboard workbench + CI outputs** — findings are filterable/sortable/
+  searchable with per-file focus and copy-as-PR-comment; SARIF 2.1.0 emission
+  (`--sarif`) and per-sha `reviews/history/<sha>.json` trend (risk over time,
+  hotspots, fix latency) feed CI and the dashboard History view.
 
-Still open from "Now": the full dashboard workbench
-(filter/sort/search/file-view/copy-as-PR-comment), SARIF + history trend, and
-the P(revert) spike.
+Still open from "Now": the P(revert) spike.
 
 ## Now (1–2 weeks): make findings actionable
 
 - ✅ Evidence excerpts + generated title / why / suggested fix / suggested
   test per finding (one narrow Jev call each, top 8 by severity).
-- Dashboard becomes a workbench: excerpt + why + fix, filter/sort/search,
-  file view, copy-as-PR-comment. Stop rendering raw mechanism keys.
-- CI contract: `--fail-on-blocking` ✅; SARIF output + `reviews/history/<sha>.json`
-  trend (risk over time, hotspots, fix latency) — open.
+- ✅ Dashboard becomes a workbench: excerpt + why + fix, filter/sort/search,
+  file view (group-by-file + per-file focus), copy-as-PR-comment. Raw
+  mechanism keys are replaced by generated titles.
+- ✅ CI contract: `--fail-on-blocking`; SARIF 2.1.0 output (`--sarif <path>`)
+  + `reviews/history/<sha>.json` trend (risk over time, hotspots, fix
+  latency).
 - ✅ README note for FIND-005 (code is uploaded to the Jev API by design).
 - Spike: `P(revert)` / merge-confidence signal per PR.
 
