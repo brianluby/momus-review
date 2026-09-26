@@ -32,9 +32,9 @@ the P(revert) spike.
   per finding (one narrow Jev call each, only for ≤8 located findings).
 - Dashboard becomes a workbench: excerpt + why + fix, filter/sort/search,
   file view, copy-as-PR-comment. Stop rendering raw mechanism keys.
-- CI contract: `--fail-on-blocking`, SARIF output, `reviews/history/<sha>.json`
-  + trend (risk over time, hotspots, fix latency).
-- README note for FIND-005 (code is uploaded to the Jev API by design).
+- CI contract: `--fail-on-blocking` ✅; SARIF output + `reviews/history/<sha>.json`
+  trend (risk over time, hotspots, fix latency) — open.
+- ✅ README note for FIND-005 (code is uploaded to the Jev API by design).
 - Spike: `P(revert)` / merge-confidence signal per PR.
 
 ## Next (2–4 weeks): kill noise, add context
@@ -63,8 +63,8 @@ the P(revert) spike.
 - Ensembles on demand: re-ask high-stakes screens with varied focus; route to
   human on disagreement.
 - GitHub Action with inline comments; secret redaction pre-send.
-- Golden-set eval harness: precision/recall on labeled vulns — can't tune
-  what isn't measured.
+- ✅ Golden-set eval harness (shipped: `momus-eval` + curated Juice Shop
+  ground truth) — precision/recall on labeled vulns.
 
 ## Beyond Review (Jev as judgment fabric)
 
