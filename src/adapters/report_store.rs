@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, anyhow, bail};
 
-use crate::domain::report::ReviewReport;
+use crate::domain::report::{ReviewMode, ReviewReport};
 
 /// The result of reading a saved report, mirroring the prototype's
 /// `StoredReport` shape consumed by the dashboard client.
@@ -121,23 +121,41 @@ pub struct HistoryEntry {
     pub report: ReviewReport,
 }
 
-/// Fixed `./reviews/history` directory holding one report per reviewed sha.
+/// Fixed `./reviews/history` directory holding one report per reviewed
+/// (sha, mode) pair.
 /// Deliberately not overridden by `MOMUS_REPORT` (which points at the single
 /// `latest.json` the dashboard's review view reads); history is always a dir.
 pub fn history_dir() -> PathBuf {
     PathBuf::from("reviews").join("history")
 }
 
-/// Writes the report to `reviews/history/{sha}.json` using the same atomic
-/// `save_report` flow (unique `O_EXCL` temp + rename). Returns the written
-/// path; overwriting an existing sha replaces it.
+/// Writes the report to `reviews/history/{sha}.{mode}.json` using the same
+/// atomic `save_report` flow (unique `O_EXCL` temp + rename). Returns the
+/// written path. Keying by mode keeps a `scan` and a `review` of the same
+/// commit from overwriting each other; re-running the same mode on the same
+/// sha replaces that entry.
 pub fn save_history(report: &ReviewReport, sha: &str) -> Result<PathBuf> {
-    let path = history_dir().join(format!("{sha}.json"));
+    let path = history_dir().join(format!("{sha}.{}.json", mode_key(report.mode)));
     save_report(report, &path)?;
     Ok(path)
 }
 
-/// Lists `reviews/history/*.json` (filename stem = sha) and reads each via
+fn mode_key(mode: ReviewMode) -> &'static str {
+    match mode {
+        ReviewMode::Changes => "changes",
+        ReviewMode::Codebase => "codebase",
+    }
+}
+
+/// The sha from a history file stem: `{sha}.{mode}` or legacy `{sha}`.
+fn history_sha(stem: &str) -> &str {
+    stem.strip_suffix(".changes")
+        .or_else(|| stem.strip_suffix(".codebase"))
+        .unwrap_or(stem)
+}
+
+/// Lists `reviews/history/*.json` (stem = `{sha}.{mode}`, or a legacy bare
+/// `{sha}`) and reads each via
 /// the tolerant `read_report`; files that are not valid review output are
 /// skipped. Unordered — the dashboard sorts by `saved_at`. A missing (or
 /// empty) directory is empty history, not an error.
@@ -162,7 +180,7 @@ fn read_history_in(dir: &Path) -> Result<Vec<HistoryEntry>> {
             continue;
         };
         if let StoredReport::Ok { saved_at, report } = read_report(&path) {
-            out.push(HistoryEntry { sha: sha.to_string(), saved_at, report });
+            out.push(HistoryEntry { sha: history_sha(sha).to_string(), saved_at, report });
         }
     }
     Ok(out)
@@ -202,5 +220,31 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("momus-review-no-such-history-{}", std::process::id()));
         let entries = read_history_in(&dir).unwrap();
         assert!(entries.is_empty());
+    }
+
+    /// A scan and a review of the same sha land in separate files, and both
+    /// read back with the bare sha.
+    #[test]
+    fn history_is_keyed_by_sha_and_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        for mode in [ReviewMode::Changes, ReviewMode::Codebase] {
+            let report = ReviewReport { mode, ..Default::default() };
+            let path = dir.path().join(format!("abc123.{}.json", mode_key(mode)));
+            save_report(&report, &path).unwrap();
+        }
+        save_report(&ReviewReport::default(), &dir.path().join("legacy.json")).unwrap();
+
+        let mut entries = read_history_in(dir.path()).unwrap();
+        entries.sort_by_key(|e| (e.sha.clone(), mode_key(e.report.mode)));
+        let keys: Vec<(&str, ReviewMode)> =
+            entries.iter().map(|e| (e.sha.as_str(), e.report.mode)).collect();
+        assert_eq!(
+            keys,
+            vec![
+                ("abc123", ReviewMode::Changes),
+                ("abc123", ReviewMode::Codebase),
+                ("legacy", ReviewMode::Changes),
+            ]
+        );
     }
 }

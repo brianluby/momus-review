@@ -808,6 +808,7 @@ function historyRisks(entries) {
           h(
             "span",
             { class: "history-counts" },
+            h("span", { class: "badge" }, entry.mode === "codebase" ? "scan" : "review"),
             h("span", { class: "badge" }, `${entry.findings} finding${entry.findings === 1 ? "" : "s"}`),
             entry.blocking > 0 && h("span", { class: "badge badge-block" }, `${entry.blocking} blocking`),
           ),

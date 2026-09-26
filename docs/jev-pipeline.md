@@ -79,8 +79,11 @@ and copy-as-PR-comment.
 
 The same report is also emitted as **SARIF 2.1.0** (`--sarif <path>`, for
 GitHub code scanning) and archived per-revision under
-`reviews/history/<sha>.json`; the dashboard's History view aggregates those
-snapshots into risk-over-time, hotspots, and fix-latency (open vs. resolved).
+`reviews/history/<sha>.<mode>.json` (`changes` or `codebase`, so a scan and
+a diff review of one commit do not overwrite each other); the dashboard's
+History view aggregates those snapshots into risk-over-time, hotspots, and
+fix-latency. A file counts as resolved only when the most recent review that
+screened it found nothing there.
 
 ## Cost Model
 
