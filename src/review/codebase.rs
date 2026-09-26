@@ -55,6 +55,19 @@ impl CodebaseStrategy {
 impl ReviewStrategy for CodebaseStrategy {
     type File = SourceFile;
 
+    fn client(&self) -> &TypeSafeClient {
+        &self.client
+    }
+
+    fn neighbor_context(&self, path: &str) -> serde_json::Value {
+        let neighbors: Vec<SourceFile> = self
+            .neighbor_files(path)
+            .iter()
+            .map(codebase_judgments::compact_neighbor)
+            .collect();
+        serde_json::json!(neighbors)
+    }
+
     fn mode(&self) -> ReviewMode {
         ReviewMode::Codebase
     }

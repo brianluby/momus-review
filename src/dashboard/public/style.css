@@ -986,3 +986,55 @@ main > .quiet {
   width: 46%;
   max-width: 0;
 }
+
+/* Refinement + feedback */
+.rank {
+  display: inline-block;
+  margin-right: 0.4em;
+  padding: 0 0.35em;
+  border-radius: 3px;
+  background: var(--seq-lo);
+  color: var(--seq-hi);
+  font-size: 0.8em;
+  font-weight: 600;
+}
+.needs-human {
+  display: inline-block;
+  margin-left: 0.5em;
+  padding: 0 0.4em;
+  border: 1px solid var(--critical);
+  border-radius: 3px;
+  color: var(--critical);
+  font-size: 0.8em;
+}
+.feedback {
+  display: inline-flex;
+  gap: 0.25em;
+  margin-left: 0.5em;
+  align-items: center;
+}
+.fb-btn {
+  font: inherit;
+  font-size: 0.8em;
+  padding: 0.05em 0.4em;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+}
+.fb-btn:hover,
+.fb-btn.active {
+  opacity: 1;
+}
+.fb-btn.active {
+  font-weight: 600;
+}
+.fb-status {
+  font-size: 0.8em;
+  opacity: 0.7;
+}
+.refine-note {
+  margin-top: 0.5em;
+}

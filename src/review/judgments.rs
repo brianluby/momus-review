@@ -349,9 +349,6 @@ pub async fn locate_signal(
         owner_confidence,
         action,
         evidence: hunk.patch.clone(),
-        title: None,
-        why: None,
-        fix: None,
-        test: None,
+        ..Default::default()
     }))
 }

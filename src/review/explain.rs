@@ -360,10 +360,7 @@ mod tests {
             owner_confidence: None,
             action: crate::domain::report::Action::Comment,
             evidence: String::new(),
-            title: None,
-            why: None,
-            fix: None,
-            test: None,
+            ..Default::default()
         };
         apply_context(&mut finding);
         assert_eq!(finding.title.as_deref(), Some("SQL injection"));

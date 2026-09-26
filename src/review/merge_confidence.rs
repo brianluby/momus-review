@@ -70,10 +70,7 @@ mod tests {
             owner_confidence: None,
             action,
             evidence: "an excerpt".into(),
-            title: None,
-            why: None,
-            fix: None,
-            test: None,
+            ..Default::default()
         }
     }
 

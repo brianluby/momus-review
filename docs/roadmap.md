@@ -63,24 +63,28 @@ Now is complete.
    language's own footguns (Rust `unsafe`/`unwrap`/`panic!`, TS `any`/casts,
    Go ignored `error`, C memory safety, shell word splitting, …) join the
    mechanism `choice` vocabulary. See `docs/language-support.md`.
-- Finding feedback (thumbs up/down) → per-repo threshold auto-tune +
-  suppression list.
+- ✅ Finding feedback (thumbs up/down) → per-repo threshold auto-tune +
+  suppression list (`reviews/feedback.json`, `domain/feedback.rs`).
 - ✅ Function-aware regions (tree-sitter-free heuristic) replacing 80-line
   slicing.
-- Dedupe/cluster: Jev `choice` "same root cause?" over adjacent candidates.
+- ✅ Dedupe/cluster: Jev `choice` "same root cause?" over adjacent candidates
+  (`review/refine/dedupe.rs`).
 
 ## Later (bets)
 
 - Decision-theoretic budgets: value-of-information follow-up selection
   ("which 8 would most change the merge decision?") instead of top-8 by
   probability; per-dimension thresholds; cost/latency meter; result caching.
-- Pairwise severity ranking (`choice` A-vs-B + Bradley-Terry) for stable
+- ✅ Pairwise severity ranking (`choice` A-vs-B + Bradley-Terry) for stable
   "top 3 to fix".
-- Multi-hop taint chains via composed narrow calls
+- ✅ Multi-hop taint chains via composed narrow calls
   (`choice` source → sanitized? → sink?).
-- Counterfactual calibration: "what single fact would exonerate this?" then check.
-- Ensembles on demand: re-ask high-stakes screens with varied focus; route to
+- ✅ Counterfactual calibration: "what single fact would exonerate this?" then check.
+- ✅ Ensembles on demand: re-ask high-stakes screens with varied focus; route to
   human on disagreement.
+
+The five refinement judgments run as one post-locate stage
+(`review/refine`, `--no-refine` to skip); see `docs/jev-pipeline.md`.
 - GitHub Action with inline comments; secret redaction pre-send.
 - ✅ Golden-set eval harness (shipped: `momus-eval` + curated Juice Shop
   ground truth) — precision/recall on labeled vulns.

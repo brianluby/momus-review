@@ -59,7 +59,7 @@ static COUNTER: AtomicU64 = AtomicU64::new(0);
 /// Writes `data` to `path` atomically: a unique `O_EXCL` temp file renamed
 /// into place, so readers never see a partial file and a planted symlink is
 /// never followed.
-fn write_atomic(path: &Path, data: &str) -> Result<()> {
+pub(crate) fn write_atomic(path: &Path, data: &str) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -220,7 +220,7 @@ fn read_history_in(dir: &Path) -> Result<Vec<HistoryEntry>> {
 /// Formats a `SystemTime` as a UTC ISO-8601 string (`YYYY-MM-DDTHH:MM:SSZ`),
 /// the format the dashboard client feeds to `new Date(...)`. Dependency-free
 /// via the civil-from-days algorithm.
-fn iso8601(t: SystemTime) -> String {
+pub(crate) fn iso8601(t: SystemTime) -> String {
     let secs = t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
     let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
     let (h, m, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);

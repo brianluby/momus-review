@@ -41,6 +41,54 @@ pub fn parse_hunks(patch: &str) -> Vec<Hunk> {
     hunks
 }
 
+/// Maps a new-file line to the matching base (pre-change) line using the
+/// patch's hunk headers. A line inside a hunk maps to the same offset in the
+/// hunk's old range (clamped to it); a line between hunks is shifted by the
+/// net lines added or removed before it.
+pub fn base_line(patch: &str, new_line: usize) -> usize {
+    // Net old-minus-new line shift after the hunks seen so far.
+    let mut offset: i64 = 0;
+    for header in patch.lines().filter(|l| l.starts_with("@@ ")) {
+        let Some((old_start, old_len, new_start, new_len)) = hunk_ranges(header) else {
+            continue;
+        };
+        // A zero-length new range (pure deletion) names the line *before*
+        // the change, which keeps its pre-hunk position.
+        let before = if new_len == 0 { new_line <= new_start } else { new_line < new_start };
+        if before {
+            break;
+        }
+        if new_line < new_start + new_len {
+            if old_len == 0 {
+                return old_start.max(1);
+            }
+            return (old_start + (new_line - new_start)).min(old_start + old_len - 1);
+        }
+        // A zero-length range names the line *before* the change.
+        let old_next = if old_len == 0 { old_start + 1 } else { old_start + old_len };
+        let new_next = if new_len == 0 { new_start + 1 } else { new_start + new_len };
+        offset = old_next as i64 - new_next as i64;
+    }
+    (new_line as i64 + offset).max(1) as usize
+}
+
+/// Parses `@@ -a[,b] +c[,d] @@` into `(a, b, c, d)`; an omitted count is 1.
+fn hunk_ranges(header: &str) -> Option<(usize, usize, usize, usize)> {
+    let range = |prefix: char| -> Option<(usize, usize)> {
+        let token = header.split(' ').find(|t| t.starts_with(prefix))?;
+        let mut parts = token[1..].split(',');
+        let start = parts.next()?.parse().ok()?;
+        let len = match parts.next() {
+            Some(n) => n.parse().ok()?,
+            None => 1,
+        };
+        Some((start, len))
+    };
+    let (old_start, old_len) = range('-')?;
+    let (new_start, new_len) = range('+')?;
+    Some((old_start, old_len, new_start, new_len))
+}
+
 /// Renders a brand-new file as an all-additions diff, chunked so hunk
 /// selection still points at a specific region of the file.
 pub fn patch_for_new_file(source: &str) -> String {
@@ -74,6 +122,28 @@ mod tests {
         assert_eq!(hunks[0].start_line, 1);
         assert_eq!(hunks[1].id, "hunk_2");
         assert_eq!(hunks[1].start_line, 7);
+    }
+
+    #[test]
+    fn base_line_follows_insertions_deletions_and_edits() {
+        // Two lines inserted at the top: new 3 is old 1.
+        assert_eq!(base_line("@@ -0,0 +1,2 @@\n+a\n+b", 3), 1);
+        assert_eq!(base_line("@@ -0,0 +1,2 @@\n+a\n+b", 1), 1);
+        // Old lines 3-4 deleted: new 3 is old 5.
+        assert_eq!(base_line("@@ -3,2 +2,0 @@\n-x\n-y", 3), 5);
+        // ...and new 2, the line before the deletion, is still old 2.
+        assert_eq!(base_line("@@ -3,2 +2,0 @@\n-x\n-y", 2), 2);
+        // Old 10-12 replaced by new 10-14: inside maps by offset (clamped),
+        // after shifts by -2.
+        let edit = "@@ -10,3 +10,5 @@\n-a\n-b\n-c\n+1\n+2\n+3\n+4\n+5";
+        assert_eq!(base_line(edit, 11), 11);
+        assert_eq!(base_line(edit, 14), 12);
+        assert_eq!(base_line(edit, 20), 18);
+        assert_eq!(base_line(edit, 5), 5);
+        // Omitted counts are 1; later hunks accumulate.
+        let two = "@@ -1 +1,3 @@\n-a\n+a\n+b\n+c\n@@ -8,2 +10,1 @@\n-x\n-y\n+z";
+        assert_eq!(base_line(two, 6), 4);
+        assert_eq!(base_line(two, 12), 11);
     }
 
     #[test]

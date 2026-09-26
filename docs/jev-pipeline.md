@@ -5,14 +5,16 @@ The funnel, as proven in `src/review/`:
 ```mermaid
 flowchart TD
     D[discover files] --> S[screen: noul per dimension<br/>security = 3 nouls, max-merged]
-    S -->|p >= 0.7, all signals<br/>(--follow-ups N opts into a cap)| L[locate: choice evidence hunk/region]
+    S -->|p >= threshold per dimension<br/>0.7 or feedback-tuned| L[locate: choice evidence hunk/region]
     S -->|top 5 by max p| P[profile: choice role + score priority]
     L -->|confidence >= 0.55| M[choice mechanism]
     M -->|not noIssue| V[score severity 0-3]
     V --> J[meta-judge: noul probability >= 0.55 else drop]
     J -->|severity >= 1.5| R[choice owner]
     J -->|severity >= 2.0| A[request_changes else comment]
-    R & V -->|top 8 by severity| E[enrich: title/why from mechanism<br/>choice fix + choice test]
+    R & V --> X[suppress: feedback fingerprints]
+    X --> F[refine: dedupe, taint, counterfactual,<br/>ensemble, pairwise rank]
+    F -->|top 8| E[enrich: title/why from mechanism<br/>choice fix + choice test]
 ```
 
 ## Stages
@@ -50,12 +52,57 @@ flowchart TD
 7. **Route** (severity ≥ 1.5): `choice` over `owners`
    (security/api/runtime/testing/maintainer). Action derives from severity:
    ≥ 2.0 → `request_changes`, else `comment`.
-8. **Enrich** (top 8 located findings by severity): `title` / `why` are
+8. **Suppress**: each finding gets a line-independent `fingerprint` (file,
+   dimension, mechanism, evidence text); fingerprints a reviewer hid from the
+   dashboard are dropped before any further calls.
+9. **Refine** (`review/refine`, skipped with `--no-refine`), mode-agnostic
+   judgments over the finding plus `fileContext` (the file around the line)
+   and `neighbors` (codebase mode):
+   - **Dedupe** (#10): per file, in severity order, one `choice` "which
+     nearby kept finding shares newFinding's root cause, or `distinct`?"
+     over findings within `CLUSTER_LINE_WINDOW` lines. At
+     `MIN_CLUSTER_CONFIDENCE` the finding folds into that one's `related`.
+   - **Taint** (#13, injection-class security, top `MAX_TAINT`): `choice`
+     source over `TAINT_SOURCES` + `noul` reaches-sink, then (if the sink is
+     plausibly reached) `noul` sanitized-for-this-sink given that source.
+     `exploitability = untrusted × reachesSink × (1 − sanitized)`; below
+     `LOW_EXPLOITABILITY` a blocking finding is demoted to a comment.
+   - **Counterfactual** (#14, top `MAX_COUNTERFACTUAL`): `choice` over
+     `EXONERATING_FACTS` ("which single fact would make this a false
+     positive?"), then a skeptical `noul` "does the context show it?". At
+     `EXONERATION_DROP` the finding is dropped; otherwise the fact is kept
+     for the reviewer.
+   - **Ensemble** (#15, blocking findings, top `MAX_ENSEMBLE`): one request,
+     one dimension-level `noul` per `ENSEMBLE_FOCI` perspective. A spread
+     of `NEEDS_HUMAN_SPREAD` or a mean below `NEEDS_HUMAN_MEAN` sets
+     `needsHuman`.
+   - **Pairwise rank** (#12, top `PAIRWISE_TOP_K` by severity): a `choice`
+     "fix which first?" for every pair (batched, order alternated against
+     position bias), fit with Bradley-Terry; the top-K is re-ordered and gets
+     `rank`.
+   A failed refinement call keeps the finding unrefined and logs it.
+10. **Enrich** (top 8 findings after refinement): `title` / `why` are
    derived deterministically from the classified mechanism; `fix` / `test`
    come from one narrow `choice` call each (`suggestedFix`, `suggestedTest`)
    over curated strategy vocabularies. Jev offers no free-text generation
    (only `noul`/`choice`/`score`), so "generation" is expressed as a
    `choice` whose selected label's description is the suggestion.
+
+## Feedback
+
+The dashboard records 👍 / 👎 / Hide per finding in `reviews/feedback.json`
+(`MOMUS_FEEDBACK` overrides). The server fills file, dimension, mechanism,
+and probability from the saved report; only the fingerprint and verdict come
+from the browser, and cross-origin posts are refused. On the next run:
+
+- **Suppression**: a fingerprint whose latest vote is Hide is dropped.
+- **Threshold tuning** (`domain::feedback::tune_threshold`): per dimension,
+  with at least `MIN_FEEDBACK_VOTES`, precision ≥ `HIGH_PRECISION` at the
+  default lowers the threshold one step; precision below `TARGET_PRECISION`
+  raises it to the lowest step that reaches the target (ceiling
+  `MAX_TUNED_THRESHOLD`). Votes only exist above the old threshold, so it
+  never drops more than one step. The applied values are in
+  `config.screenThresholds`.
 
 ## Policy Lives in Code
 
@@ -69,9 +116,12 @@ and `--follow-ups N` re-imposes a cap in code.
 
 `ReviewReport` (`domain/report.rs`): mode, scope, dimensions, config snapshot,
 `screenedFiles`, `contextFiles`, full probability `matrix`, `profiles`,
-workflow funnel counts, and `findings` (file, line, dimension, mechanism +
+workflow funnel counts (including suppressed / clustered / exonerated /
+needs-human), and `findings` (file, line, dimension, mechanism +
 confidences, severity + confidence, owner + confidence, action, the
-`evidence` excerpt, and generated `title` / `why` / `fix` / `test`).
+`evidence` excerpt, generated `title` / `why` / `fix` / `test`, and the
+refinement results `fingerprint`, `related`, `rank`, `taint`,
+`exoneration`, `ensemble`).
 
 The dashboard renders each finding's evidence excerpt plus its generated
 `title`, `why`, `fix`, and `test`, with filter/sort/search, per-file focus,
@@ -89,8 +139,10 @@ screened it found nothing there.
 
 Per file: 1 screen call (5–7 questions batched — security is 3 sub-`noul`s).
 Per review: +5 profiles max, +1 locate chain per followed signal (unlimited by
-default; each up to 4 calls: evidence, mechanism, severity, owner), +1 enrich
-call per finding up to the top 8 by severity. Codebase mode multiplies
+default; each up to 5 calls: evidence, mechanism, severity, meta-judge,
+owner), then refinement: dedupe ≤ 1 call per finding with a nearby kept
+finding, taint ≤ 2 × 12, counterfactual ≤ 2 × 12, ensemble ≤ 8, pairwise
+⌈15 / 5⌉ = 3; then +1 enrich call per finding up to the top 8. Codebase mode multiplies
 screening by region count (function-aware regions). No caching yet —
-re-scans resend everything. Budgets are static globals; per-dimension
-thresholds and value-of-information selection are roadmap items.
+re-scans resend everything. Budgets are static globals; value-of-information
+selection is a roadmap item.

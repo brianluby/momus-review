@@ -40,6 +40,10 @@ impl ReviewStrategy for ChangesStrategy {
         "changed test"
     }
 
+    fn client(&self) -> &TypeSafeClient {
+        &self.client
+    }
+
     fn discover(&self, scopes: &[PathBuf]) -> Result<Discovery<ChangedFile>> {
         let changed = git::changed_files(scopes, &self.exclude)?;
         let mut files = Vec::new();
