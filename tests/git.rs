@@ -49,7 +49,8 @@ fn repository_files_discovers_only_source_files() {
     write(&repo, "src/lib.rs", "pub fn f() -> i32 { 1 }\n");
     write(&repo, "tests/lib_test.rs", "#[test]\nfn it_works() {}\n");
     write(&repo, "README.md", "# hi\n");
-    write(&repo, "notes.py", "x = 1\n");
+    write(&repo, "data.csv", "a,b\n1,2\n");
+    write(&repo, "src/worker.go", "package main\n");
     run_git(&repo, &["add", "-A"]);
     run_git(&repo, &["commit", "-q", "-m", "seed"]);
 
@@ -58,8 +59,8 @@ fn repository_files_discovers_only_source_files() {
     paths.sort();
 
     // Test files are returned too (they become test-gap context); non-source
-    // files are silently skipped.
-    assert_eq!(paths, vec!["src/lib.rs", "tests/lib_test.rs"]);
+    // files are silently skipped, and every supported language is discovered.
+    assert_eq!(paths, vec!["src/lib.rs", "src/worker.go", "tests/lib_test.rs"]);
 }
 
 #[test]

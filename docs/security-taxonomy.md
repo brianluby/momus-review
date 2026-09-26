@@ -96,3 +96,42 @@ Read:
   label; category agreement is reported as a secondary diagnostic, no longer a
   gate. The curated table's one-category-per-file granularity no longer
   suppresses the score.
+## Per-language security classes (2026-09-26, ticket #7)
+
+Discovery widened to the 20-language consensus set, and each language
+contributes its own classification mechanisms (`domain/policy.rs`
+`LANGUAGE_MECHANISMS`) — the security screen's focus is unchanged; the
+per-language rows are what `locate` may classify a located signal as. The
+security additions, by class:
+
+| mechanism | languages | OWASP / CWE | evaluator category |
+|---|---|---|---|
+| `dynamicCodeExecution` | JS/TS, Python, Ruby, shell, PowerShell | A03 injection (CWE-95) | Injection |
+| `prototypePollution` | JS/TS | A03 / CWE-1321 | Injection |
+| `formatString` | C | A03 / CWE-134 | Injection |
+| `unsafeReflection` | Java | A03 / CWE-470 | Injection |
+| `unquotedExpansion` | shell, PowerShell | A03 / CWE-78 (argument injection) | Injection |
+| `assertForValidation` | Python | CWE-617 (validation removed by `-O`) | Improper Input Validation |
+| `fileInclusion` | PHP | A01 / CWE-98 (LFI/RFI) | Broken Access Control |
+| `massAssignment` | PHP, Ruby | CWE-915 | Broken Access Control |
+| `unescapedTemplate` | Go | A03 / CWE-79 | XSS |
+| `overbroadGrant` | SQL | A05 / CWE-732 | Security Misconfiguration |
+| `bufferOverflow` | C | CWE-120 | Miscellaneous |
+| `useAfterFree` | C, C++ | CWE-416 | Miscellaneous |
+| `outOfBoundsAccess` | C++ | CWE-125/787 | Miscellaneous |
+
+Two notes a reader should not have to reverse-engineer:
+
+- **Memory-safety classes map to `Miscellaneous`.** The golden-set evaluator's
+  categories come from Juice Shop's OWASP list, which has no memory-safety
+  class (the benchmark is JS/TS). Mapping them to a category keeps the
+  evaluator counting them instead of silently dropping them; it does not make
+  them corroborable against that benchmark.
+- **Rust's `unsafe` lives in correctness, not security.** `unsafeBlock` is
+  about the invariant the block assumes, which the invariant vocabulary
+  expresses better than the security classes do. The classifier can still
+  reach any generic security mechanism (`commandInjection`, …) for Rust.
+
+`bin/momus-eval.rs::every_security_mechanism_maps_to_a_category` iterates the
+generic vocabulary plus all 20 languages, so a new security key without a
+category mapping fails the suite rather than skewing a score.

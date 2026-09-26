@@ -6,12 +6,17 @@
 //! scanned file set by path suffix/stem after normalizing extensions, and a
 //! module `foo` is treated as interchangeable with `foo/mod` and `foo/index`.
 //! The result is a best-effort neighborhood, not an exact module graph.
+//!
+//! Extractors exist for Rust and for JS/TS; every other discovered language
+//! contributes no edges (a neighborhood, when a language has one, is a
+//! follow-up rather than a guess made with another language's patterns).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use regex::Regex;
 
+use crate::domain::language::Language;
 use crate::domain::report::SourceFile;
 
 /// A `use …;` path with a braced item list and/or `as` rename is captured by
@@ -96,10 +101,12 @@ fn extract_js_imports(content: &str) -> Vec<String> {
 ///   `export … from '…'`, and `require('…')`, keeping only relative
 ///   (`./`, `../`) specifiers; bare/package/URL specifiers are dropped.
 pub fn extract_imports(path: &str, content: &str) -> Vec<String> {
-    if path.ends_with(".rs") {
-        extract_rust_imports(content)
-    } else {
-        extract_js_imports(content)
+    match Language::from_path(path) {
+        Some(Language::Rust) => extract_rust_imports(content),
+        Some(Language::JavaScript) | Some(Language::TypeScript) => extract_js_imports(content),
+        // Every other discovered language has no extractor yet: return no
+        // edges rather than parsing the file with another language's patterns.
+        _ => Vec::new(),
     }
 }
 
@@ -240,7 +247,7 @@ impl ImportGraph {
         let resolver = Resolver::new(files);
         for f in files {
             let importer = normalize_path(&f.path);
-            let is_rust = f.path.ends_with(".rs");
+            let is_rust = Language::from_path(&f.path) == Some(Language::Rust);
             for target in extract_imports(&f.path, &f.content) {
                 if let Some(resolved) = resolver.resolve(&target, &importer, is_rust) {
                     adjacency.entry(f.path.clone()).or_default().push(resolved.clone());

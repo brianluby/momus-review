@@ -10,7 +10,8 @@ use anyhow::Result;
 use crate::adapters::exclude::Exclude;
 use crate::adapters::git;
 use crate::adapters::imports::ImportGraph;
-use crate::domain::policy::{Probabilities, test_file};
+use crate::domain::language::is_test_path;
+use crate::domain::policy::Probabilities;
 use crate::domain::report::{FileProfile, Finding, ReviewMode, SourceFile};
 use crate::review::codebase_judgments;
 use crate::review::strategy::{Discovery, ReviewStrategy, Screening, Signal};
@@ -71,7 +72,7 @@ impl ReviewStrategy for CodebaseStrategy {
         let mut files = Vec::new();
         let mut context_files = Vec::new();
         for f in repository {
-            if test_file().is_match(&f.path) {
+            if is_test_path(&f.path) {
                 context_files.push(f);
             } else {
                 files.push(f);
