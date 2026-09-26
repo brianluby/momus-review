@@ -5,7 +5,6 @@
 use std::collections::BTreeSet;
 
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::domain::policy::{
@@ -13,6 +12,7 @@ use crate::domain::policy::{
     ROUTE_SEVERITY, SEVERITY_RUBRIC, Dimension, mechanisms,
 };
 use crate::domain::report::{Action, FileProfile, Finding, SourceFile};
+use crate::review::regions::function_regions;
 use crate::review::strategy::{Screening, Signal};
 use crate::review::typesafe::{
     TypeSafeClient, choice, choice_criteria, noul, score, score_criteria,
@@ -33,15 +33,6 @@ const FILE_ROLES: [(&str, &str); 6] = [
     ("utility", "Shared helper, adapter, formatting, or low-level utility"),
 ];
 
-/// A source-region window: `{ id, startLine, content }`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Region {
-    id: String,
-    start_line: usize,
-    content: String,
-}
-
 /// Screens one source file per 160-line region, then max-merges per dimension.
 pub async fn screen_source_file(
     client: &TypeSafeClient,
@@ -51,7 +42,7 @@ pub async fn screen_source_file(
     let related_tests = select_related_tests(file, test_files);
     let mut results: Vec<Probabilities> = Vec::new();
 
-    for region in source_regions(&file.content, SCREEN_REGION_LINES) {
+    for region in function_regions(&file.content, &file.path, SCREEN_REGION_LINES) {
         let state = json!({
             "file": { "path": file.path, "startLine": region.start_line, "content": region.content },
             "relatedTests": related_tests,
@@ -202,7 +193,7 @@ pub async fn locate_source_signal(
     client: &TypeSafeClient,
     signal: &Signal<SourceFile>,
 ) -> Result<Option<Finding>> {
-    let regions = source_regions(&signal.file.content, REGION_LINES);
+    let regions = function_regions(&signal.file.content, &signal.file.path, REGION_LINES);
     if regions.is_empty() {
         return Ok(None);
     }
@@ -341,26 +332,14 @@ pub async fn locate_source_signal(
         owner_confidence,
         action,
         evidence: region.content.clone(),
+        title: None,
+        why: None,
+        fix: None,
+        test: None,
     }))
 }
 
 // ---- Helpers (mirror the private fns in codebase-judgments.ts) ---------
-
-fn source_regions(content: &str, lines_per_region: usize) -> Vec<Region> {
-    let lines: Vec<&str> = content.split('\n').collect();
-    let count = lines.len().div_ceil(lines_per_region);
-    (0..count)
-        .map(|i| {
-            let start = i * lines_per_region;
-            let end = lines.len().min(start + lines_per_region);
-            Region {
-                id: format!("R{}", i + 1),
-                start_line: start + 1,
-                content: lines[start..end].join("\n"),
-            }
-        })
-        .collect()
-}
 
 fn basename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)

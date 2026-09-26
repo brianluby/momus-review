@@ -19,17 +19,20 @@ Completed ahead of / from this plan:
   findings); `--follow-ups N` opts into a per-dimension cap.
 - **Security taxonomy** — OWASP-aligned mechanism vocabulary + crypto/misconfig
   screen steering. See `docs/security-taxonomy.md`.
-- **Evidence excerpt** — each finding now carries the selected hunk/region
-  (partial "Now" item; no generated title/why/fix yet).
+- **Evidence excerpt + generated title/why/fix/test** — each finding carries
+  the selected hunk/region, a human-readable title + why (from the classified
+  mechanism), and model-chosen fix/test suggestions (one narrow Jev call each,
+  top 8 by severity). Function-aware region splitting (tree-sitter-free
+  heuristic) replaces 80-line slicing.
 
-Still open from "Now": generated title/why/fix, the full dashboard workbench
+Still open from "Now": the full dashboard workbench
 (filter/sort/search/file-view/copy-as-PR-comment), SARIF + history trend, and
 the P(revert) spike.
 
 ## Now (1–2 weeks): make findings actionable
 
-- Evidence excerpts + generated title / why / suggested fix / suggested test
-  per finding (one narrow Jev call each, only for ≤8 located findings).
+- ✅ Evidence excerpts + generated title / why / suggested fix / suggested
+  test per finding (one narrow Jev call each, top 8 by severity).
 - Dashboard becomes a workbench: excerpt + why + fix, filter/sort/search,
   file view, copy-as-PR-comment. Stop rendering raw mechanism keys.
 - CI contract: `--fail-on-blocking` ✅; SARIF output + `reviews/history/<sha>.json`
@@ -47,7 +50,8 @@ the P(revert) spike.
 - Per-language mechanisms (Rust `unsafe`/`unwrap`/`panic!`, TS `any`/casts…).
 - Finding feedback (thumbs up/down) → per-repo threshold auto-tune +
   suppression list.
-- Function-aware regions (tree-sitter or heuristic) replacing 80-line slicing.
+- ✅ Function-aware regions (tree-sitter-free heuristic) replacing 80-line
+  slicing.
 - Dedupe/cluster: Jev `choice` "same root cause?" over adjacent candidates.
 
 ## Later (bets)

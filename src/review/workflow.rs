@@ -15,6 +15,7 @@ use crate::domain::policy::{
 use crate::domain::report::{
     ConfigSnapshot, FileProfile, Finding, MatrixRow, ReviewReport, WorkflowCounts,
 };
+use crate::review::explain::{self, MAX_ENRICH};
 use crate::review::strategy::{Discovery, FileEntry, ReviewStrategy, Screening, Signal};
 
 /// Runs the staged funnel for a strategy. Owns concurrency, thresholding,
@@ -140,6 +141,29 @@ pub async fn run_review<S: ReviewStrategy>(
     findings.sort_by(|a, b| b.severity.partial_cmp(&a.severity).unwrap_or(Ordering::Equal));
     let located_findings = findings.len();
     let routed_findings = findings.iter().filter(|f| f.owner.is_some()).count();
+
+    // 5. Enrich: title/why for every finding (deterministic); fix/test via one
+    //    narrow Jev call each, for at most MAX_ENRICH findings by severity.
+    for finding in &mut findings {
+        explain::apply_context(finding);
+    }
+    let enrich_cap = MAX_ENRICH.min(findings.len());
+    if enrich_cap > 0 {
+        let suggestions: Vec<(Option<String>, Option<String>)> = stream::iter(findings.iter().take(enrich_cap))
+            .map(|finding| {
+                let strategy = &strategy;
+                async move { strategy.suggestions(finding).await }
+            })
+            .buffered(CONCURRENCY)
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
+        for (finding, (fix, test)) in findings.iter_mut().zip(suggestions) {
+            finding.fix = fix;
+            finding.test = test;
+        }
+    }
 
     let matrix_rows = matrix
         .iter()

@@ -68,4 +68,8 @@ impl ReviewStrategy for CodebaseStrategy {
     async fn locate(&self, signal: &Signal<SourceFile>) -> Result<Option<Finding>> {
         codebase_judgments::locate_source_signal(&self.client, signal).await
     }
+
+    async fn suggestions(&self, finding: &Finding) -> Result<(Option<String>, Option<String>)> {
+        crate::review::explain::enrich_suggestions(&self.client, finding).await
+    }
 }

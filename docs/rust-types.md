@@ -87,7 +87,10 @@ pub enum Action { Comment, RequestChanges }
 pub struct Finding { /* file, line, dimension, probability, location_confidence,
                         mechanism, mechanism_confidence, severity, severity_confidence,
                         owner: Option<String>, owner_confidence: Option<f64>, action,
-                        evidence: String (the selected hunk/region excerpt) */ }
+                        evidence: String (the selected hunk/region excerpt),
+                        title/why/fix/test: Option<String> (generated actionability;
+                        title/why deterministic from mechanism, fix/test a
+                        model-choice; see review/explain.rs) */ }
 
 #[serde(default)]
 pub struct MatrixRow { pub file: String, #[serde(flatten)] pub probabilities: BTreeMap<Dimension, f64> }
@@ -136,13 +139,18 @@ pub trait ReviewStrategy: Send + Sync {
     async fn screen(&self, file: &Self::File, context: &[Self::File]) -> Result<Screening<Self::File>>;
     async fn profile(&self, file: &Self::File, probabilities: &Probabilities) -> Result<FileProfile>;
     async fn locate(&self, signal: &Signal<Self::File>) -> Result<Option<Finding>>;
+    async fn suggestions(&self, finding: &Finding) -> Result<(Option<String>, Option<String>)>;
 }
 ```
 
 Both modes use the same concrete type for `File` and `Context`, so the two
 TS type params collapse to one associated type. Two strategy structs
 (`ChangesStrategy`, `CodebaseStrategy`) own a `TypeSafeClient` and delegate to
-`review/judgments.rs` / `review/codebase_judgments.rs` respectively.
+`review/judgments.rs` / `review/codebase_judgments.rs` respectively. Two
+shared modules back the actionability and region work: `review/explain.rs`
+(the `title`/`why`/`fix`/`test` vocabularies and one-call enrichment, exposing
+`MAX_ENRICH = 8`) and `review/regions.rs` (`function_regions`, the
+tree-sitter-free column-0 declaration splitter used by codebase mode).
 
 `review/workflow.rs::run_review` is generic over `S: ReviewStrategy`, and owns
 concurrency (`futures` `buffered(CONCURRENCY)` — ordered, bounded

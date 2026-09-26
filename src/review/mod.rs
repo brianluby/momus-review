@@ -4,7 +4,9 @@
 pub mod changes;
 pub mod codebase;
 pub mod codebase_judgments;
+pub mod explain;
 pub mod judgments;
+pub mod regions;
 pub mod strategy;
 pub mod typesafe;
 pub mod workflow;
