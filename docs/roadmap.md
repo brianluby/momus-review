@@ -58,7 +58,11 @@ Now is complete.
 - ✅ Base + neighbor context: changes mode sends base file + diff; codebase
   mode attaches 1-hop callers/callees via a heuristic import graph
   (`adapters/imports.rs`).
-- Per-language mechanisms (Rust `unsafe`/`unwrap`/`panic!`, TS `any`/casts…).
+- ✅ Per-language mechanisms: the 20-language consensus set is discovered,
+   its test conventions and test-body markers are language-aware, and each
+   language's own footguns (Rust `unsafe`/`unwrap`/`panic!`, TS `any`/casts,
+   Go ignored `error`, C memory safety, shell word splitting, …) join the
+   mechanism `choice` vocabulary. See `docs/language-support.md`.
 - Finding feedback (thumbs up/down) → per-repo threshold auto-tune +
   suppression list.
 - ✅ Function-aware regions (tree-sitter-free heuristic) replacing 80-line

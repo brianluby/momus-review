@@ -13,7 +13,7 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use crate::adapters::exclude::Exclude;
 use crate::domain::patch::patch_for_new_file;
-use crate::domain::policy::source_file;
+use crate::domain::language::is_source_path;
 use crate::domain::report::{ChangedFile, SourceFile};
 
 /// Git's well-known empty tree: the diff base for an unborn repository.
@@ -216,7 +216,7 @@ fn changed_files_in_scope(scope: &Path, exclude: &Exclude) -> Result<Vec<Changed
     let mut files = Vec::new();
 
     for path in tracked.iter().chain(untracked.iter()).copied() {
-        if !source_file().is_match(path) || exclude.is_match(path) || !seen.insert(path) {
+        if !is_source_path(path) || exclude.is_match(path) || !seen.insert(path) {
             continue;
         }
         if !untracked_set.contains(path) {
@@ -286,7 +286,7 @@ fn repository_files_in_scope(scope: &Path, exclude: &Exclude) -> Result<Vec<Sour
 
     let mut files = Vec::new();
     for path in paths {
-        if !source_file().is_match(path) || exclude.is_match(path) {
+        if !is_source_path(path) || exclude.is_match(path) {
             continue;
         }
         if let Some(content) = read_repo_file(&repo_root, path)? {

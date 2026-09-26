@@ -7,15 +7,16 @@ use std::collections::BTreeSet;
 use anyhow::Result;
 use serde_json::{Map, Value, json};
 
+use crate::domain::language::Language;
 use crate::domain::policy::{
     BLOCKING_SEVERITY, DIMENSIONS, MIN_LOCATION_CONFIDENCE, MIN_META_JUDGE_CONFIDENCE, Probabilities,
-    REVIEW_PRIORITY_RUBRIC, ROUTE_SEVERITY, SEVERITY_RUBRIC, Dimension, mechanisms,
+    REVIEW_PRIORITY_RUBRIC, ROUTE_SEVERITY, SEVERITY_RUBRIC, Dimension,
 };
 use crate::domain::report::{Action, FileProfile, Finding, SourceFile};
 use crate::review::regions::function_regions;
 use crate::review::{meta, strategy::{Screening, Signal}};
 use crate::review::typesafe::{
-    TypeSafeClient, choice, choice_criteria, noul, score, score_criteria,
+    TypeSafeClient, choice, choice_criteria, mechanism_criteria, noul, score, score_criteria,
 };
 
 const REGION_LINES: usize = 80;
@@ -265,7 +266,7 @@ pub async fn locate_source_signal(
             json!({
                 "mechanism": choice(
                     Value::String("Which mechanism best describes the suspected concern supported by selectedEvidence?".into()),
-                    choice_criteria(mechanisms(signal.dimension)),
+                    mechanism_criteria(&signal.file.path, signal.dimension),
                 ),
             }),
         )
@@ -405,20 +406,16 @@ fn compact_test(test: &SourceFile, source_stem: &str) -> SourceFile {
     let lines: Vec<&str> = test.content.split('\n').collect();
     let mut selected: BTreeSet<usize> = BTreeSet::new();
     let stem = source_stem.to_lowercase();
+    // Test bodies are matched on the test file's own language markers
+    // (`#[test]`, `func Test`, `describe(`, …) plus the language-neutral
+    // `assert`, which every ecosystem spells the same way.
+    let markers = Language::from_path(&test.path).map_or(&[][..], |lang| lang.test_markers());
 
     for (index, line) in lines.iter().enumerate() {
         let lower = line.to_lowercase();
         if lower.contains(&stem)
-            || lower.contains("describe(")
-            || lower.contains("describe.")
-            || lower.contains("test(")
-            || lower.contains("test.")
-            || lower.contains("it(")
-            || lower.contains("it.")
-            || lower.contains("#[test]")
-            || lower.contains("#[tokio::test]")
-            || lower.contains("fn ")
             || lower.contains("assert")
+            || markers.iter().any(|marker| lower.contains(marker))
         {
             for nearby in index.saturating_sub(2)..=(lines.len() - 1).min(index + 2) {
                 selected.insert(nearby);
