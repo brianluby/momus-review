@@ -36,6 +36,32 @@ then focused follow-ups on the strongest signals only — evidence selection,
 mechanism classification, severity scoring, reviewer routing. Results land in
 a quiet local dashboard and machine-readable JSON.
 
+## Configuration
+
+Read from the environment (or `.env`):
+
+| variable | default | purpose |
+|---|---|---|
+| `TYPESAFE_API_KEY` | — | API key; required unless the base URL is a local server |
+| `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | any server speaking `POST /v1/systemone` |
+| `TYPESAFE_DEFAULT_MODEL` | `jev-latest` | model id sent with each request |
+| `TYPESAFE_TIMEOUT_SECS` | `60` | per-request timeout |
+| `MOMUS_CONCURRENCY` | `3` | parallel `system_one` requests |
+
+To run against a local System One server such as
+[Winnow-12B](https://github.com/EldanRing/winnow-inference), point the base
+URL at it; no key is needed for `localhost`/loopback addresses. Local servers
+decide one request at a time and more slowly, so lower concurrency and raise
+the timeout:
+
+```bash
+TYPESAFE_BASE_URL=http://127.0.0.1:8091 MOMUS_CONCURRENCY=1 \
+  TYPESAFE_TIMEOUT_SECS=300 momus review
+```
+
+Screening thresholds in `src/domain/policy.rs` were tuned against hosted Jev
+and may need recalibrating for another model.
+
 ## Why Jev, Why This Shape
 
 Jev is a decision model: typed questions (`noul`/`choice`/`score`) against a
