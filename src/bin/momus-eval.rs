@@ -107,27 +107,26 @@ fn main() -> Result<()> {
     if !gt.known_vulnerable.is_empty() {
         println!();
         println!("== curated corroboration rate ==");
-        let mut matched = 0;
-        let mut mismatched: Vec<String> = Vec::new();
+        let mut on_file = 0usize;
+        let mut category_matched = 0usize;
+        let mut category_differs: Vec<String> = Vec::new();
         for f in &security {
             if let Some(kv) = gt
                 .known_vulnerable
                 .iter()
                 .find(|kv| matches_curated_file(&f.file, &kv.file))
             {
+                on_file += 1;
                 let cat_ok = kv
                     .categories
                     .iter()
                     .any(|c| mechanism_categories(&f.mechanism).contains(&c.as_str()));
                 if cat_ok {
-                    matched += 1;
+                    category_matched += 1;
                 } else {
-                    mismatched.push(format!(
-                        "{} ({} maps to {:?}, expected {:?})",
-                        f.file,
-                        f.mechanism,
-                        mechanism_categories(&f.mechanism),
-                        kv.categories
+                    category_differs.push(format!(
+                        "{}: {} (table expects {:?})",
+                        f.file, f.mechanism, kv.categories
                     ));
                 }
             }
@@ -138,15 +137,19 @@ fn main() -> Result<()> {
             .filter(|kv| security.iter().any(|f| matches_curated_file(&f.file, &kv.file)))
             .count();
         println!(
-            "known-vulnerable files hit by a matching finding: {found_files}/{}",
+            "known-vulnerable files hit by a finding: {found_files}/{}",
             gt.known_vulnerable.len()
         );
         println!(
-            "security findings on known-vulnerable files (category-matched): {matched}/{}",
+            "security findings on a known-vulnerable file: {on_file}/{}",
             security.len()
         );
-        for m in mismatched {
-            println!("  ! {m}");
+        println!(
+            "  category-matched: {category_matched}  |  differs (finer label): {}",
+            category_differs.len()
+        );
+        for m in &category_differs {
+            println!("    ~ {m}");
         }
     }
 

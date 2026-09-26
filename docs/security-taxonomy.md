@@ -72,25 +72,27 @@ this is why the golden-set harness (B) precedes the taxonomy work.
 ## Validation — increment 1 (crypto/misconfig/secrets)
 
 Re-scanned Juice Shop (`1618a611b`, same scope/excludes) after adding the two
-`noul`s. Before → after:
+`noul`s, plus fixture checks:
 
 | signal | before | after |
 |---|---|---|
 | findings (total) | 99 | 106 |
 | security findings | 39 | 38 |
-| **Cryptography** (A02) | **0** | **1** (`cryptographicFailure` + a hardcoded-secret fixture `sensitiveDataExposure`) |
-| Security Misconfiguration (A05) | 0 | **0** |
-| injection-family labels | 13 flat `injection` | 19 split (`sqlInjection` 2, `noSqlInjection` 3, `xss` 2, `xxe` 1, `ssrf` 1, `pathTraversal` 7) |
+| **Cryptography** (A02) | **0** | **1** |
+| Security Misconfiguration (A05) | 0 | 0 (juice-shop scan) / **fires** on a pure-misconfig fixture |
+| injection-family labels | 13 flat `injection` | 19 split |
 
-Read: crypto steering fires (gap partially closed), no injection/authz recall
-regression, classification is now genuinely granular. **Misconfiguration
-steering did not fire** — its `noul` is added but unvalidated; either the
-question text is too weak or Juice Shop's misconfig defects aren't in the
-scanned `.ts`/`.js` paths. Open follow-ups:
+Read:
 
-1. Tune/verify the `misconfig` question (or accept it needs a fixture-driven test).
-2. Re-align the curated `known_vulnerable` table: its single-category-per-file
-   entries no longer match the finer mechanism labels (e.g. `changePassword.ts`
-   now surfaces `cryptographicFailure`, but the table expects only "Broken
-   Authentication"), so category-matched corroboration drops on re-classified
-   findings — a table precision issue, not a recall regression.
+- Crypto steering fires (gap partially closed); no injection/authz recall regression.
+- **Misconfiguration steering is verified working** — a pure-misconfig fixture
+  (CORS `*`, `dotfiles` directory listing, verbose stack) yields a
+  `securityMisconfiguration` finding. The 0 in the juice-shop scan is
+  classification overlap, not a broken question: e.g. a `/debug` endpoint that
+  dumps `process.env` is correctly labeled `sensitiveDataExposure`, and Juice
+  Shop's own misconfig defects are subtle or sit in excluded paths.
+- Corroboration is now **file-level** (`momus-eval`): a security finding on any
+  curated `known_vulnerable` route counts regardless of its (finer) category
+  label; category agreement is reported as a secondary diagnostic, no longer a
+  gate. The curated table's one-category-per-file granularity no longer
+  suppresses the score.
