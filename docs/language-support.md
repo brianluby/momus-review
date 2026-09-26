@@ -40,8 +40,11 @@ this adds.
 | Lua | `.lua` | `*_spec` | `describe(`, `it(`, `assert_equal` |
 | PowerShell | `.ps1` `.psm1` `.psd1` | `*Tests.ps1`, `*.tests.*` | `describe `, `should `, `assert-` |
 
-Directory conventions are language-agnostic and always count as test context:
-`test/`, `tests/`, `__tests__/`, `spec/`, `specs/`, `testdata/` at any depth.
+Directory conventions shared by every language, at any depth: `test/`,
+`tests/`, `__tests__/`. Three languages add their own directory: `spec/` for
+JavaScript/TypeScript and Ruby, `testdata/` for Go. A directory rule moves
+files out of review and into test context, so it is scoped to the languages
+whose ecosystem actually uses it — `spec/parser.rs` is still reviewed.
 
 Extensions match case-insensitively, so `.R` is R and `.H` is C++. `.h` is
 shared with C and maps to C++ (headers in current repositories are

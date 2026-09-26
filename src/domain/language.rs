@@ -64,6 +64,9 @@ pub struct LanguageSpec {
     /// Lowercase extensions, with the leading dot. Matched case-insensitively
     /// (so `.R` is R and `.H` is C++).
     pub extensions: &'static [&'static str],
+    /// Directory names that mark test context in this language (on top of the
+    /// language-agnostic `TEST_DIRS`).
+    pub test_dirs: &'static [&'static str],
     /// Name conventions that mark a test file in this language.
     pub test_names: &'static [TestName],
     /// Lowercase substrings that mark a test body, used to pick excerpt
@@ -79,6 +82,7 @@ pub struct LanguageSpec {
 pub const SPECS: &[LanguageSpec] = &[
     LanguageSpec {
         language: Language::Python,
+        test_dirs: &[],
         key: "python",
         extensions: &[".py", ".pyi", ".pyw"],
         test_names: &[TestName::Prefix("test_"), TestName::Suffix("_test")],
@@ -86,6 +90,7 @@ pub const SPECS: &[LanguageSpec] = &[
     },
     LanguageSpec {
         language: Language::JavaScript,
+        test_dirs: &["spec"],
         key: "javascript",
         extensions: &[".js", ".jsx", ".mjs", ".cjs"],
         test_names: &[TestName::Contains(".spec."), TestName::Contains(".test.")],
@@ -93,6 +98,7 @@ pub const SPECS: &[LanguageSpec] = &[
     },
     LanguageSpec {
         language: Language::TypeScript,
+        test_dirs: &["spec"],
         key: "typescript",
         extensions: &[".ts", ".tsx", ".mts", ".cts"],
         test_names: &[TestName::Contains(".spec."), TestName::Contains(".test.")],
@@ -100,6 +106,7 @@ pub const SPECS: &[LanguageSpec] = &[
     },
     LanguageSpec {
         language: Language::Java,
+        test_dirs: &[],
         key: "java",
         extensions: &[".java"],
         test_names: &[
@@ -112,6 +119,7 @@ pub const SPECS: &[LanguageSpec] = &[
     },
     LanguageSpec {
         language: Language::CSharp,
+        test_dirs: &[],
         key: "csharp",
         extensions: &[".cs"],
         test_names: &[TestName::Suffix("Test"), TestName::Suffix("Tests")],
@@ -119,6 +127,7 @@ pub const SPECS: &[LanguageSpec] = &[
     },
     LanguageSpec {
         language: Language::Cpp,
+        test_dirs: &[],
         key: "cpp",
         extensions: &[".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx", ".h"],
         test_names: &[
@@ -130,6 +139,7 @@ pub const SPECS: &[LanguageSpec] = &[
     },
     LanguageSpec {
         language: Language::C,
+        test_dirs: &[],
         key: "c",
         extensions: &[".c"],
         test_names: &[
@@ -141,6 +151,7 @@ pub const SPECS: &[LanguageSpec] = &[
     },
     LanguageSpec {
         language: Language::Go,
+        test_dirs: &["testdata"],
         key: "go",
         extensions: &[".go"],
         test_names: &[TestName::Suffix("_test")],
@@ -148,6 +159,7 @@ pub const SPECS: &[LanguageSpec] = &[
     },
     LanguageSpec {
         language: Language::Rust,
+        test_dirs: &[],
         key: "rust",
         extensions: &[".rs"],
         test_names: &[TestName::Suffix("_test")],
@@ -155,6 +167,7 @@ pub const SPECS: &[LanguageSpec] = &[
     },
     LanguageSpec {
         language: Language::Php,
+        test_dirs: &[],
         key: "php",
         extensions: &[".php"],
         test_names: &[TestName::Suffix("Test")],
@@ -162,6 +175,7 @@ pub const SPECS: &[LanguageSpec] = &[
     },
     LanguageSpec {
         language: Language::Ruby,
+        test_dirs: &["spec"],
         key: "ruby",
         extensions: &[".rb", ".rake"],
         test_names: &[TestName::Suffix("_spec"), TestName::Suffix("_test")],
@@ -169,6 +183,7 @@ pub const SPECS: &[LanguageSpec] = &[
     },
     LanguageSpec {
         language: Language::Kotlin,
+        test_dirs: &[],
         key: "kotlin",
         extensions: &[".kt", ".kts"],
         test_names: &[
@@ -180,6 +195,7 @@ pub const SPECS: &[LanguageSpec] = &[
     },
     LanguageSpec {
         language: Language::Swift,
+        test_dirs: &[],
         key: "swift",
         extensions: &[".swift"],
         test_names: &[TestName::Suffix("Tests"), TestName::Suffix("Test")],
@@ -187,6 +203,7 @@ pub const SPECS: &[LanguageSpec] = &[
     },
     LanguageSpec {
         language: Language::Shell,
+        test_dirs: &[],
         key: "shell",
         extensions: &[".sh", ".bash", ".zsh", ".bats"],
         test_names: &[TestName::Suffix(".bats"), TestName::Prefix("test_")],
@@ -194,6 +211,7 @@ pub const SPECS: &[LanguageSpec] = &[
     },
     LanguageSpec {
         language: Language::Sql,
+        test_dirs: &[],
         key: "sql",
         extensions: &[".sql"],
         test_names: &[],
@@ -201,6 +219,7 @@ pub const SPECS: &[LanguageSpec] = &[
     },
     LanguageSpec {
         language: Language::R,
+        test_dirs: &[],
         key: "r",
         extensions: &[".r"],
         test_names: &[TestName::Prefix("test-")],
@@ -208,6 +227,7 @@ pub const SPECS: &[LanguageSpec] = &[
     },
     LanguageSpec {
         language: Language::Scala,
+        test_dirs: &[],
         key: "scala",
         extensions: &[".scala", ".sc"],
         test_names: &[
@@ -219,6 +239,7 @@ pub const SPECS: &[LanguageSpec] = &[
     },
     LanguageSpec {
         language: Language::Dart,
+        test_dirs: &[],
         key: "dart",
         extensions: &[".dart"],
         test_names: &[TestName::Suffix("_test")],
@@ -226,6 +247,7 @@ pub const SPECS: &[LanguageSpec] = &[
     },
     LanguageSpec {
         language: Language::Lua,
+        test_dirs: &[],
         key: "lua",
         extensions: &[".lua"],
         test_names: &[TestName::Suffix("_spec")],
@@ -233,6 +255,7 @@ pub const SPECS: &[LanguageSpec] = &[
     },
     LanguageSpec {
         language: Language::PowerShell,
+        test_dirs: &[],
         key: "powershell",
         extensions: &[".ps1", ".psm1", ".psd1"],
         test_names: &[TestName::Suffix("Tests.ps1"), TestName::Contains(".tests.")],
@@ -241,7 +264,7 @@ pub const SPECS: &[LanguageSpec] = &[
 ];
 
 /// Directory names whose files are test context in every language.
-const TEST_DIRS: [&str; 6] = ["test", "tests", "__tests__", "spec", "specs", "testdata"];
+const TEST_DIRS: [&str; 3] = ["test", "tests", "__tests__"];
 
 impl Language {
     /// The static description of this language.
@@ -325,6 +348,11 @@ pub fn is_source_path(path: &str) -> bool {
 /// True when `path` is test context rather than code under review: a file in a
 /// test directory, or one named per its language's test convention.
 pub fn is_test_path(path: &str) -> bool {
+    let language = Language::from_path(path);
+    // Only the file's own language contributes extra directory conventions
+    // (`spec/` for Ruby, `testdata/` for Go): a directory rule exiles files
+    // from review, so it must not fire for a language that does not use it.
+    let extra_dirs = language.map_or(&[][..], |lang| lang.spec().test_dirs);
     let mut components = path.split('/').peekable();
     let mut file_name = path;
     while let Some(component) = components.next() {
@@ -332,14 +360,13 @@ pub fn is_test_path(path: &str) -> bool {
             file_name = component;
             break;
         }
-        if TEST_DIRS
-            .iter()
-            .any(|dir| component.eq_ignore_ascii_case(dir))
+        if TEST_DIRS.iter().any(|dir| component.eq_ignore_ascii_case(dir))
+            || extra_dirs.iter().any(|dir| component.eq_ignore_ascii_case(dir))
         {
             return true;
         }
     }
-    Language::from_path(path).is_some_and(|language| language.is_test_name(file_name))
+    language.is_some_and(|language| language.is_test_name(file_name))
 }
 
 #[cfg(test)]
@@ -406,13 +433,17 @@ mod tests {
 
     #[test]
     fn test_paths_follow_language_conventions() {
-        // Directory conventions, language-agnostic.
+        // Directory conventions shared by every language.
         assert!(is_test_path("tests/wiring.py"));
         assert!(is_test_path("src/__tests__/helpers.ts"));
         assert!(is_test_path("src/test/java/Widget.java"));
-        assert!(is_test_path("spec/models/user_spec.rb"));
         assert!(!is_test_path("src/testing_util.rs"));
         assert!(!is_test_path("src/latest.rs"));
+
+        // Directory conventions owned by one language's ecosystem.
+        assert!(is_test_path("spec/models/user_spec.rb"));
+        assert!(is_test_path("testdata/golden.go"));
+        assert!(is_test_path("spec/widget.spec.js"));
 
         // Name conventions per language.
         assert!(is_test_path("pkg/test_parser.py"));
@@ -430,7 +461,13 @@ mod tests {
         // place, so this only matters for the classification itself).
         assert!(is_test_path("tests/fixture.json"));
 
-        // Language-specific name conventions must not leak across languages:
+        // The language-scoped directory rules must not leak: a `spec/` or
+        // `testdata/` directory is not a test convention for Rust, and
+        // excluding files there would silently stop reviewing them.
+        assert!(!is_test_path("spec/parser.rs"));
+        assert!(!is_test_path("testdata/parser.rs"));
+
+        // Nor may name conventions leak across languages:
         // `foo_test.go` is Go's convention, not Rust's reading of `_test`.
         assert!(!is_test_path("src/parser_helpers.py"));
         assert!(!is_test_path("src/Widget.java"));
