@@ -16,7 +16,14 @@ use crate::domain::patch::patch_for_new_file;
 use crate::domain::language::is_source_path;
 use crate::domain::report::{ChangedFile, SourceFile};
 
-/// Runs `git -C <cwd> <args>` and returns trimmed stdout. No shell.
+/// Flags that pin `git diff` to plain unified output regardless of user or
+/// repo config (`diff.external`, `color.ui=always`, textconv drivers), which
+/// would otherwise produce output `parse_hunks` cannot read.
+const PLAIN_DIFF: [&str; 3] = ["--no-ext-diff", "--no-color", "--no-textconv"];
+
+/// Runs `git -C <cwd> <args>` and returns stdout verbatim. No shell. Callers
+/// that want a single trimmed value (e.g. `rev-parse`) use `git_value`;
+/// file content must not be trimmed or leading lines would be lost.
 fn git(cwd: &Path, args: &[&str]) -> Result<String> {
     let output = Command::new("git")
         .arg("-C")
@@ -32,14 +39,65 @@ fn git(cwd: &Path, args: &[&str]) -> Result<String> {
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// `git` for single-value commands (`rev-parse`): strips only git's
+/// terminating newline, so a repo path with leading/trailing spaces survives.
+fn git_value(cwd: &Path, args: &[&str]) -> Result<String> {
+    let out = git(cwd, args)?;
+    Ok(out.strip_suffix('\n').unwrap_or(&out).to_string())
+}
+
+/// Runs `git diff <base> <PLAIN_DIFF> <args>`.
+fn git_diff(cwd: &Path, base: &str, args: &[&str]) -> Result<String> {
+    let mut full = vec!["diff", base];
+    full.extend(PLAIN_DIFF);
+    full.extend(args);
+    git(cwd, &full)
+}
+
+/// What changes are diffed against.
+enum DiffBase {
+    Head,
+    /// Unborn `HEAD`: the repository's empty-tree id (object-format aware).
+    EmptyTree(String),
+}
+
+impl DiffBase {
+    fn rev(&self) -> &str {
+        match self {
+            DiffBase::Head => "HEAD",
+            DiffBase::EmptyTree(id) => id,
+        }
+    }
+}
+
+/// The diff base: `HEAD`, or the empty tree when the repository has no
+/// commits yet (so an unborn repo still reviews its untracked files). Falls
+/// back only for a genuinely unborn `HEAD` (a symbolic ref to a branch that
+/// does not exist yet); a detached or corrupt `HEAD` that fails to resolve is
+/// an error, not an empty repository.
+fn diff_base(repo_root: &Path) -> Result<DiffBase> {
+    if git(repo_root, &["rev-parse", "--verify", "--quiet", "HEAD"]).is_ok() {
+        return Ok(DiffBase::Head);
+    }
+    let branch = git_value(repo_root, &["symbolic-ref", "--quiet", "HEAD"])
+        .context("HEAD does not resolve to a commit and is not a branch ref")?;
+    if git(repo_root, &["show-ref", "--verify", "--quiet", &branch]).is_ok() {
+        bail!("HEAD points to {branch}, which exists but does not resolve to a commit");
+    }
+    // `hash-object` yields the empty-tree id in the repo's own object format
+    // (SHA-1 or SHA-256); stdin is closed, so it hashes an empty tree.
+    let empty_tree = git_value(repo_root, &["hash-object", "-t", "tree", "--stdin"])?;
+    Ok(DiffBase::EmptyTree(empty_tree))
 }
 
 /// Resolves the repository under `scope` to its current `HEAD` commit sha
 /// (40 hex chars). Used to key per-sha review history; fails loudly when
 /// `scope` is not inside a repository.
 pub fn head_sha(scope: &Path) -> Result<String> {
-    git(scope, &["rev-parse", "HEAD"])
+    git_value(scope, &["rev-parse", "HEAD"])
 }
 
 /// Splits NUL-separated git path output. `-z` makes git emit NULs so paths
@@ -144,40 +202,34 @@ fn changed_files_in_scope(scope: &Path, exclude: &Exclude) -> Result<Vec<Changed
     let real_scope = scope
         .canonicalize()
         .with_context(|| format!("resolve scope {}", scope.display()))?;
-    let repo_root = PathBuf::from(git(&real_scope, &["rev-parse", "--show-toplevel"])?)
+    let repo_root = PathBuf::from(git_value(&real_scope, &["rev-parse", "--show-toplevel"])?)
         .canonicalize()
         .with_context(|| "resolve repo root")?;
     let relative_scope = relative_scope(&repo_root, &real_scope);
 
-    // Rename destinations don't exist at HEAD; remember old→new so the base
-    // lookup can read a renamed file's pre-change content.
+    let base_kind = diff_base(&repo_root)?;
+    let base_rev = base_kind.rev();
+
+    // Rename destinations don't exist at the base; remember new→old so both
+    // the patch and the base lookup can use the pre-change path. `-z` keeps
+    // unusual paths unquoted: records are `R<score>\0old\0new\0`.
     let mut renamed: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    let rename_output = git(
+    let rename_output = git_diff(
         &repo_root,
-        &["diff", "HEAD", "--name-status", "--diff-filter=R", "--", relative_scope],
-    )
-    .unwrap_or_default();
-    for line in rename_output.lines() {
-        let mut parts = line.split('\t');
-        let status = parts.next().unwrap_or("");
-        let old = parts.next().unwrap_or("");
-        let new = parts.next().unwrap_or("");
-        if status.starts_with('R') && !old.is_empty() && !new.is_empty() {
+        base_rev,
+        &["-M", "--name-status", "-z", "--diff-filter=R", "--", relative_scope],
+    )?;
+    let mut fields = nul_lines(&rename_output).into_iter();
+    while let (Some(status), Some(old), Some(new)) = (fields.next(), fields.next(), fields.next()) {
+        if status.starts_with('R') {
             renamed.insert(new.to_string(), old.to_string());
         }
     }
 
-    let tracked_output = git(
+    let tracked_output = git_diff(
         &repo_root,
-        &[
-            "diff",
-            "HEAD",
-            "--name-only",
-            "-z",
-            "--diff-filter=ACMRTUXB",
-            "--",
-            relative_scope,
-        ],
+        base_rev,
+        &["--name-only", "-z", "--diff-filter=ACMRTUXB", "--", relative_scope],
     )?;
     let untracked_output = git(
         &repo_root,
@@ -195,12 +247,20 @@ fn changed_files_in_scope(scope: &Path, exclude: &Exclude) -> Result<Vec<Changed
             continue;
         }
         if !untracked_set.contains(path) {
-            let patch = git(
-                &repo_root,
-                &["diff", "HEAD", "--unified=3", "--", path],
-            )?;
+            // A rename's diff must name both paths, or git cannot pair them
+            // and renders the destination as an all-additions new file.
             let base_path = renamed.get(path).map(String::as_str).unwrap_or(path);
-            let base = git(&repo_root, &["show", &format!("HEAD:{base_path}")]).unwrap_or_default();
+            let mut diff_args = vec!["-M", "--unified=3", "--", path];
+            if base_path != path {
+                diff_args.push(base_path);
+            }
+            let patch = git_diff(&repo_root, base_rev, &diff_args)?.trim_end().to_string();
+            let base = match base_kind {
+                DiffBase::EmptyTree(_) => String::new(),
+                DiffBase::Head => {
+                    git(&repo_root, &["show", &format!("HEAD:{base_path}")]).unwrap_or_default()
+                }
+            };
             files.push(ChangedFile { path: path.to_string(), patch, base });
         } else if let Some(content) = read_repo_file(&repo_root, path)? {
             files.push(ChangedFile {
@@ -233,7 +293,7 @@ fn repository_files_in_scope(scope: &Path, exclude: &Exclude) -> Result<Vec<Sour
     let real_scope = scope
         .canonicalize()
         .with_context(|| format!("resolve scope {}", scope.display()))?;
-    let repo_root = PathBuf::from(git(&real_scope, &["rev-parse", "--show-toplevel"])?)
+    let repo_root = PathBuf::from(git_value(&real_scope, &["rev-parse", "--show-toplevel"])?)
         .canonicalize()
         .with_context(|| "resolve repo root")?;
     let relative_scope = relative_scope(&repo_root, &real_scope);
