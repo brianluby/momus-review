@@ -41,8 +41,10 @@ fn finding_title(finding: &Finding) -> String {
 }
 
 /// The mechanism description (`why` vocabulary) for a finding, reused as the
-/// rule's `help.text`. Language-aware: the finding's path selects the
-/// vocabulary that named the mechanism.
+/// rule's `help.text`. The finding's path selects the vocabulary that named
+/// the mechanism; a key shared across languages has one definition
+/// (`policy::each_mechanism_key_has_one_definition`), so the text cannot
+/// depend on which finding created the rule.
 fn rule_help_text(finding: &Finding) -> String {
     mechanism_description(
         finding.dimension,

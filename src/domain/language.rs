@@ -171,7 +171,7 @@ pub const SPECS: &[LanguageSpec] = &[
         key: "php",
         extensions: &[".php"],
         test_names: &[TestName::Suffix("Test")],
-        test_markers: &["function test", "assertsame(", "asserttrue(", "expectexception("],
+        test_markers: &["function test", "assertsame(", "asserttrue(", "expectexception(", "@test"],
     },
     LanguageSpec {
         language: Language::Ruby,
@@ -315,23 +315,38 @@ impl Language {
     }
 }
 
-/// Case-insensitive match of one naming convention against a file name or
-/// stem, without allocating a lowercased copy.
+/// Match of one naming convention against a file name or stem, without
+/// allocating a lowercased copy.
+///
+/// Conventions that carry capitals (`Test`, `IT`, `Spec.`) match exactly:
+/// case-insensitive matching reads ordinary names as tests — `Unit.java` and
+/// `Commit.java` end in `it`, `Latest.java` and `latest.cpp` end in `test` —
+/// and a file classified as a test is dropped from review. All-lowercase
+/// conventions (`_test`, `test_`, `.spec.`) stay case-insensitive.
 fn matches_convention(name: &str, convention: TestName) -> bool {
+    /// Exact when `text` carries capitals, otherwise case-insensitive.
+    fn eq(name: &str, text: &str) -> bool {
+        if text.bytes().any(|b| b.is_ascii_uppercase()) {
+            name == text
+        } else {
+            name.eq_ignore_ascii_case(text)
+        }
+    }
     match convention {
-        TestName::Prefix(text) => name
-            .get(..text.len())
-            .is_some_and(|head| head.eq_ignore_ascii_case(text)),
+        TestName::Prefix(text) => name.get(..text.len()).is_some_and(|head| eq(head, text)),
         TestName::Suffix(text) => match name.len().checked_sub(text.len()) {
-            Some(start) => name
-                .get(start..)
-                .is_some_and(|tail| tail.eq_ignore_ascii_case(text)),
+            Some(start) => name.get(start..).is_some_and(|tail| eq(tail, text)),
             None => false,
         },
-        TestName::Contains(text) => name
-            .as_bytes()
-            .windows(text.len())
-            .any(|window| window.eq_ignore_ascii_case(text.as_bytes())),
+        TestName::Contains(text) => {
+            if text.bytes().any(|b| b.is_ascii_uppercase()) {
+                name.contains(text)
+            } else {
+                name.as_bytes()
+                    .windows(text.len())
+                    .any(|window| window.eq_ignore_ascii_case(text.as_bytes()))
+            }
+        }
     }
 }
 
@@ -471,6 +486,19 @@ mod tests {
         // `foo_test.go` is Go's convention, not Rust's reading of `_test`.
         assert!(!is_test_path("src/parser_helpers.py"));
         assert!(!is_test_path("src/Widget.java"));
+
+        // Capitalised conventions match exactly, so ordinary names that merely
+        // end in `it`/`test`/`tests` stay under review: case-insensitive
+        // matching would exile `Unit.java`, `Latest.java` and `latest.cpp`.
+        assert!(!is_test_path("src/Unit.java"));
+        assert!(!is_test_path("src/Commit.java"));
+        assert!(!is_test_path("src/Submit.java"));
+        assert!(!is_test_path("src/Latest.java"));
+        assert!(!is_test_path("src/latest.cpp"));
+        assert!(!is_test_path("src/Contest.kt"));
+        assert!(!is_test_path("src/Contests.swift"));
+        assert!(!is_test_path("src/Latest.cs"));
+        assert!(!is_test_path("app/Latest.php"));
     }
 
     #[test]

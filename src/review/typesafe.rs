@@ -190,8 +190,14 @@ pub fn mechanism_criteria(path: &str, dimension: Dimension) -> Value {
     choice_criteria(&mechanisms_for(dimension, Language::from_path(path)))
 }
 
-/// Builds a `choice` criteria map from a name→description slice, preserving
-/// order (the prototype keeps `noIssue` last).
+/// Builds a `choice` criteria map from a name→description slice.
+///
+/// The map does **not** preserve insertion order: this build of `serde_json`
+/// has no `preserve_order`, so keys serialize alphabetically and the
+/// `noIssue` sentinel is not last on the wire (probe: `{"a","b","noIssue",
+/// "other"}` in that order serializes as `a, b, noIssue, other`). Vocabulary
+/// order in `policy` documents reading order only; nothing may depend on the
+/// order the model receives.
 pub fn choice_criteria(entries: &[(&str, &str)]) -> Value {
     let mut map = Map::new();
     for (label, desc) in entries {

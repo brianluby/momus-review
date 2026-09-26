@@ -99,8 +99,10 @@ Read:
 ## Per-language security classes (2026-09-26, ticket #7)
 
 Discovery widened to the 20-language consensus set, and each language
-contributes its own screening mechanisms (`domain/policy.rs`
-`LANGUAGE_MECHANISMS`). The security additions, by class:
+contributes its own classification mechanisms (`domain/policy.rs`
+`LANGUAGE_MECHANISMS`) — the security screen's focus is unchanged; the
+per-language rows are what `locate` may classify a located signal as. The
+security additions, by class:
 
 | mechanism | languages | OWASP / CWE | evaluator category |
 |---|---|---|---|

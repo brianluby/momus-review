@@ -27,24 +27,24 @@ classes this adds.
 | language | extensions | test naming | test-body markers |
 |---|---|---|---|
 | Python | `.py` `.pyi` `.pyw` | `test_*`, `*_test` | `def test`, `self.assert`, `pytest.raises`, `unittest` |
-| JavaScript | `.js` `.jsx` `.mjs` `.cjs` | `*.spec.*`, `*.test.*` | `describe(`, `it(`, `test(`, `expect(` |
+| JavaScript | `.js` `.jsx` `.mjs` `.cjs` | `*.spec.*`, `*.test.*` | `describe(`/`describe.`, `it(`/`it.`, `test(`/`test.`, `expect(` |
 | TypeScript | `.ts` `.tsx` `.mts` `.cts` | `*.spec.*`, `*.test.*` | as JavaScript |
 | Java | `.java` | `*Test`, `*Tests`, `*IT`, `*Spec` | `@Test`, `assertEquals`, `assertThat(`, `assertThrows(` |
-| C# | `.cs` | `*Test`, `*Tests` | `[Fact]`, `[Theory]`, `Assert.` |
-| C++ | `.cpp` `.cc` `.cxx` `.hpp` `.hh` `.hxx` `.h` | `test_*`, `*_test`, `*Test` | `TEST(`, `TEST_F(`, `EXPECT_`, `ASSERT_` |
+| C# | `.cs` | `*Test`, `*Tests` | `[Fact]`, `[Theory]`, `[Test]`, `Assert.` |
+| C++ | `.cpp` `.cc` `.cxx` `.hpp` `.hh` `.hxx` `.h` | `test_*`, `*_test`, `*Test` | `TEST(`, `TEST_F(`, `EXPECT_`, `ASSERT_`, `CHECK(` |
 | C | `.c` | `test_*`, `*_test`, `*Test` | as C++ |
-| Go | `.go` | `*_test` | `func Test`, `t.Error`, `t.Fatal`, `t.Run(` |
-| Rust | `.rs` | `*_test` | `#[test]`, `#[tokio::test]`, `#[cfg(test)]` |
-| PHP | `.php` | `*Test` | `function test`, `assertSame(`, `@test` |
-| Ruby | `.rb` `.rake` | `*_spec`, `*_test` | `describe `, `context `, `it `, `expect(` |
-| Kotlin | `.kt` `.kts` | `*Test`, `*Tests`, `*Spec` | `@Test`, `assertEquals`, `assertThat(` |
+| Go | `.go` | `*_test` | `func Test`, `t.Error`, `t.Fatal`, `t.Run(`, `t.Parallel(` |
+| Rust | `.rs` | `*_test` | `#[test]`, `#[tokio::test]`, `#[cfg(test)]`, `fn ` |
+| PHP | `.php` | `*Test` | `function test`, `assertSame(`, `assertTrue(`, `expectException(`, `@test` |
+| Ruby | `.rb` `.rake` | `*_spec`, `*_test` | `describe `, `context `, `it `, `expect(`, `assert_` |
+| Kotlin | `.kt` `.kts` | `*Test`, `*Tests`, `*Spec` | `@Test`, `assertEquals`, `assertThat(`, `assertThrows(` |
 | Swift | `.swift` | `*Test`, `*Tests` | `XCTAssert`, `func test` |
 | Shell | `.sh` `.bash` `.zsh` `.bats` | `*.bats`, `test_*` | `@test`, `assert_`, `bats_` |
 | SQL | `.sql` | — | — |
 | R | `.r` | `test-*` | `test_that(`, `expect_`, `context(` |
 | Scala | `.scala` `.sc` | `*Spec`, `*Test`, `*Suite` | `"should"`, `should `, `expect(`, `assert(` |
-| Dart | `.dart` | `*_test` | `test(`, `expect(`, `group(` |
-| Lua | `.lua` | `*_spec` | `describe(`, `it(`, `assert_equal` |
+| Dart | `.dart` | `*_test` | `test(`, `expect(`, `group(`, `setUp(` |
+| Lua | `.lua` | `*_spec` | `describe(`, `it(`, `assert(`, `assert_equal` |
 | PowerShell | `.ps1` `.psm1` `.psd1` | `*Tests.ps1`, `*.tests.*` | `describe `, `should `, `assert-` |
 
 Directory conventions shared by every language, at any depth: `test/`,
@@ -62,8 +62,13 @@ overwhelmingly C++, and the two vocabularies share `useAfterFree`).
 Dimensions stay fixed (correctness, security, reliability, compatibility, test
 gap); the `choice` vocabulary for the mechanism question sharpens per language.
 `policy::mechanisms_for(dimension, language)` returns the generic entries with
-the language's additions spliced ahead of the `other` sentinel, so `other` and
-`noIssue` keep their positions and a language never shadows a generic key.
+the language's additions spliced ahead of the `other` sentinel, so the
+vocabulary keeps its reading order and a language never shadows a generic key.
+Keys are what the wire criteria map carries, not positions: the map serializes
+through `serde_json::Map`, so it is unordered (`noIssue` is *not* last —
+`review/typesafe.rs` records the probe). A key shared by several languages
+carries exactly one definition, which is what keeps the single SARIF rule per
+`{dimension}/{mechanism}` honest.
 
 Examples: Rust `unsafeBlock` / `unwrapPanic` / `panicPath`, TypeScript
 `anyEscape` / `uncheckedCast` / `nonNullAssertion`, Go `ignoredError` /

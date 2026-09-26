@@ -104,8 +104,10 @@ pub const CONCURRENCY: usize = 3;
 // ---- Vocabularies (per-dimension mechanisms; rubrics; owners) ---------
 
 /// `mechanisms[d]`: the per-dimension `choice` vocabulary (name → description).
-/// Order is preserved so the `noIssue` sentinel always sorts last in the wire
-/// criteria map, matching the prototype.
+/// The order here is the reading order this vocabulary is documented in (the
+/// `noIssue` sentinel last); it is *not* preserved on the wire, because the
+/// criteria map serializes through `serde_json::Map` — see
+/// `review::typesafe::choice_criteria`.
 pub fn mechanisms(d: Dimension) -> &'static [(&'static str, &'static str)] {
     match d {
         Dimension::Correctness => &[
@@ -170,8 +172,11 @@ pub fn mechanisms(d: Dimension) -> &'static [(&'static str, &'static str)] {
 ///
 /// A key is shared across languages only when it means exactly the same thing
 /// in both (`useAfterFree` for C and C++, `nonNullAssertion` for TS/Kotlin/
-/// Swift/Dart), so `explain::mechanism_title` can stay keyed on
-/// dimension + key alone. Dimensions where a language adds nothing are
+/// Swift/Dart) — and a shared key carries one description, not one per
+/// language. That is what lets `explain::mechanism_title` stay keyed on
+/// dimension + key, and what keeps the single SARIF rule for
+/// `{dimension}/{mechanism}` from rendering one finding's help text for
+/// another's. Dimensions where a language adds nothing are
 /// omitted rather than padded: `testGap` is deliberately language-free — its
 /// generic `branch`/`failure`/`boundary`/`integration` entries already name
 /// every test gap worth flagging.
@@ -197,8 +202,8 @@ const LANGUAGE_MECHANISMS: &[(Language, Dimension, &[(&str, &str)])] = &[
         Dimension::Correctness,
         &[
             ("anyEscape", "`any` (explicit or inferred) discards the types the rest of the code relies on"),
-            ("uncheckedCast", "A cast (`as`) is applied without validating the runtime type"),
-            ("nonNullAssertion", "A non-null assertion (`!`) skips a real null or undefined check"),
+            ("uncheckedCast", "A cast is applied without validating the runtime type"),
+            ("nonNullAssertion", "A non-null assertion or forced unwrap skips a real null check"),
         ],
     ),
     (
@@ -206,13 +211,13 @@ const LANGUAGE_MECHANISMS: &[(Language, Dimension, &[(&str, &str)])] = &[
         Dimension::Security,
         &[
             ("prototypePollution", "Untrusted keys are merged into an object, reaching its prototype"),
-            ("dynamicCodeExecution", "Untrusted text is executed as code (`eval`, `new Function`)"),
+            ("dynamicCodeExecution", "Untrusted data is executed as code by an eval or shell-out primitive"),
         ],
     ),
     (
         Language::TypeScript,
         Dimension::Reliability,
-        &[("unawaitedPromise", "A promise is created but never awaited or returned, so its failure is unobserved")],
+        &[("unawaitedPromise", "A promise or future is created but never awaited or returned, so its failure is unobserved")],
     ),
     // ---- JavaScript ----
     (
@@ -229,13 +234,13 @@ const LANGUAGE_MECHANISMS: &[(Language, Dimension, &[(&str, &str)])] = &[
         Dimension::Security,
         &[
             ("prototypePollution", "Untrusted keys are merged into an object, reaching its prototype"),
-            ("dynamicCodeExecution", "Untrusted text is executed as code (`eval`, `new Function`)"),
+            ("dynamicCodeExecution", "Untrusted data is executed as code by an eval or shell-out primitive"),
         ],
     ),
     (
         Language::JavaScript,
         Dimension::Reliability,
-        &[("unawaitedPromise", "A promise is created but never awaited or returned, so its failure is unobserved")],
+        &[("unawaitedPromise", "A promise or future is created but never awaited or returned, so its failure is unobserved")],
     ),
     // ---- Python ----
     (
@@ -250,7 +255,7 @@ const LANGUAGE_MECHANISMS: &[(Language, Dimension, &[(&str, &str)])] = &[
         Language::Python,
         Dimension::Security,
         &[
-            ("dynamicCodeExecution", "Untrusted text is executed as code (`eval`, `exec`)"),
+            ("dynamicCodeExecution", "Untrusted data is executed as code by an eval or shell-out primitive"),
             ("assertForValidation", "An input or authorization check is enforced only by `assert`, which optimized builds remove"),
         ],
     ),
@@ -258,8 +263,8 @@ const LANGUAGE_MECHANISMS: &[(Language, Dimension, &[(&str, &str)])] = &[
         Language::Python,
         Dimension::Reliability,
         &[
-            ("swallowedException", "A caught exception is discarded or logged instead of handled"),
-            ("resourceLeak", "A resource is not closed on every path (no `with`/`finally`)"),
+            ("swallowedException", "A caught or rescued error is discarded instead of handled"),
+            ("resourceLeak", "A resource is not released on every path (no scoped cleanup)"),
         ],
     ),
     // ---- Java ----
@@ -280,8 +285,8 @@ const LANGUAGE_MECHANISMS: &[(Language, Dimension, &[(&str, &str)])] = &[
         Language::Java,
         Dimension::Reliability,
         &[
-            ("swallowedException", "A caught exception is discarded or logged instead of handled"),
-            ("resourceLeak", "A resource is not closed on every path (no try-with-resources)"),
+            ("swallowedException", "A caught or rescued error is discarded instead of handled"),
+            ("resourceLeak", "A resource is not released on every path (no scoped cleanup)"),
         ],
     ),
     (
@@ -303,7 +308,7 @@ const LANGUAGE_MECHANISMS: &[(Language, Dimension, &[(&str, &str)])] = &[
         Dimension::Reliability,
         &[
             ("asyncVoid", "An `async void` method cannot be awaited, so its failure escapes the caller"),
-            ("resourceLeak", "A resource is not closed on every path (no `using`)"),
+            ("resourceLeak", "A resource is not released on every path (no scoped cleanup)"),
         ],
     ),
     // ---- C ----
@@ -422,35 +427,35 @@ const LANGUAGE_MECHANISMS: &[(Language, Dimension, &[(&str, &str)])] = &[
         Dimension::Security,
         &[
             ("massAssignment", "Request parameters are assigned to a model without an allowlist"),
-            ("dynamicCodeExecution", "Untrusted text is executed as code (`eval`, `send`)"),
+            ("dynamicCodeExecution", "Untrusted data is executed as code by an eval or shell-out primitive"),
         ],
     ),
     (
         Language::Ruby,
         Dimension::Reliability,
-        &[("swallowedException", "A rescued exception is discarded instead of handled")],
+        &[("swallowedException", "A caught or rescued error is discarded instead of handled")],
     ),
     // ---- Kotlin ----
     (
         Language::Kotlin,
         Dimension::Correctness,
         &[
-            ("nonNullAssertion", "A non-null assertion (`!!`) skips a real null check"),
+            ("nonNullAssertion", "A non-null assertion or forced unwrap skips a real null check"),
             ("platformTypeNullness", "A Java platform type is treated as non-null without a check"),
-            ("uncheckedCast", "A cast (`as`) is applied without validating the runtime type"),
+            ("uncheckedCast", "A cast is applied without validating the runtime type"),
         ],
     ),
     (
         Language::Kotlin,
         Dimension::Reliability,
-        &[("blockingInAsyncContext", "A blocking call inside a coroutine or `runBlocking` stalls the threads it shares")],
+        &[("blockingInAsyncContext", "A blocking call inside an async execution context stalls the threads it shares")],
     ),
     // ---- Swift ----
     (
         Language::Swift,
         Dimension::Correctness,
         &[
-            ("nonNullAssertion", "A forced unwrap (`!`) skips a real null check"),
+            ("nonNullAssertion", "A non-null assertion or forced unwrap skips a real null check"),
             ("forcedCast", "A forced cast (`as!`) traps instead of handling a mismatch"),
             ("silentOptionalChain", "An optional chain short-circuits and the failure is never handled"),
         ],
@@ -473,8 +478,8 @@ const LANGUAGE_MECHANISMS: &[(Language, Dimension, &[(&str, &str)])] = &[
         Language::Shell,
         Dimension::Security,
         &[
-            ("unquotedExpansion", "An unquoted expansion word-splits or globs, so untrusted text becomes extra arguments"),
-            ("dynamicCodeExecution", "Untrusted text is executed as code (`eval`, `sh -c`)"),
+            ("unquotedExpansion", "An unquoted expansion splits or globs, so untrusted text becomes extra arguments"),
+            ("dynamicCodeExecution", "Untrusted data is executed as code by an eval or shell-out primitive"),
         ],
     ),
     (
@@ -519,34 +524,34 @@ const LANGUAGE_MECHANISMS: &[(Language, Dimension, &[(&str, &str)])] = &[
         Dimension::Correctness,
         &[
             ("platformTypeNullness", "A Java platform type is treated as non-null without a check"),
-            ("uncheckedCast", "A cast (`asInstanceOf`) is applied without validating the runtime type"),
+            ("uncheckedCast", "A cast is applied without validating the runtime type"),
         ],
     ),
     (
         Language::Scala,
         Dimension::Reliability,
-        &[("blockingInAsyncContext", "A blocking call inside a `Future` or execution context stalls the threads it shares")],
+        &[("blockingInAsyncContext", "A blocking call inside an async execution context stalls the threads it shares")],
     ),
     // ---- Dart ----
     (
         Language::Dart,
         Dimension::Correctness,
         &[
-            ("nonNullAssertion", "A non-null assertion (`!`) skips a real null check"),
-            ("uncheckedCast", "A cast (`as`) is applied without validating the runtime type"),
+            ("nonNullAssertion", "A non-null assertion or forced unwrap skips a real null check"),
+            ("uncheckedCast", "A cast is applied without validating the runtime type"),
         ],
     ),
     (
         Language::Dart,
         Dimension::Reliability,
-        &[("unawaitedPromise", "A future is created but never awaited or returned, so its failure is unobserved")],
+        &[("unawaitedPromise", "A promise or future is created but never awaited or returned, so its failure is unobserved")],
     ),
     // ---- Lua ----
     (
         Language::Lua,
         Dimension::Correctness,
         &[
-            ("implicitGlobal", "A missing `local` creates or clobbers a global"),
+            ("implicitGlobal", "A missing declaration creates or clobbers a global"),
             ("nilArithmetic", "A field or upvalue that may be `nil` is used in arithmetic or indexing"),
         ],
     ),
@@ -560,8 +565,8 @@ const LANGUAGE_MECHANISMS: &[(Language, Dimension, &[(&str, &str)])] = &[
         Language::PowerShell,
         Dimension::Security,
         &[
-            ("unquotedExpansion", "An unquoted argument splits or globs, so untrusted text becomes extra arguments"),
-            ("dynamicCodeExecution", "Untrusted text is executed as code (`Invoke-Expression`, `&`)"),
+            ("unquotedExpansion", "An unquoted expansion splits or globs, so untrusted text becomes extra arguments"),
+            ("dynamicCodeExecution", "Untrusted data is executed as code by an eval or shell-out primitive"),
         ],
     ),
     (
@@ -586,9 +591,11 @@ pub fn language_mechanism_rows() -> &'static [(Language, Dimension, &'static [(&
 }
 
 /// The full `choice` vocabulary for a dimension: the generic entries plus the
-/// file's language-specific ones, spliced ahead of the `other` sentinel so
-/// `other` and `noIssue` stay in their established positions. Pass `None` when
-/// the file's language is unknown.
+/// file's language-specific ones. Additions are spliced ahead of the `other`
+/// sentinel, so the returned slice keeps the established reading order
+/// (generic entries, then the language's, then `other`/`noIssue`); the wire
+/// map is keyed, not ordered. Pass `None` when the file's language is
+/// unknown.
 pub fn mechanisms_for(d: Dimension, language: Option<Language>) -> Vec<(&'static str, &'static str)> {
     let generic = mechanisms(d);
     let additions = language.map_or(&[][..], |lang| language_mechanisms(d, lang));
@@ -735,6 +742,31 @@ mod tests {
             .collect();
         assert!(ts.contains(&"anyEscape"));
         assert!(ts.contains(&"uncheckedCast"));
+    }
+
+    /// One key, one definition. The SARIF rule id is
+    /// `{dimension}/{mechanism}` with a single shared help text, so a key
+    /// whose prose varied by language would render one finding's help for
+    /// another's; `why` must not depend on which finding came first either.
+    #[test]
+    fn each_mechanism_key_has_one_definition() {
+        for d in DIMENSIONS {
+            let mut seen: Vec<(&str, &str)> = mechanisms(d).to_vec();
+            for (_, _, entries) in language_mechanism_rows()
+                .iter()
+                .filter(|(_, dimension, _)| *dimension == d)
+            {
+                for (key, description) in *entries {
+                    match seen.iter().find(|(seen_key, _)| seen_key == key) {
+                        Some((_, first)) => assert_eq!(
+                            first, description,
+                            "{d:?}::{key} has more than one definition"
+                        ),
+                        None => seen.push((key, description)),
+                    }
+                }
+            }
+        }
     }
 
     #[test]
