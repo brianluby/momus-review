@@ -60,11 +60,13 @@ Read from the environment (or `.env`):
 
 To run against a local System One server such as
 [Winnow-12B](https://github.com/EldanRing/winnow-inference), point the base
-URL at it and set the model id the server advertises (Winnow's is
-`Winnow-12B`; it rejects the default `jev-latest` as an unknown model). No
-key is needed for `localhost`/loopback addresses. A local server may decide
-one request at a time, so concurrent requests queue behind it — lower the
-concurrency and raise the timeout if you see that:
+URL at it. Winnow accepts the default `jev-latest` as an input alias (the
+response identifies the loaded model), so no model override is needed;
+`TYPESAFE_DEFAULT_MODEL=Winnow-12B` is the explicit spelling of the id the
+server advertises, and other servers may require it. No key is needed for
+`localhost`/loopback addresses. A local server may decide one request at a
+time, so concurrent requests queue behind it — lower the concurrency and
+raise the timeout if you see that:
 
 ```bash
 TYPESAFE_BASE_URL=http://127.0.0.1:8091 TYPESAFE_DEFAULT_MODEL=Winnow-12B \

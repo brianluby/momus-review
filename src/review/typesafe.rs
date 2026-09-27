@@ -7,7 +7,8 @@
 //! HTTP, so the port speaks the wire format directly and matches the
 //! TypeScript SDK's `POST /v1/systemone` exactly.
 
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use std::time::Duration;
 
@@ -29,7 +30,10 @@ const MAX_RETRIES: usize = 3;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct Usage {
+    /// Winnow sends snake_case; a camelCase server would otherwise read as 0.
+    #[serde(alias = "inputTokens")]
     pub input_tokens: u64,
+    #[serde(alias = "outputTokens")]
     pub output_tokens: u64,
 }
 
@@ -143,7 +147,7 @@ pub struct TypeSafeClient {
     api_key: Option<String>,
     base_url: String,
     model: String,
-    usage: Arc<Mutex<UsageSummary>>,
+    usage: Arc<UsageMeter>,
 }
 
 impl TypeSafeClient {
@@ -159,7 +163,7 @@ impl TypeSafeClient {
             api_key,
             base_url,
             model,
-            usage: Arc::new(Mutex::new(UsageSummary::default())),
+            usage: Arc::new(UsageMeter::default()),
         })
     }
 
@@ -187,7 +191,7 @@ impl TypeSafeClient {
             let status = resp.status();
             if status.is_success() {
                 let resp: SystemOneResponse = resp.json().await?;
-                record_usage(&mut self.usage.lock().expect("usage meter lock"), resp.usage);
+                self.usage.record(resp.usage);
                 return Ok(resp);
             }
 
@@ -206,17 +210,36 @@ impl TypeSafeClient {
     /// Cumulative usage of every successful `system_one` call this client
     /// has made (shared across clones, so the whole review reports one total).
     pub fn usage_summary(&self) -> UsageSummary {
-        *self.usage.lock().expect("usage meter lock")
+        self.usage.summary()
     }
 }
 
-/// Adds one successful response to the running totals. Servers that omit
-/// `usage` (hosted Jev) still count the call; token sums stay unchanged.
-fn record_usage(totals: &mut UsageSummary, usage: Option<Usage>) {
-    totals.calls += 1;
-    if let Some(usage) = usage {
-        totals.input_tokens += usage.input_tokens;
-        totals.output_tokens += usage.output_tokens;
+/// Per-run usage counters. Atomics, not a mutex: `record` runs on the async
+/// request path after every successful call and must not block the executor.
+#[derive(Debug, Default)]
+struct UsageMeter {
+    calls: AtomicU64,
+    input_tokens: AtomicU64,
+    output_tokens: AtomicU64,
+}
+
+impl UsageMeter {
+    /// Adds one successful response. Servers that omit `usage` (hosted Jev)
+    /// still count the call; token sums stay unchanged.
+    fn record(&self, usage: Option<Usage>) {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        if let Some(usage) = usage {
+            self.input_tokens.fetch_add(usage.input_tokens, Ordering::Relaxed);
+            self.output_tokens.fetch_add(usage.output_tokens, Ordering::Relaxed);
+        }
+    }
+
+    fn summary(&self) -> UsageSummary {
+        UsageSummary {
+            calls: self.calls.load(Ordering::Relaxed),
+            input_tokens: self.input_tokens.load(Ordering::Relaxed),
+            output_tokens: self.output_tokens.load(Ordering::Relaxed),
+        }
     }
 }
 
@@ -337,14 +360,26 @@ mod tests {
         let hosted: SystemOneResponse =
             serde_json::from_str(r#"{ "model": "jev-latest", "answers": {} }"#).unwrap();
 
-        let mut totals = UsageSummary::default();
-        record_usage(&mut totals, winnow.usage);
-        record_usage(&mut totals, hosted.usage);
-        record_usage(&mut totals, Some(Usage { input_tokens: 8, output_tokens: 0 }));
+        let meter = UsageMeter::default();
+        meter.record(winnow.usage);
+        meter.record(hosted.usage);
+        meter.record(Some(Usage { input_tokens: 8, output_tokens: 0 }));
 
+        let totals = meter.summary();
         assert_eq!(totals.calls, 3);
         assert_eq!(totals.input_tokens, 120);
         assert_eq!(totals.output_tokens, 3);
+    }
+
+    /// A server that reports camelCase token keys still meters (serde alias).
+    #[test]
+    fn usage_accepts_camel_case_keys() {
+        let resp: SystemOneResponse = serde_json::from_str(
+            r#"{ "model": "x", "answers": {},
+                "usage": { "inputTokens": 10, "outputTokens": 4 } }"#,
+        )
+        .unwrap();
+        assert_eq!(resp.usage, Some(Usage { input_tokens: 10, output_tokens: 4 }));
     }
 
     #[test]
