@@ -24,6 +24,16 @@ use crate::review::explain::{self, MAX_ENRICH};
 use crate::review::merge_confidence;
 use crate::review::refine::{self, RefineCounts, Refiner};
 use crate::review::strategy::{Discovery, FileEntry, ReviewStrategy, Screening, Signal};
+use crate::review::typesafe::parse_positive;
+
+/// Parallel System One requests: `MOMUS_CONCURRENCY` if set, else the policy
+/// default. A local server usually wants 1; the hosted API handles more.
+fn concurrency_from_env() -> Result<usize> {
+    match std::env::var("MOMUS_CONCURRENCY") {
+        Ok(raw) if !raw.trim().is_empty() => parse_positive("MOMUS_CONCURRENCY", &raw),
+        _ => Ok(CONCURRENCY),
+    }
+}
 
 /// Per-run knobs beyond the scope and strategy. The default matches the CLI:
 /// unlimited follow-ups, refinement on, no feedback.
@@ -70,6 +80,7 @@ pub async fn run_review<S: ReviewStrategy>(
         .collect::<Vec<_>>()
         .join(" ");
 
+    let concurrency = concurrency_from_env()?;
     let Discovery { files, context_files } = strategy.discover(scopes)?;
     if files.is_empty() {
         return Err(anyhow!(
@@ -87,7 +98,7 @@ pub async fn run_review<S: ReviewStrategy>(
         strategy.context_label()
     ));
 
-    // 1. Screen: ordered, bounded concurrency (CONCURRENCY).
+    // 1. Screen: ordered, bounded concurrency (CONCURRENCY, or MOMUS_CONCURRENCY).
     let matrix: Vec<Screening<S::File>> = stream::iter(files)
         .map(|file| {
             let strategy = &strategy;
@@ -100,7 +111,7 @@ pub async fn run_review<S: ReviewStrategy>(
                     .map_err(|e| anyhow!("Screening {} failed: {e:#}", file.path()))
             }
         })
-        .buffered(CONCURRENCY)
+        .buffered(concurrency)
         .collect::<Vec<_>>()
         .await
         .into_iter()
@@ -143,7 +154,7 @@ pub async fn run_review<S: ReviewStrategy>(
                 strategy.profile(&screening.file, &screening.probabilities).await
             }
         })
-        .buffered(CONCURRENCY)
+        .buffered(concurrency)
         .collect::<Vec<_>>()
         .await
         .into_iter()
@@ -171,7 +182,7 @@ pub async fn run_review<S: ReviewStrategy>(
                 strategy.locate(&signal).await
             }
         })
-        .buffered(CONCURRENCY)
+        .buffered(concurrency)
         .collect::<Vec<_>>()
         .await
         .into_iter()
@@ -202,7 +213,7 @@ pub async fn run_review<S: ReviewStrategy>(
             client: strategy.client(),
             context: &context,
             log,
-            concurrency: CONCURRENCY,
+            concurrency,
         };
         (findings, refine_counts) = refine::refine(&refiner, findings).await;
     } else {
@@ -235,7 +246,7 @@ pub async fn run_review<S: ReviewStrategy>(
                     }
                 }
             })
-            .buffered(CONCURRENCY)
+            .buffered(concurrency)
             .collect::<Vec<_>>()
             .await;
         for (finding, (fix, test)) in findings.iter_mut().zip(suggestions) {
@@ -283,6 +294,7 @@ pub async fn run_review<S: ReviewStrategy>(
             exonerated_findings: refine_counts.exonerated,
             needs_human_findings: refine_counts.needs_human,
         },
+        usage: strategy.client().usage_summary(),
         findings,
         p_revert,
     })

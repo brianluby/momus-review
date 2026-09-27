@@ -117,7 +117,8 @@ and `--follow-ups N` re-imposes a cap in code.
 `ReviewReport` (`domain/report.rs`): mode, scope, dimensions, config snapshot,
 `screenedFiles`, `contextFiles`, full probability `matrix`, `profiles`,
 workflow funnel counts (including suppressed / clustered / exonerated /
-needs-human), and `findings` (file, line, dimension, mechanism +
+needs-human), per-run `usage` (successful calls, plus token totals when the
+server reports them), and `findings` (file, line, dimension, mechanism +
 confidences, severity + confidence, owner + confidence, action, the
 `evidence` excerpt, generated `title` / `why` / `fix` / `test`, and the
 refinement results `fingerprint`, `related`, `rank`, `taint`,
@@ -142,7 +143,10 @@ Per review: +5 profiles max, +1 locate chain per followed signal (unlimited by
 default; each up to 5 calls: evidence, mechanism, severity, meta-judge,
 owner), then refinement: dedupe ≤ 1 call per finding with a nearby kept
 finding, taint ≤ 2 × 12, counterfactual ≤ 2 × 12, ensemble ≤ 8, pairwise
-⌈15 / 5⌉ = 3; then +1 enrich call per finding up to the top 8. Codebase mode multiplies
-screening by region count (function-aware regions). No caching yet —
-re-scans resend everything. Budgets are static globals; value-of-information
+⌈15 / 5⌉ = 3; then +1 enrich call per finding up to the top 8. Codebase mode
+multiplies screening by region count (function-aware regions). Every
+response's `usage` block is accumulated per run into `report.usage` —
+`calls` always; token totals when the server reports them (Winnow does,
+hosted Jev does not). Latency is not metered. No caching yet — re-scans
+resend everything. Budgets are static globals; value-of-information
 selection is a roadmap item.

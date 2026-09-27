@@ -7,6 +7,9 @@
 //! HTTP, so the port speaks the wire format directly and matches the
 //! TypeScript SDK's `POST /v1/systemone` exactly.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
 use std::time::Duration;
 
 use anyhow::{Result, bail};
@@ -15,17 +18,32 @@ use serde_json::{Map, Value, json};
 
 use crate::domain::language::Language;
 use crate::domain::policy::{Dimension, mechanisms_for};
+use crate::domain::report::UsageSummary;
 
 const DEFAULT_BASE_URL: &str = "https://api.typesafe.ai";
 const DEFAULT_MODEL: &str = "jev-latest";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_RETRIES: usize = 3;
 
+/// Token usage attached to a `system_one` response. Winnow sends it on every
+/// response; hosted Jev omits the block.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct Usage {
+    /// Winnow sends snake_case; a camelCase server would otherwise read as 0.
+    #[serde(alias = "inputTokens")]
+    pub input_tokens: u64,
+    #[serde(alias = "outputTokens")]
+    pub output_tokens: u64,
+}
+
 /// A `system_one` response: the model id plus answers keyed by question name.
 #[derive(Debug, Deserialize)]
 pub struct SystemOneResponse {
     pub model: String,
     pub answers: Map<String, Value>,
+    #[serde(default)]
+    pub usage: Option<Usage>,
 }
 
 impl SystemOneResponse {
@@ -73,41 +91,80 @@ impl SystemOneResponse {
     }
 }
 
+/// Client settings resolved from the environment.
+#[derive(Debug, PartialEq)]
+struct ClientConfig {
+    api_key: Option<String>,
+    base_url: String,
+    model: String,
+    timeout: Duration,
+}
+
+impl ClientConfig {
+    /// Resolves settings through `lookup` (the environment in production).
+    /// The API key is required unless the base URL is a loopback address, so
+    /// a local System One server (e.g. Winnow) runs without one.
+    fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Self> {
+        let var = |name: &str| lookup(name).filter(|s| !s.trim().is_empty());
+
+        let base_url = var("TYPESAFE_BASE_URL")
+            .map(|s| s.trim().trim_end_matches('/').to_string())
+            .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+        let api_key = var("TYPESAFE_API_KEY");
+        if api_key.is_none() && !is_loopback(&base_url) {
+            bail!("TYPESAFE_API_KEY is not set (required unless TYPESAFE_BASE_URL is a local server)");
+        }
+        let model = var("TYPESAFE_DEFAULT_MODEL").unwrap_or_else(|| DEFAULT_MODEL.to_string());
+        let timeout = match var("TYPESAFE_TIMEOUT_SECS") {
+            Some(raw) => Duration::from_secs(parse_positive("TYPESAFE_TIMEOUT_SECS", &raw)? as u64),
+            None => DEFAULT_TIMEOUT,
+        };
+        Ok(Self { api_key, base_url, model, timeout })
+    }
+}
+
+/// Whether `url` points at this machine (`localhost`, `127.0.0.0/8`, `::1`).
+fn is_loopback(url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url) else { return false };
+    let Some(host) = parsed.host_str() else { return false };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost")
+        || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+}
+
+/// Parses a positive integer setting, naming the variable on error.
+pub fn parse_positive(name: &str, raw: &str) -> Result<usize> {
+    match raw.trim().parse::<usize>() {
+        Ok(n) if n > 0 => Ok(n),
+        _ => bail!("{name} must be a positive integer, got '{raw}'"),
+    }
+}
+
 /// A client for the TypeSafe API, constructed from the environment.
 #[derive(Clone)]
 pub struct TypeSafeClient {
     http: reqwest::Client,
-    api_key: String,
+    api_key: Option<String>,
     base_url: String,
     model: String,
+    usage: Arc<UsageMeter>,
 }
 
 impl TypeSafeClient {
-    /// Reads `TYPESAFE_API_KEY` (required), `TYPESAFE_BASE_URL`, and
-    /// `TYPESAFE_DEFAULT_MODEL` from the environment.
+    /// Reads `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`, `TYPESAFE_DEFAULT_MODEL`,
+    /// and `TYPESAFE_TIMEOUT_SECS` from the environment. The key is required
+    /// unless the base URL is a local server.
     pub fn from_env() -> Result<Self> {
-        let api_key = std::env::var("TYPESAFE_API_KEY")
-            .map_err(|_| anyhow::anyhow!("TYPESAFE_API_KEY is not set"))
-            .and_then(|k| {
-                if k.trim().is_empty() {
-                    Err(anyhow::anyhow!("TYPESAFE_API_KEY is empty"))
-                } else {
-                    Ok(k)
-                }
-            })?;
-        let base_url = std::env::var("TYPESAFE_BASE_URL")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
-        let model = std::env::var("TYPESAFE_DEFAULT_MODEL")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| DEFAULT_MODEL.to_string());
-
-        let http = reqwest::Client::builder()
-            .timeout(DEFAULT_TIMEOUT)
-            .build()?;
-        Ok(Self { http, api_key, base_url, model })
+        let ClientConfig { api_key, base_url, model, timeout } =
+            ClientConfig::from_lookup(|name| std::env::var(name).ok())?;
+        let http = reqwest::Client::builder().timeout(timeout).build()?;
+        Ok(Self {
+            http,
+            api_key,
+            base_url,
+            model,
+            usage: Arc::new(UsageMeter::default()),
+        })
     }
 
     /// Evaluates one `system_one` request: a state plus a map of named
@@ -118,14 +175,11 @@ impl TypeSafeClient {
         let body = json!({ "state": state, "questions": questions, "model": self.model });
 
         for attempt in 0..=MAX_RETRIES {
-            let resp = match self
-                .http
-                .post(&url)
-                .bearer_auth(&self.api_key)
-                .json(&body)
-                .send()
-                .await
-            {
+            let mut request = self.http.post(&url).json(&body);
+            if let Some(key) = &self.api_key {
+                request = request.bearer_auth(key);
+            }
+            let resp = match request.send().await {
                 Ok(resp) => resp,
                 Err(e) if is_retryable_transport(&e) && attempt < MAX_RETRIES => {
                     backoff(attempt).await;
@@ -136,7 +190,9 @@ impl TypeSafeClient {
 
             let status = resp.status();
             if status.is_success() {
-                return Ok(resp.json().await?);
+                let resp: SystemOneResponse = resp.json().await?;
+                self.usage.record(resp.usage);
+                return Ok(resp);
             }
 
             let text = resp.text().await.unwrap_or_default();
@@ -147,6 +203,43 @@ impl TypeSafeClient {
             bail!("system_one failed ({status}): {text}");
         }
         unreachable!("retry loop always returns or errors")
+    }
+}
+
+impl TypeSafeClient {
+    /// Cumulative usage of every successful `system_one` call this client
+    /// has made (shared across clones, so the whole review reports one total).
+    pub fn usage_summary(&self) -> UsageSummary {
+        self.usage.summary()
+    }
+}
+
+/// Per-run usage counters. Atomics, not a mutex: `record` runs on the async
+/// request path after every successful call and must not block the executor.
+#[derive(Debug, Default)]
+struct UsageMeter {
+    calls: AtomicU64,
+    input_tokens: AtomicU64,
+    output_tokens: AtomicU64,
+}
+
+impl UsageMeter {
+    /// Adds one successful response. Servers that omit `usage` (hosted Jev)
+    /// still count the call; token sums stay unchanged.
+    fn record(&self, usage: Option<Usage>) {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        if let Some(usage) = usage {
+            self.input_tokens.fetch_add(usage.input_tokens, Ordering::Relaxed);
+            self.output_tokens.fetch_add(usage.output_tokens, Ordering::Relaxed);
+        }
+    }
+
+    fn summary(&self) -> UsageSummary {
+        UsageSummary {
+            calls: self.calls.load(Ordering::Relaxed),
+            input_tokens: self.input_tokens.load(Ordering::Relaxed),
+            output_tokens: self.output_tokens.load(Ordering::Relaxed),
+        }
     }
 }
 
@@ -210,9 +303,93 @@ pub fn choice_criteria(entries: &[(&str, &str)]) -> Value {
 pub fn score_criteria(levels: &[&str]) -> Value {
     Value::Array(levels.iter().map(|l| Value::String((*l).to_string())).collect())
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn config(vars: &[(&str, &str)]) -> Result<ClientConfig> {
+        ClientConfig::from_lookup(|name| {
+            vars.iter().find(|(k, _)| *k == name).map(|(_, v)| (*v).to_string())
+        })
+    }
+
+    #[test]
+    fn hosted_api_requires_a_key() {
+        assert!(config(&[]).is_err());
+        assert!(config(&[("TYPESAFE_API_KEY", "  ")]).is_err());
+        let c = config(&[("TYPESAFE_API_KEY", "k")]).unwrap();
+        assert_eq!(c.api_key.as_deref(), Some("k"));
+        assert_eq!(c.base_url, DEFAULT_BASE_URL);
+        assert_eq!(c.model, DEFAULT_MODEL);
+        assert_eq!(c.timeout, DEFAULT_TIMEOUT);
+    }
+
+    #[test]
+    fn local_server_runs_without_a_key() {
+        let c = config(&[("TYPESAFE_BASE_URL", "http://127.0.0.1:8091/")]).unwrap();
+        assert_eq!(c.api_key, None);
+        assert_eq!(c.base_url, "http://127.0.0.1:8091");
+    }
+
+    #[test]
+    fn remote_base_url_still_requires_a_key() {
+        assert!(config(&[("TYPESAFE_BASE_URL", "http://gpu-box.lan:8091")]).is_err());
+    }
+
+    #[test]
+    fn loopback_detection() {
+        assert!(is_loopback("http://localhost:8091"));
+        assert!(is_loopback("http://127.0.0.2"));
+        assert!(is_loopback("http://[::1]:8091"));
+        assert!(!is_loopback("https://api.typesafe.ai"));
+        assert!(!is_loopback("http://localhost.example.com"));
+        assert!(!is_loopback("not a url"));
+    }
+
+    /// Winnow attaches `usage` to every response; hosted Jev omits it. Both
+    /// parse, and the meter counts calls either way, summing tokens only when
+    /// they are reported.
+    #[test]
+    fn usage_is_optional_and_accumulates() {
+        let winnow: SystemOneResponse = serde_json::from_str(
+            r#"{ "model": "Winnow-12B", "answers": {},
+                "usage": { "input_tokens": 112, "output_tokens": 3 } }"#,
+        )
+        .unwrap();
+        let hosted: SystemOneResponse =
+            serde_json::from_str(r#"{ "model": "jev-latest", "answers": {} }"#).unwrap();
+
+        let meter = UsageMeter::default();
+        meter.record(winnow.usage);
+        meter.record(hosted.usage);
+        meter.record(Some(Usage { input_tokens: 8, output_tokens: 0 }));
+
+        let totals = meter.summary();
+        assert_eq!(totals.calls, 3);
+        assert_eq!(totals.input_tokens, 120);
+        assert_eq!(totals.output_tokens, 3);
+    }
+
+    /// A server that reports camelCase token keys still meters (serde alias).
+    #[test]
+    fn usage_accepts_camel_case_keys() {
+        let resp: SystemOneResponse = serde_json::from_str(
+            r#"{ "model": "x", "answers": {},
+                "usage": { "inputTokens": 10, "outputTokens": 4 } }"#,
+        )
+        .unwrap();
+        assert_eq!(resp.usage, Some(Usage { input_tokens: 10, output_tokens: 4 }));
+    }
+
+    #[test]
+    fn timeout_is_configurable_and_validated() {
+        let local = ("TYPESAFE_BASE_URL", "http://localhost:8091");
+        let c = config(&[local, ("TYPESAFE_TIMEOUT_SECS", "300")]).unwrap();
+        assert_eq!(c.timeout, Duration::from_secs(300));
+        assert!(config(&[local, ("TYPESAFE_TIMEOUT_SECS", "0")]).is_err());
+        assert!(config(&[local, ("TYPESAFE_TIMEOUT_SECS", "soon")]).is_err());
+    }
 
     /// The chain that gives #7 its teeth: a file's path selects a vocabulary,
     /// and the classifier sees the language's own mechanisms *plus* the

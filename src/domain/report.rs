@@ -222,6 +222,17 @@ pub struct WorkflowCounts {
     pub needs_human_findings: usize,
 }
 
+/// Per-run System One usage accumulated across the whole review: successful
+/// calls plus token totals when the server reports them (hosted Jev omits
+/// usage, so only `calls` fills in there).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct UsageSummary {
+    pub calls: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
 /// The full review report. `#[serde(default)]` reproduces the prototype's
 /// deliberately loose `isReviewReport`: a report saved by an older version
 /// stays viewable.
@@ -238,6 +249,7 @@ pub struct ReviewReport {
     pub followed_signals: usize,
     pub profiles: Vec<FileProfile>,
     pub workflow: WorkflowCounts,
+    pub usage: UsageSummary,
     pub findings: Vec<Finding>,
     /// Uncalibrated heuristic P(revert) in [0, 1) from the review signals.
     /// A spike (see `review/merge_confidence.rs`); calibration is #17.
@@ -282,8 +294,11 @@ mod tests {
 
         let value = serde_json::to_value(&report).unwrap();
 
+        assert_eq!(value["usage"]["calls"], 0);
+        assert_eq!(value["usage"]["inputTokens"], 0);
         assert_eq!(value["screenedFiles"], 1);
         assert_eq!(value["screened_files"], serde_json::Value::Null);
+        assert_eq!(value["usage"]["input_tokens"], serde_json::Value::Null);
         assert_eq!(value["matrix"][0]["testGap"], 0.93);
         assert_eq!(value["findings"][0]["dimension"], "testGap");
         assert_eq!(value["findings"][0]["action"], "request_changes");
@@ -299,6 +314,7 @@ mod tests {
         .unwrap();
         assert_eq!(report.scope, "x");
         assert_eq!(report.screened_files, 3);
+        assert_eq!(report.usage.calls, 0);
         assert_eq!(report.findings.len(), 0);
     }
 }

@@ -46,6 +46,36 @@ human, and ranks the top findings pairwise. Results land in a quiet local
 dashboard and machine-readable JSON; 👍/👎/Hide in the dashboard tunes
 per-dimension thresholds and suppresses findings on the next run.
 
+## Configuration
+
+Read from the environment (or `.env`):
+
+| variable | default | purpose |
+|---|---|---|
+| `TYPESAFE_API_KEY` | — | API key; required unless the base URL is a local server |
+| `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | any server speaking `POST /v1/systemone` |
+| `TYPESAFE_DEFAULT_MODEL` | `jev-latest` | model id sent with each request |
+| `TYPESAFE_TIMEOUT_SECS` | `60` | per-request timeout |
+| `MOMUS_CONCURRENCY` | `3` | parallel `system_one` requests |
+
+To run against a local System One server such as
+[Winnow-12B](https://github.com/EldanRing/winnow-inference), point the base
+URL at it. Winnow accepts the default `jev-latest` as an input alias (the
+response identifies the loaded model), so no model override is needed;
+`TYPESAFE_DEFAULT_MODEL=Winnow-12B` is the explicit spelling of the id the
+server advertises, and other servers may require it. No key is needed for
+`localhost`/loopback addresses. A local server may decide one request at a
+time, so concurrent requests queue behind it — lower the concurrency and
+raise the timeout if you see that:
+
+```bash
+TYPESAFE_BASE_URL=http://127.0.0.1:8091 TYPESAFE_DEFAULT_MODEL=Winnow-12B \
+  MOMUS_CONCURRENCY=1 TYPESAFE_TIMEOUT_SECS=300 momus review
+```
+
+Screening thresholds in `src/domain/policy.rs` were tuned against hosted Jev
+and may need recalibrating for another model.
+
 ## Why Jev, Why This Shape
 
 Jev is a decision model: typed questions (`noul`/`choice`/`score`) against a
@@ -55,7 +85,8 @@ only for bounded judgments. That gives:
 
 - Cost control: screen everything cheaply, follow up every threshold signal
   (unlimited by default, cap via `--follow-ups N`), so no finding is silently
-  dropped by an arbitrary budget
+  dropped by an arbitrary budget; every report carries per-run `usage`
+  (call count, plus token totals when the server reports them)
 - Calibration: probabilities mean something, so thresholds and routing work
 - Composability: narrow calls chain into taint analysis, meta-judgment,
   pairwise ranking — things monolithic prompts fumble
