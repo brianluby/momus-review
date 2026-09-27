@@ -53,8 +53,10 @@ The wiring checked against the live API, not fixtures: `momus review` and
 
 - `thiserror` error types replacing string errors — *pending*.
 - `gix` instead of shelling out to git (or keep `Command` — no shell either way) — *pending*.
-- Retry policy tuning + cost/latency metering per run — *done* (transient
-  `429`/`529`/`5xx` + connection/timeout with backoff in `typesafe.rs`).
+- Retry policy tuning — *done* (transient `429`/`529`/`5xx` +
+  connection/timeout with backoff in `typesafe.rs`). Per-run cost metering —
+  *done* (`usage` in every report: successful calls + server-reported token
+  totals). Latency metering — *pending*.
 - `clap` subcommands — *done*: `momus review [paths…]`, `momus scan [paths…]`,
   `momus dashboard`, with `--exclude`, `--follow-ups N`, and
   `--fail-on-blocking`; plus the `momus-eval` golden-set harness. (`momus

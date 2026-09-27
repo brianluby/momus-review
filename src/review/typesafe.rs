@@ -7,6 +7,8 @@
 //! HTTP, so the port speaks the wire format directly and matches the
 //! TypeScript SDK's `POST /v1/systemone` exactly.
 
+use std::sync::{Arc, Mutex};
+
 use std::time::Duration;
 
 use anyhow::{Result, bail};
@@ -15,17 +17,29 @@ use serde_json::{Map, Value, json};
 
 use crate::domain::language::Language;
 use crate::domain::policy::{Dimension, mechanisms_for};
+use crate::domain::report::UsageSummary;
 
 const DEFAULT_BASE_URL: &str = "https://api.typesafe.ai";
 const DEFAULT_MODEL: &str = "jev-latest";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_RETRIES: usize = 3;
 
+/// Token usage attached to a `system_one` response. Winnow sends it on every
+/// response; hosted Jev omits the block.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct Usage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
 /// A `system_one` response: the model id plus answers keyed by question name.
 #[derive(Debug, Deserialize)]
 pub struct SystemOneResponse {
     pub model: String,
     pub answers: Map<String, Value>,
+    #[serde(default)]
+    pub usage: Option<Usage>,
 }
 
 impl SystemOneResponse {
@@ -129,6 +143,7 @@ pub struct TypeSafeClient {
     api_key: Option<String>,
     base_url: String,
     model: String,
+    usage: Arc<Mutex<UsageSummary>>,
 }
 
 impl TypeSafeClient {
@@ -139,7 +154,13 @@ impl TypeSafeClient {
         let ClientConfig { api_key, base_url, model, timeout } =
             ClientConfig::from_lookup(|name| std::env::var(name).ok())?;
         let http = reqwest::Client::builder().timeout(timeout).build()?;
-        Ok(Self { http, api_key, base_url, model })
+        Ok(Self {
+            http,
+            api_key,
+            base_url,
+            model,
+            usage: Arc::new(Mutex::new(UsageSummary::default())),
+        })
     }
 
     /// Evaluates one `system_one` request: a state plus a map of named
@@ -165,7 +186,9 @@ impl TypeSafeClient {
 
             let status = resp.status();
             if status.is_success() {
-                return Ok(resp.json().await?);
+                let resp: SystemOneResponse = resp.json().await?;
+                record_usage(&mut self.usage.lock().expect("usage meter lock"), resp.usage);
+                return Ok(resp);
             }
 
             let text = resp.text().await.unwrap_or_default();
@@ -176,6 +199,24 @@ impl TypeSafeClient {
             bail!("system_one failed ({status}): {text}");
         }
         unreachable!("retry loop always returns or errors")
+    }
+}
+
+impl TypeSafeClient {
+    /// Cumulative usage of every successful `system_one` call this client
+    /// has made (shared across clones, so the whole review reports one total).
+    pub fn usage_summary(&self) -> UsageSummary {
+        *self.usage.lock().expect("usage meter lock")
+    }
+}
+
+/// Adds one successful response to the running totals. Servers that omit
+/// `usage` (hosted Jev) still count the call; token sums stay unchanged.
+fn record_usage(totals: &mut UsageSummary, usage: Option<Usage>) {
+    totals.calls += 1;
+    if let Some(usage) = usage {
+        totals.input_tokens += usage.input_tokens;
+        totals.output_tokens += usage.output_tokens;
     }
 }
 
@@ -281,6 +322,29 @@ mod tests {
         assert!(!is_loopback("https://api.typesafe.ai"));
         assert!(!is_loopback("http://localhost.example.com"));
         assert!(!is_loopback("not a url"));
+    }
+
+    /// Winnow attaches `usage` to every response; hosted Jev omits it. Both
+    /// parse, and the meter counts calls either way, summing tokens only when
+    /// they are reported.
+    #[test]
+    fn usage_is_optional_and_accumulates() {
+        let winnow: SystemOneResponse = serde_json::from_str(
+            r#"{ "model": "Winnow-12B", "answers": {},
+                "usage": { "input_tokens": 112, "output_tokens": 3 } }"#,
+        )
+        .unwrap();
+        let hosted: SystemOneResponse =
+            serde_json::from_str(r#"{ "model": "jev-latest", "answers": {} }"#).unwrap();
+
+        let mut totals = UsageSummary::default();
+        record_usage(&mut totals, winnow.usage);
+        record_usage(&mut totals, hosted.usage);
+        record_usage(&mut totals, Some(Usage { input_tokens: 8, output_tokens: 0 }));
+
+        assert_eq!(totals.calls, 3);
+        assert_eq!(totals.input_tokens, 120);
+        assert_eq!(totals.output_tokens, 3);
     }
 
     #[test]

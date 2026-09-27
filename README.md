@@ -60,13 +60,15 @@ Read from the environment (or `.env`):
 
 To run against a local System One server such as
 [Winnow-12B](https://github.com/EldanRing/winnow-inference), point the base
-URL at it; no key is needed for `localhost`/loopback addresses. Local servers
-decide one request at a time and more slowly, so lower concurrency and raise
-the timeout:
+URL at it and set the model id the server advertises (Winnow's is
+`Winnow-12B`; it rejects the default `jev-latest` as an unknown model). No
+key is needed for `localhost`/loopback addresses. A local server may decide
+one request at a time, so concurrent requests queue behind it — lower the
+concurrency and raise the timeout if you see that:
 
 ```bash
-TYPESAFE_BASE_URL=http://127.0.0.1:8091 MOMUS_CONCURRENCY=1 \
-  TYPESAFE_TIMEOUT_SECS=300 momus review
+TYPESAFE_BASE_URL=http://127.0.0.1:8091 TYPESAFE_DEFAULT_MODEL=Winnow-12B \
+  MOMUS_CONCURRENCY=1 TYPESAFE_TIMEOUT_SECS=300 momus review
 ```
 
 Screening thresholds in `src/domain/policy.rs` were tuned against hosted Jev
@@ -81,7 +83,8 @@ only for bounded judgments. That gives:
 
 - Cost control: screen everything cheaply, follow up every threshold signal
   (unlimited by default, cap via `--follow-ups N`), so no finding is silently
-  dropped by an arbitrary budget
+  dropped by an arbitrary budget; every report carries per-run `usage`
+  (call count, plus token totals when the server reports them)
 - Calibration: probabilities mean something, so thresholds and routing work
 - Composability: narrow calls chain into taint analysis, meta-judgment,
   pairwise ranking — things monolithic prompts fumble
