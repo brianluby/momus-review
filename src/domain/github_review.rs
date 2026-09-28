@@ -235,7 +235,9 @@ pub fn summary_body(report: &ReviewReport, plan: &Plan, head_sha: &str) -> Strin
     let blocking = report.findings.iter().filter(|f| f.action == Action::RequestChanges).count();
     let mut out = vec!["### momus review".to_string(), String::new()];
 
-    if total == 0 {
+    if total == 0 && report.screened_files == 0 {
+        out.push("No source files to review in this pull request.".to_string());
+    } else if total == 0 {
         out.push("No findings.".to_string());
     } else {
         out.push(format!(
@@ -471,8 +473,15 @@ mod tests {
     }
 
     #[test]
+    fn nothing_to_review_says_so() {
+        let summary = summary_body(&ReviewReport::default(), &Plan::default(), "abc");
+        assert!(summary.contains("No source files to review in this pull request."), "{summary}");
+        assert!(!summary.contains("No findings."));
+    }
+
+    #[test]
     fn empty_report_summary() {
-        let report = ReviewReport::default();
+        let report = ReviewReport { screened_files: 3, ..Default::default() };
         let summary = summary_body(&report, &Plan::default(), "abc");
         assert!(summary.contains("No findings."));
         assert!(!summary.contains("<details>"));

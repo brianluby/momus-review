@@ -45,11 +45,14 @@ pub struct ReviewOptions {
     /// Reviewer feedback: tunes per-dimension thresholds and suppresses
     /// findings (`domain::feedback`).
     pub feedback: FeedbackLog,
+    /// No files to review is an empty report, not an error (`--allow-empty`):
+    /// in CI, a docs- or config-only pull request has nothing to screen.
+    pub allow_empty: bool,
 }
 
 impl Default for ReviewOptions {
     fn default() -> Self {
-        Self { max_follow_ups: None, refine: true, feedback: FeedbackLog::default() }
+        Self { max_follow_ups: None, refine: true, feedback: FeedbackLog::default(), allow_empty: false }
     }
 }
 
@@ -61,7 +64,7 @@ pub async fn run_review<S: ReviewStrategy>(
     options: ReviewOptions,
     strategy: S,
 ) -> Result<ReviewReport> {
-    let ReviewOptions { max_follow_ups, refine, feedback } = options;
+    let ReviewOptions { max_follow_ups, refine, feedback, allow_empty } = options;
     let thresholds = feedback.thresholds();
     let suppressed = feedback.suppressed();
     for (dimension, threshold) in &thresholds {
@@ -81,6 +84,23 @@ pub async fn run_review<S: ReviewStrategy>(
 
     let concurrency = concurrency_from_env()?;
     let Discovery { files, context_files } = strategy.discover(scopes)?;
+    if files.is_empty() && allow_empty {
+        log(&format!("No {} files to review under {scope_label}", strategy.subject()));
+        return Ok(ReviewReport {
+            mode: strategy.mode(),
+            scope: scope_label,
+            dimensions: dimension_metadata(),
+            config: ConfigSnapshot {
+                screen_threshold: SCREEN_THRESHOLD,
+                screen_thresholds: thresholds,
+                severity_max: SEVERITY_MAX,
+                max_follow_ups,
+                max_profiles: MAX_PROFILES,
+            },
+            context_files: context_files.iter().map(|f| f.path().to_string()).collect(),
+            ..Default::default()
+        });
+    }
     if files.is_empty() {
         return Err(anyhow!(
             "No {} files found under {}",

@@ -173,7 +173,8 @@ runs:
         fi
         out="$RUNNER_TEMP/momus"
         mkdir -p "$out"
-        args=(review --base "$BASE_SHA")
+        # --allow-empty: a docs- or config-only PR is an empty review, not a failure.
+        args=(review --base "$BASE_SHA" --allow-empty)
         while IFS= read -r glob; do
           if [ -n "$glob" ]; then args+=(--exclude "$glob"); fi
         done <<< "$EXCLUDE"

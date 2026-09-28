@@ -40,7 +40,9 @@ files (untracked files are ignored). In CI, run it on a clean checkout of
 the pull request with `--base origin/main` and the reviewed diff is exactly
 the PR's diff. The checkout needs enough history to find the merge base,
 e.g. `actions/checkout` with `fetch-depth: 0`. Each finding points at the
-first changed line of its hunk.
+first changed line of its hunk. With `--allow-empty`, a diff with no changed
+source files (docs or config only) is an empty report and exit 0 instead of
+an error; the Action always passes it.
 
 `momus github-review` then publishes the saved report to the pull request
 from inside GitHub Actions. It reads `GITHUB_TOKEN` (needs
