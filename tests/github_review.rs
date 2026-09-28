@@ -27,6 +27,8 @@ struct State {
 struct FakeGitHub {
     files: Vec<PrFile>,
     reject_reviews: bool,
+    /// The 422 `errors` detail a rejected review carries.
+    reject_with: &'static str,
     state: Mutex<State>,
 }
 
@@ -55,7 +57,8 @@ impl GitHubApi for FakeGitHub {
 
     async fn create_review(&self, _: &PullRequest, review: &NewReview) -> Result<()> {
         if self.reject_reviews {
-            return Err(ApiStatusError { status: 422, message: "Line could not be resolved".into() }.into());
+            let errors = vec![self.reject_with.to_string()];
+            return Err(ApiStatusError { status: 422, message: "Unprocessable Entity".into(), errors }.into());
         }
         let mut state = self.state();
         let posted: Vec<Comment> = review.comments.iter().map(|c| bot_comment(0, &c.body)).collect();
@@ -215,7 +218,12 @@ async fn request_changes_event_is_opt_in_and_needs_a_blocking_finding() {
 
 #[tokio::test]
 async fn a_rejected_review_moves_its_findings_to_the_summary() {
-    let github = FakeGitHub { files: files(), reject_reviews: true, ..Default::default() };
+    let github = FakeGitHub {
+        files: files(),
+        reject_reviews: true,
+        reject_with: "Line could not be resolved",
+        ..Default::default()
+    };
     let outcome = publish(&github, &pr(), &report(), &PublishOptions::default()).await.unwrap();
 
     assert!(outcome.review_rejected);
@@ -224,6 +232,19 @@ async fn a_rejected_review_moves_its_findings_to_the_summary() {
     let state = github.state();
     assert!(state.reviews.is_empty());
     assert!(state.issue_comments[0].body.contains("`src/a.rs:2` · GitHub rejected the anchor"));
+}
+
+#[tokio::test]
+async fn another_422_is_an_error_not_a_demotion() {
+    let github = FakeGitHub {
+        files: files(),
+        reject_reviews: true,
+        reject_with: "Can not request changes on your own pull request",
+        ..Default::default()
+    };
+    let err = publish(&github, &pr(), &report(), &PublishOptions::default()).await.unwrap_err();
+    assert!(err.to_string().contains("own pull request"), "{err:#}");
+    assert!(github.state().issue_comments.is_empty(), "no summary claims the review was posted");
 }
 
 #[tokio::test]

@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 
-use crate::adapters::github::{GitHubApi, NewReview, PullRequest, is_unprocessable};
+use crate::adapters::github::{GitHubApi, NewReview, PullRequest, is_unresolvable_anchor};
 use crate::domain::github_review::{SUMMARY_MARKER, plan, posted_fingerprints, summary_body};
 use crate::domain::report::{Action, ReviewReport};
 
@@ -101,7 +101,7 @@ pub async fn publish<A: GitHubApi>(
                 // An anchor GitHub cannot resolve fails the whole review: the
                 // report was made from another commit. Keep the findings by
                 // moving them to the summary.
-                Err(e) if is_unprocessable(&e) => {
+                Err(e) if is_unresolvable_anchor(&e) => {
                     eprintln!("review rejected ({e}); listing its findings in the summary instead");
                     plan.demote_inline();
                     review_rejected = true;

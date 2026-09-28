@@ -94,24 +94,66 @@ pub struct NewReview {
 }
 
 /// A non-success response from the GitHub API. Returned inside `anyhow` so
-/// callers can downcast it (e.g. to recover from a 422).
+/// callers can downcast it (e.g. to recover from an unresolvable anchor).
 #[derive(Debug)]
 pub struct ApiStatusError {
     pub status: u16,
     pub message: String,
+    /// The response's `errors` details: strings as given, objects as their
+    /// `field` and `message`/`code`.
+    pub errors: Vec<String>,
+}
+
+impl ApiStatusError {
+    /// Parses GitHub's `{ "message", "errors": [...] }` error body; a body
+    /// that is not JSON becomes the message.
+    fn from_body(status: u16, text: String) -> Self {
+        let Ok(body) = serde_json::from_str::<Value>(&text) else {
+            return Self { status, message: text, errors: Vec::new() };
+        };
+        let errors = body["errors"]
+            .as_array()
+            .map(|errors| {
+                errors
+                    .iter()
+                    .map(|e| match e {
+                        Value::String(s) => s.clone(),
+                        e => {
+                            let part = |k: &str| e[k].as_str().unwrap_or_default().to_string();
+                            let detail = if part("message").is_empty() { part("code") } else { part("message") };
+                            [part("field"), detail].into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join(": ")
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let message = body["message"].as_str().map(String::from).unwrap_or(text);
+        Self { status, message, errors }
+    }
 }
 
 impl std::fmt::Display for ApiStatusError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "GitHub API returned {}: {}", self.status, self.message)
+        write!(f, "GitHub API returned {}: {}", self.status, self.message)?;
+        if !self.errors.is_empty() {
+            write!(f, " ({})", self.errors.join("; "))?;
+        }
+        Ok(())
     }
 }
 
 impl std::error::Error for ApiStatusError {}
 
-/// True when `error` is a GitHub `422 Unprocessable Entity`.
-pub fn is_unprocessable(error: &anyhow::Error) -> bool {
-    error.downcast_ref::<ApiStatusError>().is_some_and(|e| e.status == 422)
+/// True when `error` is GitHub rejecting a review because an inline comment's
+/// line is not in the diff (`422`, "Line could not be resolved" on
+/// `pull_request_review_thread.line`). Other `422`s are real failures.
+pub fn is_unresolvable_anchor(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<ApiStatusError>().is_some_and(|e| {
+        e.status == 422
+            && std::iter::once(&e.message).chain(&e.errors).any(|text| {
+                text.contains("could not be resolved") || text.contains("pull_request_review_thread")
+            })
+    })
 }
 
 /// The GitHub calls the publisher needs, for one pull request.
@@ -129,9 +171,9 @@ pub trait GitHubApi {
 
 /// Page size for list calls (the API maximum).
 const PER_PAGE: usize = 100;
-/// List calls stop after this many pages (GitHub itself stops listing a
-/// pull request's files at 3000).
-const MAX_PAGES: usize = 30;
+/// List calls fail past this many pages rather than act on a partial list
+/// (GitHub itself stops listing a pull request's files at 3000).
+const MAX_PAGES: usize = 100;
 
 /// A `reqwest` client for the GitHub REST API.
 pub struct GitHubClient {
@@ -183,14 +225,12 @@ impl GitHubClient {
             return Ok(resp);
         }
         let text = resp.text().await.unwrap_or_default();
-        let message = serde_json::from_str::<Value>(&text)
-            .ok()
-            .and_then(|v| v["message"].as_str().map(String::from))
-            .unwrap_or(text);
-        Err(ApiStatusError { status: status.as_u16(), message }.into())
+        Err(ApiStatusError::from_body(status.as_u16(), text).into())
     }
 
-    /// GETs every page of a list endpoint.
+    /// GETs every page of a list endpoint. Fails rather than return a
+    /// truncated list: a missing page of comments would re-post findings or
+    /// miss the summary comment.
     async fn get_all<T: DeserializeOwned>(&self, url: &str) -> Result<Vec<T>> {
         let mut items = Vec::new();
         for page in 1..=MAX_PAGES {
@@ -199,10 +239,10 @@ impl GitHubClient {
             let last = batch.len() < PER_PAGE;
             items.extend(batch);
             if last {
-                break;
+                return Ok(items);
             }
         }
-        Ok(items)
+        bail!("{url} lists more than {} items; refusing to act on a partial list", MAX_PAGES * PER_PAGE)
     }
 }
 
@@ -319,9 +359,18 @@ mod tests {
                 }),
             )
             .route(
+                "/repos/o/r/issues/7/comments",
+                get(|| async {
+                    // Always a full page: more comments than the page cap.
+                    let page: Vec<Value> = (0..100).map(|i| json!({ "id": i, "body": "" })).collect();
+                    Json(Value::Array(page))
+                }),
+            )
+            .route(
                 "/repos/o/r/pulls/7/reviews",
                 post(|| async {
-                    (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({ "message": "Line could not be resolved" })))
+                    let body = json!({ "message": "Unprocessable Entity", "errors": ["Line could not be resolved"] });
+                    (StatusCode::UNPROCESSABLE_ENTITY, Json(body))
                 }),
             );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -343,18 +392,54 @@ mod tests {
         let auth = auth.lock().unwrap().clone();
         assert_eq!(auth, vec!["Bearer t0ken application/vnd.github+json"; 2]);
 
+        // Never a partial list: past the page cap is an error.
+        let err = client.issue_comments(&pr).await.unwrap_err();
+        assert!(err.to_string().contains("refusing to act on a partial list"), "{err:#}");
+
         let review = NewReview { commit_id: SHA.into(), event: "COMMENT", body: "b".into(), comments: vec![] };
         let err = client.create_review(&pr, &review).await.unwrap_err();
-        assert!(is_unprocessable(&err), "{err:#}");
-        assert_eq!(err.to_string(), "GitHub API returned 422: Line could not be resolved");
+        assert!(is_unresolvable_anchor(&err), "{err:#}");
+        assert_eq!(
+            err.to_string(),
+            "GitHub API returned 422: Unprocessable Entity (Line could not be resolved)"
+        );
     }
 
     #[test]
-    fn only_a_422_is_unprocessable() {
-        let err: anyhow::Error = ApiStatusError { status: 422, message: "Line could not be resolved".into() }.into();
-        assert!(is_unprocessable(&err));
-        let err: anyhow::Error = ApiStatusError { status: 403, message: "forbidden".into() }.into();
-        assert!(!is_unprocessable(&err));
-        assert!(!is_unprocessable(&anyhow::anyhow!("other")));
+    fn error_bodies_keep_their_details() {
+        let e = ApiStatusError::from_body(
+            422,
+            r#"{ "message": "Validation Failed", "errors": [
+                { "resource": "PullRequestReviewComment", "field": "pull_request_review_thread.line", "code": "invalid" },
+                { "field": "body", "message": "is too long" } ] }"#
+                .into(),
+        );
+        assert_eq!(e.message, "Validation Failed");
+        assert_eq!(e.errors, vec!["pull_request_review_thread.line: invalid", "body: is too long"]);
+
+        let e = ApiStatusError::from_body(502, "<html>Bad gateway</html>".into());
+        assert_eq!((e.message.as_str(), e.errors.len()), ("<html>Bad gateway</html>", 0));
+    }
+
+    #[test]
+    fn only_an_anchor_422_is_an_unresolvable_anchor() {
+        let status = |status: u16, message: &str, errors: &[&str]| -> anyhow::Error {
+            let errors = errors.iter().map(|e| e.to_string()).collect();
+            ApiStatusError { status, message: message.into(), errors }.into()
+        };
+        assert!(is_unresolvable_anchor(&status(422, "Unprocessable Entity", &["Line could not be resolved"])));
+        assert!(is_unresolvable_anchor(&status(
+            422,
+            "Validation Failed",
+            &["pull_request_review_thread.line: invalid"]
+        )));
+        // Another validation failure is a real error, not a reason to demote.
+        assert!(!is_unresolvable_anchor(&status(
+            422,
+            "Unprocessable Entity",
+            &["Can not request changes on your own pull request"]
+        )));
+        assert!(!is_unresolvable_anchor(&status(403, "Line could not be resolved", &[])));
+        assert!(!is_unresolvable_anchor(&anyhow::anyhow!("other")));
     }
 }

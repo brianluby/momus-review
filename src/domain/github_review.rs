@@ -239,7 +239,7 @@ pub fn summary_body(report: &ReviewReport, plan: &Plan, head_sha: &str) -> Strin
         out.push("No findings.".to_string());
     } else {
         out.push(format!(
-            "**{total} finding{}** · {blocking} request changes · P(revert) {:.2} (uncalibrated)",
+            "**{total} finding{}** · {blocking} blocking · P(revert) {:.2} (uncalibrated)",
             if total == 1 { "" } else { "s" },
             report.p_revert
         ));
@@ -463,7 +463,7 @@ mod tests {
         let summary = summary_body(&report, &plan, "0123456789abcdef");
 
         assert!(summary.starts_with(SUMMARY_MARKER), "{summary}");
-        assert!(summary.contains("**2 findings** · 1 request changes · P(revert) 0.12"), "{summary}");
+        assert!(summary.contains("**2 findings** · 1 blocking · P(revert) 0.12"), "{summary}");
         assert!(summary.contains("1 posted inline · 1 in this summary"), "{summary}");
         assert!(summary.contains("- **Issue at 7** (Security, severity 1.0) `src/b.rs:7` · outside the diff"));
         assert!(summary.contains("Jev calls: 12 · redacted before sending: aws-access-key ×1 · head 0123456"));
