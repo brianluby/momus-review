@@ -67,3 +67,5 @@ jobs:
           fail-on-blocking: ${{ inputs.fail-on-blocking }}
           max-comments: ${{ inputs.max-comments }}
           version: ${{ inputs.version }}
+          # A local-path action cannot see its own repository.
+          release-repo: ${{ job.workflow_repository }}
