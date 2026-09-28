@@ -1,5 +1,5 @@
 //! Codebase-scan strategy: discovery via git ls-files, judgments via
-//! `codebase_judgments`. Mirrors `review/codebase.ts`.
+//! `codebase_judgments`.
 
 use std::collections::HashMap;
 use std::path::PathBuf;

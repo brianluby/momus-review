@@ -19,24 +19,24 @@ flowchart TD
 
 ## Stages
 
-1. **Screen** (`screenFile` / `screenSourceFile`): one `noul` per dimension
+1. **Screen** (`screen_file` / `screen_source_file`): one `noul` per dimension
    (correctness, security, reliability, compatibility, testGap). The security
    dimension is split into three `noul`s — authz/injection/exposure,
    crypto/secrets, and misconfiguration — folded back by max-merge (see
    `docs/security-taxonomy.md`). Each carries `inspect`/`focus`/`ignore` hints
    plus true/false criteria with examples and counterexamples. Test context
-   rides along for testGap (`changedTests` in changes mode;
-   `selectRelatedTests` + `compactTest` in codebase mode). Changes mode also
+   rides along for testGap (the `changedTests` state key in changes mode;
+   `select_related_tests` + `compact_test` in codebase mode). Changes mode also
    sends `file.base` alongside `file.patch` (correctness compares the two);
    codebase mode attaches 1-hop callers/callees (`neighbors`) resolved via the
-   heuristic import graph in `adapters/imports.rs`. Output:
-   `Record<Dimension, number>`.
+   heuristic import graph in `adapters/imports.rs`. Output: `Probabilities`
+   (dimension → probability).
 2. **Profile** (top 5 by max probability): `choice` file role
    (`changeTypes` for diffs, `fileRoles` for sources) + `score` review
-   priority on `reviewPriorityRubric`. Cheap triage aid, not gating.
+   priority on `REVIEW_PRIORITY_RUBRIC`. Cheap triage aid, not gating.
 3. **Locate** (every signal ≥ 0.7; unlimited by default, `--follow-ups N`
    re-imposes a per-dimension budget): `choice` strongest-evidence hunk
-   (`parseHunks`, 80-line chunks for new files) or function-aware source
+   (`parse_hunks`, 80-line chunks for new files) or function-aware source
    region (`regions::function_regions`, a tree-sitter-free heuristic splitting
    at column-0 top-level declarations; oversized declarations and
    declaration-free files fall back to uniform windows; screening uses the
@@ -44,7 +44,7 @@ flowchart TD
    + `MIN_LOCATION_CONFIDENCE=0.55` kill weak attributions.
 4. **Mechanism**: `choice` over per-dimension `mechanisms` vocabulary.
    `noIssue` kills the finding — the first precision gate.
-5. **Severity**: `score` on `severityRubric` (0 none → 3 critical).
+5. **Severity**: `score` on `SEVERITY_RUBRIC` (0 none → 3 critical).
 6. **Meta-judge** (`meta::judge`): a second, independent skeptical `noul`
    ("does selectedEvidence concretely support this mechanism?"). Below
    `MIN_META_JUDGE_CONFIDENCE` the finding is dropped as an unsupported claim
@@ -135,6 +135,13 @@ a diff review of one commit do not overwrite each other); the dashboard's
 History view aggregates those snapshots into risk-over-time, hotspots, and
 fix-latency. A file counts as resolved only when the most recent review that
 screened it found nothing there.
+
+In CI, `momus github-review` publishes the report to its pull request:
+findings on a line of the PR's diff become inline review comments (the
+dashboard's copy-as-PR-comment format plus a hidden fingerprint marker, at
+most `--max-comments`, best-ranked first) and the rest go into one sticky
+summary comment with counts, `pRevert`, usage, and redaction totals. No Jev
+calls are made at this stage.
 
 ## Cost Model
 

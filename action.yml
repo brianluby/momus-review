@@ -1,0 +1,196 @@
+name: momus review
+description: Review a pull request's diff with momus and post the findings as inline review comments
+author: brianluby
+branding:
+  icon: eye
+  color: purple
+
+# Use on `pull_request` events, after checking out the PR head with enough
+# history for the merge base:
+#
+#   - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+#     with:
+#       ref: ${{ github.event.pull_request.head.sha }}
+#       fetch-depth: 0
+#       persist-credentials: false
+#
+# Needs `pull-requests: write` and `contents: read` (plus
+# `security-events: write` with `sarif: true`). See README "CI".
+
+inputs:
+  api-key:
+    description: >-
+      TypeSafe API key (pass a secret). When it is empty and no base-url is
+      set, as on a fork PR where secrets are unavailable, the review is
+      skipped with a notice.
+    required: false
+    default: ""
+  base-url:
+    description: A server speaking POST /v1/systemone (default https://api.typesafe.ai)
+    required: false
+    default: ""
+  model:
+    description: Model id sent with each request (default jev-latest)
+    required: false
+    default: ""
+  paths:
+    description: Scope directories to review, separated by whitespace
+    required: false
+    default: "."
+  exclude:
+    description: Gitignore-style globs to skip, one per line
+    required: false
+    default: ""
+  fail-on-blocking:
+    description: Fail the step when any finding requests changes (after posting)
+    required: false
+    default: "true"
+  max-comments:
+    description: At most this many new inline comments; the rest go in the summary comment
+    required: false
+    default: "10"
+  sarif:
+    description: Also upload a SARIF log to code scanning (needs security-events write)
+    required: false
+    default: "false"
+  version:
+    description: >-
+      momus release to download (`v0.1.0`, or `latest`), or `source` to build
+      this action's own checkout. Without a prebuilt binary for the runner,
+      the action's own source is built.
+    required: false
+    default: latest
+  github-token:
+    description: Token for reading the PR and posting comments
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  skipped:
+    description: "`true` when the review was skipped (fork PR, no API key, not a pull_request event)"
+    value: ${{ steps.gate.outputs.skip }}
+  sarif:
+    description: Path of the SARIF log, when `sarif` is true
+    value: ${{ steps.review.outputs.sarif }}
+
+runs:
+  using: composite
+  steps:
+    - id: gate
+      shell: bash
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        REPO: ${{ github.repository }}
+        API_KEY: ${{ inputs.api-key }}
+        BASE_URL: ${{ inputs.base-url }}
+      run: |
+        skip() {
+          echo "::notice title=momus review skipped::$1"
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        }
+        # pull_request_target runs with secrets and a write token on
+        # untrusted fork code; this action does not support it.
+        if [ "$EVENT_NAME" != pull_request ]; then
+          skip "runs on pull_request events only (got $EVENT_NAME)"
+        fi
+        if [ "$HEAD_REPO" != "$REPO" ]; then
+          skip "fork pull request: secrets are not available to workflows from forks"
+        fi
+        if [ -z "$API_KEY" ] && [ -z "$BASE_URL" ]; then
+          skip "no api-key (set a TYPESAFE_API_KEY secret and pass it as api-key)"
+        fi
+        echo "skip=false" >> "$GITHUB_OUTPUT"
+
+    - id: install
+      if: steps.gate.outputs.skip != 'true'
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        ACTION_PATH: ${{ github.action_path }}
+        RELEASE_REPO: ${{ github.action_repository || github.repository }}
+      run: |
+        root="$RUNNER_TEMP/momus-bin"
+        mkdir -p "$root/bin"
+        from_source() {
+          echo "building momus from $ACTION_PATH"
+          rustup toolchain install stable --profile minimal
+          cargo install --locked --path "$ACTION_PATH" --bin momus --root "$root"
+        }
+        case "$RUNNER_OS-$RUNNER_ARCH" in
+          Linux-X64) target=x86_64-unknown-linux-gnu ;;
+          Linux-ARM64) target=aarch64-unknown-linux-gnu ;;
+          macOS-ARM64) target=aarch64-apple-darwin ;;
+          *) target="" ;;
+        esac
+        if [ "$VERSION" = source ]; then
+          from_source
+        elif [ -z "$target" ]; then
+          echo "::warning::no prebuilt momus for $RUNNER_OS-$RUNNER_ARCH"
+          from_source
+        else
+          dl="$RUNNER_TEMP/momus-dl"
+          rm -rf "$dl" && mkdir -p "$dl"
+          tag=()
+          if [ "$VERSION" != latest ]; then tag=("$VERSION"); fi
+          if gh release download "${tag[@]}" --repo "$RELEASE_REPO" \
+               --pattern "momus-$target.tar.gz" --pattern "momus-$target.tar.gz.sha256" --dir "$dl"; then
+            (cd "$dl" && shasum -a 256 -c "momus-$target.tar.gz.sha256")
+            tar -xzf "$dl/momus-$target.tar.gz" -C "$dl"
+            install -m 0755 "$dl/momus-$target/momus" "$root/bin/momus"
+          else
+            echo "::warning::could not download momus $VERSION for $target from $RELEASE_REPO"
+            from_source
+          fi
+        fi
+        echo "$root/bin" >> "$GITHUB_PATH"
+        "$root/bin/momus" --version
+
+    - id: review
+      if: steps.gate.outputs.skip != 'true'
+      shell: bash
+      env:
+        TYPESAFE_API_KEY: ${{ inputs.api-key }}
+        TYPESAFE_BASE_URL: ${{ inputs.base-url }}
+        TYPESAFE_DEFAULT_MODEL: ${{ inputs.model }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        SCOPES: ${{ inputs.paths }}
+        EXCLUDE: ${{ inputs.exclude }}
+        SARIF: ${{ inputs.sarif }}
+      run: |
+        if [ "$(git rev-parse HEAD)" != "$HEAD_SHA" ]; then
+          echo "::warning::HEAD is not the PR head ($HEAD_SHA); check out ref: github.event.pull_request.head.sha or inline comments may not line up"
+        fi
+        out="$RUNNER_TEMP/momus"
+        mkdir -p "$out"
+        args=(review --base "$BASE_SHA")
+        while IFS= read -r glob; do
+          if [ -n "$glob" ]; then args+=(--exclude "$glob"); fi
+        done <<< "$EXCLUDE"
+        if [ "$SARIF" = true ]; then
+          args+=(--sarif "$out/momus.sarif")
+          echo "sarif=$out/momus.sarif" >> "$GITHUB_OUTPUT"
+        fi
+        read -r -d '' -a paths <<< "$SCOPES" || true
+        # The report on stdout keeps unredacted evidence: never print it.
+        MOMUS_REPORT="$out/report.json" momus "${args[@]}" -- "${paths[@]}" > /dev/null
+
+    - if: steps.gate.outputs.skip != 'true' && inputs.sarif == 'true'
+      uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+      with:
+        sarif_file: ${{ steps.review.outputs.sarif }}
+        category: momus
+
+    - if: steps.gate.outputs.skip != 'true'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        MAX_COMMENTS: ${{ inputs.max-comments }}
+        FAIL_ON_BLOCKING: ${{ inputs.fail-on-blocking }}
+      run: |
+        args=(github-review --report "$RUNNER_TEMP/momus/report.json" --max-comments "$MAX_COMMENTS")
+        if [ "$FAIL_ON_BLOCKING" = true ]; then args+=(--fail-on-blocking); fi
+        momus "${args[@]}"

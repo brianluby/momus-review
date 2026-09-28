@@ -1,0 +1,32 @@
+# Dogfood: review this repository's own pull requests with the action at
+# the PR's commit (`uses: ./`), built from that commit's source. Fork PRs
+# and runs without the TYPESAFE_API_KEY secret skip with a notice.
+name: momus
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: momus-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: ./
+        with:
+          api-key: ${{ secrets.TYPESAFE_API_KEY }}
+          version: source
+          # Advisory while the signals are uncalibrated (#17): comment, never block.
+          fail-on-blocking: "false"

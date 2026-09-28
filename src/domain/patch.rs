@@ -1,5 +1,4 @@
 //! Unified-diff helpers shared by the Git adapter and the review workflow.
-//! Mirrors `domain/patch.ts`.
 
 use crate::domain::report::Hunk;
 

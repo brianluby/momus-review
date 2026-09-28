@@ -1,76 +1,65 @@
 # Architecture
 
-## Prototype (TypeScript, `jev-review` fork)
-
 ```
 src/
-  domain/      config.ts, types.ts, patch.ts   policy, report shapes, diff parsing
-  adapters/    git.ts, repository-files.ts      change and complete-source discovery
-               report-store.ts                  atomic report save/load
-  review/      changes.ts, codebase.ts           mode strategies
-               judgments.ts, codebase-judgments.ts  Jev calls per mode
-               workflow.ts                      staged orchestration (Strategy pattern)
-  cli/         review-*.ts, save-*.ts            explicit entry points
-  dashboard/   server.ts, public/               loopback HTTP + static client
-scripts/check-dependencies.ts                   layer enforcement
+  domain/      policy, report shapes, diff parsing, redaction, feedback,
+               github_review (inline-vs-summary planning + comment text)
+  adapters/    git discovery + guarded reads, exclude globs, report store,
+               SARIF, import graph, github (REST client + PR context)
+  review/      strategies + judgments (thin TypeSafe client), orchestration,
+               refinement, publish (github-review orchestration)
+  cli/         clap subcommands (review, scan, github-review, dashboard)
+  dashboard/   axum server + embedded public/ assets
+  bin/         momus-eval (golden-set evaluation harness)
+action.yml     composite GitHub Action (download/verify binary, review, publish)
+.github/       release.yml (prebuilt binaries), momus.yml (dogfood on PRs)
 ```
 
 Layers depend downward only: `{ cli, dashboard } -> review -> adapters -> domain`.
-`npm run check` (tsc + `check-dependencies.ts` + client syntax check) fails on
-upward imports, cli↔dashboard imports, or cycles.
+The module tree and `pub(crate)` visibility keep it that way; `domain` does no
+I/O.
 
-Key invariants:
+## Key invariants
 
-- `review/workflow.ts:runReview` owns concurrency (`CONCURRENCY=3` via
-  `mapLimit`), thresholding (`SCREEN_THRESHOLD=0.7`), ranking, and report
-  assembly. Modes own only `discover`/`screen`/`profile`/`locate`.
-- Adapters return only validated content: `readRepoFile` gates on
-  `O_NOFOLLOW | O_NONBLOCK` + `fstat.isFile()` + `realpath` containment +
-  post-read dev/ino/size identity (`git.ts`, `repository-files.ts`).
-- Report writes are atomic: unique `pid.uuid.tmp` with `wx` (`O_EXCL`),
-  retry on `EEXIST`, unlink-on-failure, `rename` into place (`report-store.ts`).
-- Dashboard binds `127.0.0.1`, serves 3 allowlisted assets + `/api/review`,
-  validates `PORT` (1–65535, fallback 4317), enforces `Host` allowlist
-  (trimmed/lowercased, else 403), sends `nosniff` + `no-store` + CSP with
-  `frame-ancestors 'none'` (`dashboard/server.ts`).
-- Client (`dashboard/public/app.js`) renders all untrusted text through text
-  nodes; no `innerHTML`. Report validation (`isReviewReport`) is deliberately
-  loose for forward-compat; the client null-tolerates every field.
-
-## Rust target (shipped, `momus-review`)
-
-```
-src/
-  domain/      policy, report shapes, diff parsing (serde structs)
-  adapters/    git discovery, file guards, report store, exclude globs
-  review/      strategies + judgments (thin typesafe client) + orchestration
-  cli/         clap subcommands (review, scan, dashboard)
-  dashboard/   axum server + embedded public/ assets
-  bin/         momus-eval (golden-set evaluation harness)
-```
-
-Mapping:
-
-| TS today | Rust |
-|---|---|
-| `TypeSafeClient().systemOne(...)` | thin client: `TypeSafeClient::system_one(...)` in `src/review/typesafe.rs` (speaks the wire format directly; `jev_sdk` is not a dependency) |
-| `mapLimit(CONCURRENCY)` | `futures::StreamExt::buffered(CONCURRENCY)` (bounded, order-preserving) |
-| `execFileSync("git", …)` | `std::process::Command` (no shell), later `gix` |
-| `O_NOFOLLOW`/`fstat` guards | `std::os::unix::fs::OpenOptionsExt`, same checks |
-| `node:http` + `handle()` | `axum` router + middleware (Host check, CSP) |
-| `check-dependencies.ts` | Deleted; `pub(crate)` + module tree enforces layers |
-| Loose `isReviewReport` | `serde` with `#[serde(default)]` for tolerant reads |
-
-`public/` (app.js, index.html, style.css) is ported from the prototype with
-the empty-state command hints updated to the `momus` binary; served via
-`include_str!`. Same curl-verified behavior: good host 200, foreign host 403,
-CSP header present.
+- `review/workflow.rs::run_review` owns concurrency (`futures`
+  `buffered(CONCURRENCY)`: bounded, order-preserving), thresholding
+  (`SCREEN_THRESHOLD = 0.7`, feedback-tuned per dimension), follow-up
+  selection, refinement, and report assembly. Strategies (`ChangesStrategy`,
+  `CodebaseStrategy`) own only `discover`/`screen`/`profile`/`locate`.
+- The one egress point to the Jev API is `TypeSafeClient::system_one`
+  (`review/typesafe.rs`): a thin `POST /v1/systemone` client with retry and
+  backoff, where every request `state` is redacted (`domain/redact.rs`).
+- Adapters return only validated content: `read_repo_file` (`adapters/git.rs`)
+  opens with `O_NOFOLLOW | O_NONBLOCK`, requires a regular file, checks
+  `canonicalize` containment in the repo, and re-checks dev/ino/size after the
+  read. Git runs through `std::process::Command` (no shell), and a `--base`
+  revision that looks like an option is refused before it reaches git.
+- Report writes are atomic (`adapters/report_store.rs::write_atomic`): a
+  unique `O_EXCL` temp file, retried on collision, removed on failure, then
+  renamed into place.
+- The dashboard binds `127.0.0.1`, serves three embedded assets plus the
+  `/api/review`, `/api/history`, and `/api/feedback` endpoints, enforces a
+  `Host` allowlist (trimmed, lowercased, else 403), refuses cross-origin
+  feedback writes, and sends `nosniff`, `no-store`, and a CSP with
+  `frame-ancestors 'none'` (`dashboard/mod.rs`).
+- The client (`dashboard/public/app.js`) renders untrusted text through text
+  nodes only, never `innerHTML`. Reports deserialize with `#[serde(default)]`,
+  so a report saved by an older version stays viewable.
+- `momus github-review` (`review/publish.rs`) anchors inline comments only on
+  lines of the PR's own diff (`domain/github_review.rs::commentable_lines`),
+  redacts everything it publishes, and trusts fingerprint and summary markers
+  only in bot-authored comments. The HTTP calls sit behind the `GitHubApi`
+  trait (`adapters/github.rs`) so tests use a fake.
 
 ## Decisions
 
 - Orchestration stays in code; Jev only answers bounded typed questions.
   Thresholds and budgets are policy (`domain`), never model output.
 - Local-first: no auth, no multi-tenancy, no remote surface. The only network
-  calls are Jev API evaluations and they carry only the scoped evidence.
+  calls are Jev API evaluations (scoped evidence, secrets redacted) and, in CI,
+  the GitHub calls `github-review` makes.
+- Publishing lives in a Rust subcommand, not in Action scripts, so it is
+  tested like the rest of the code; the Action only downloads, runs, and
+  passes inputs through.
 - Boring over clever: flat modules, explicit strategies, no plugins until
   the core funnel earns them.

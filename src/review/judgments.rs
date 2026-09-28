@@ -1,5 +1,5 @@
 //! Change-review judgments: screen / profile / locate for diff mode. Every
-//! call is narrow and receives patch evidence. Mirrors `review/judgments.ts`.
+//! call is narrow and receives patch evidence.
 
 use anyhow::Result;
 use serde_json::{Map, Value, json};

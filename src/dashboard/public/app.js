@@ -1,6 +1,6 @@
-// Mirrors SCREEN_THRESHOLD in src/domain/config.ts: signals at or above it are followed.
+// Mirrors SCREEN_THRESHOLD in src/domain/policy.rs: signals at or above it are followed.
 const THRESHOLD = 0.7;
-// Severity is an expected score on the 0–3 rubric in src/domain/config.ts.
+// Severity is an expected score on the 0–3 rubric (SEVERITY_MAX in src/domain/policy.rs).
 const SEVERITY_MAX = 3;
 
 const DEFAULT_DIMENSIONS = [
