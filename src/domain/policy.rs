@@ -276,7 +276,7 @@ pub fn mechanisms(d: Dimension) -> &'static [(&'static str, &'static str)] {
 /// omitted rather than padded: `testGap` is deliberately language-free — its
 /// generic `branch`/`failure`/`boundary`/`integration` entries already name
 /// every test gap worth flagging.
-const LANGUAGE_MECHANISMS: &[(Language, Dimension, &[(&str, &str)])] = &[
+const LANGUAGE_MECHANISMS: &[LanguageMechanismRow] = &[
     // ---- Rust (the ticket's `unsafe`/`unwrap`/`panic!`) ----
     (
         Language::Rust,
@@ -681,8 +681,14 @@ pub fn language_mechanisms(d: Dimension, language: Language) -> &'static [(&'sta
         .map_or(&[], |(_, _, entries)| *entries)
 }
 
+/// A mechanism vocabulary entry: `(key, description)`.
+pub type MechanismEntry = (&'static str, &'static str);
+
+/// A language's mechanism additions for one dimension.
+pub type LanguageMechanismRow = (Language, Dimension, &'static [MechanismEntry]);
+
 /// Every `(language, dimension, entries)` row, for vocabulary-wide checks.
-pub fn language_mechanism_rows() -> &'static [(Language, Dimension, &'static [(&'static str, &'static str)])] {
+pub fn language_mechanism_rows() -> &'static [LanguageMechanismRow] {
     LANGUAGE_MECHANISMS
 }
 
@@ -718,13 +724,12 @@ pub fn mechanism_description(
     language: Option<Language>,
     key: &str,
 ) -> Option<&'static str> {
-    if let Some(lang) = language {
-        if let Some((_, description)) = language_mechanisms(d, lang)
+    if let Some(lang) = language
+        && let Some((_, description)) = language_mechanisms(d, lang)
             .iter()
             .find(|(candidate, _)| *candidate == key)
-        {
-            return Some(description);
-        }
+    {
+        return Some(description);
     }
     mechanisms(d)
         .iter()

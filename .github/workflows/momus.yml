@@ -28,5 +28,5 @@ jobs:
         with:
           api-key: ${{ secrets.TYPESAFE_API_KEY }}
           version: source
-          # Advisory while the signals are uncalibrated (#17): comment, never block.
+          # Advisory while the signals are uncalibrated: comment, never block.
           fail-on-blocking: "false"
