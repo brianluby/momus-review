@@ -73,7 +73,9 @@ jobs:
 
   publish:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/')
+    # A tag push only: a workflow_dispatch run started on a tag ref is still
+    # a build-only dry run.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
       contents: write
