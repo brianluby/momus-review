@@ -2,6 +2,7 @@
 //! support. No I/O, no SDK.
 
 pub mod feedback;
+pub mod github_review;
 pub mod language;
 pub mod patch;
 pub mod policy;

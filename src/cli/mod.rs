@@ -1,4 +1,5 @@
-//! CLI entry points: `review` (diff), `scan` (codebase), `dashboard`.
+//! CLI entry points: `review` (diff), `scan` (codebase), `github-review`
+//! (publish to a pull request), `dashboard`.
 //! Mirrors the four `cli/*.ts` entry points consolidated under one clap binary.
 
 use anyhow::Result;
@@ -8,11 +9,13 @@ use std::path::PathBuf;
 use crate::adapters::exclude::Exclude;
 use crate::adapters::feedback_store::{feedback_path, read_feedback};
 use crate::adapters::git;
-use crate::adapters::report_store::{report_path, save_history, save_json, save_report};
+use crate::adapters::github::{GitHubClient, PullRequest};
+use crate::adapters::report_store::{StoredReport, read_report, report_path, save_history, save_json, save_report};
 use crate::adapters::sarif;
 use crate::domain::report::Action;
 use crate::review::changes::ChangesStrategy;
 use crate::review::codebase::CodebaseStrategy;
+use crate::review::publish::{PublishOptions, ReviewEvent, publish};
 use crate::review::strategy::ReviewStrategy;
 use crate::review::typesafe::TypeSafeClient;
 use crate::review::workflow::{ReviewOptions, run_review};
@@ -101,6 +104,31 @@ pub enum Command {
         no_redact: bool,
     },
 
+    /// Publish the saved report to its pull request (inside GitHub Actions):
+    /// inline review comments on the diff plus one sticky summary comment
+    GithubReview {
+        /// The report to publish (default: `MOMUS_REPORT` or reviews/latest.json)
+        #[arg(long = "report", value_name = "PATH")]
+        report: Option<String>,
+
+        /// Post at most N new inline comments; the rest go in the summary
+        #[arg(long = "max-comments", value_name = "N", default_value_t = crate::review::publish::DEFAULT_MAX_COMMENTS)]
+        max_comments: usize,
+
+        /// Review event: `comment`, or `request-changes` to request changes
+        /// when an inline finding blocks
+        #[arg(long = "event", value_enum, default_value_t = EventArg::Comment)]
+        event: EventArg,
+
+        /// Exit non-zero when any finding requests changes (after publishing)
+        #[arg(long)]
+        fail_on_blocking: bool,
+
+        /// Read the pull request but post nothing; print what would be posted
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Serve the loopback dashboard
     Dashboard {
         /// Port (1–65535, default 4317)
@@ -121,8 +149,62 @@ pub async fn run(cli: Cli) -> Result<()> {
             let sarif = sarif.map(PathBuf::from);
             run_mode(paths, fail_on_blocking, options(follow_ups, no_refine), sarif, strategy).await
         }
+        Command::GithubReview { report, max_comments, event, fail_on_blocking, dry_run } => {
+            let options = PublishOptions { max_comments, event: event.into(), dry_run };
+            github_review(report.map(PathBuf::from), options, fail_on_blocking).await
+        }
         Command::Dashboard { port } => crate::dashboard::serve(port).await,
     }
+}
+
+/// `--event` values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum EventArg {
+    Comment,
+    RequestChanges,
+}
+
+impl From<EventArg> for ReviewEvent {
+    fn from(event: EventArg) -> Self {
+        match event {
+            EventArg::Comment => ReviewEvent::Comment,
+            EventArg::RequestChanges => ReviewEvent::RequestChanges,
+        }
+    }
+}
+
+/// Publishes the saved report to the pull request named by the Actions
+/// environment, then applies the CI exit contract.
+async fn github_review(report: Option<PathBuf>, options: PublishOptions, fail_on_blocking: bool) -> Result<()> {
+    let path = report.unwrap_or_else(report_path);
+    let report = match read_report(&path) {
+        StoredReport::Ok { report, .. } => report,
+        StoredReport::Empty => anyhow::bail!("no report at {} (run `momus review` first)", path.display()),
+        StoredReport::Error(e) => anyhow::bail!("{}: {e}", path.display()),
+    };
+    let pr = PullRequest::from_env()?;
+    let client = GitHubClient::from_env()?;
+
+    let outcome = publish(&client, &pr, &report, &options).await?;
+    let inline = outcome.review.as_ref().map_or(0, |r| r.comments.len());
+    if options.dry_run {
+        let preview = serde_json::json!({ "review": outcome.review, "summary": outcome.summary });
+        println!("{}", serde_json::to_string_pretty(&preview)?);
+    }
+    eprintln!(
+        "{}#{}: {inline} inline, {} already posted, {} in summary{} (summary {:?})",
+        pr.repository,
+        pr.number,
+        outcome.already_posted,
+        outcome.summary_only,
+        if outcome.review_rejected { ", review rejected" } else { "" },
+        outcome.summary_action,
+    );
+
+    if fail_on_blocking && report.findings.iter().any(|f| f.action == Action::RequestChanges) {
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 /// The System One client from the environment; `--no-redact` overrides
