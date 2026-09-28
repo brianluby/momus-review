@@ -28,13 +28,13 @@ pub struct CodebaseStrategy {
 }
 
 impl CodebaseStrategy {
-    pub fn new(exclude: Exclude) -> Result<Self> {
-        Ok(Self {
-            client: TypeSafeClient::from_env()?,
+    pub fn new(client: TypeSafeClient, exclude: Exclude) -> Self {
+        Self {
+            client,
             exclude,
             imports: OnceLock::new(),
             file_map: OnceLock::new(),
-        })
+        }
     }
 
     /// Resolves `path`'s 1-hop import neighbors to compact `SourceFile`s

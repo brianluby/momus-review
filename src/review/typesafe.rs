@@ -7,8 +7,9 @@
 //! HTTP, so the port speaks the wire format directly and matches the
 //! TypeScript SDK's `POST /v1/systemone` exactly.
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use std::time::Duration;
 
@@ -18,6 +19,7 @@ use serde_json::{Map, Value, json};
 
 use crate::domain::language::Language;
 use crate::domain::policy::{Dimension, mechanisms_for};
+use crate::domain::redact::{RedactionLog, Redactions, redact_value};
 use crate::domain::report::UsageSummary;
 
 const DEFAULT_BASE_URL: &str = "https://api.typesafe.ai";
@@ -98,6 +100,8 @@ struct ClientConfig {
     base_url: String,
     model: String,
     timeout: Duration,
+    /// Redact secrets from every state before it is sent (`MOMUS_REDACT`).
+    redact: bool,
 }
 
 impl ClientConfig {
@@ -119,7 +123,20 @@ impl ClientConfig {
             Some(raw) => Duration::from_secs(parse_positive("TYPESAFE_TIMEOUT_SECS", &raw)? as u64),
             None => DEFAULT_TIMEOUT,
         };
-        Ok(Self { api_key, base_url, model, timeout })
+        let redact = match var("MOMUS_REDACT") {
+            Some(raw) => parse_switch("MOMUS_REDACT", &raw)?,
+            None => true,
+        };
+        Ok(Self { api_key, base_url, model, timeout, redact })
+    }
+}
+
+/// Parses an on/off setting, naming the variable on error.
+fn parse_switch(name: &str, raw: &str) -> Result<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "on" | "yes" => Ok(true),
+        "0" | "false" | "off" | "no" => Ok(false),
+        _ => bail!("{name} must be on or off, got '{raw}'"),
     }
 }
 
@@ -148,15 +165,20 @@ pub struct TypeSafeClient {
     base_url: String,
     model: String,
     usage: Arc<UsageMeter>,
+    redact: bool,
+    redactions: Arc<Mutex<RedactionLog>>,
 }
 
 impl TypeSafeClient {
     /// Reads `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`, `TYPESAFE_DEFAULT_MODEL`,
-    /// and `TYPESAFE_TIMEOUT_SECS` from the environment. The key is required
-    /// unless the base URL is a local server.
+    /// `TYPESAFE_TIMEOUT_SECS`, and `MOMUS_REDACT` from the environment. The
+    /// key is required unless the base URL is a local server.
     pub fn from_env() -> Result<Self> {
-        let ClientConfig { api_key, base_url, model, timeout } =
-            ClientConfig::from_lookup(|name| std::env::var(name).ok())?;
+        Self::from_config(ClientConfig::from_lookup(|name| std::env::var(name).ok())?)
+    }
+
+    fn from_config(config: ClientConfig) -> Result<Self> {
+        let ClientConfig { api_key, base_url, model, timeout, redact } = config;
         let http = reqwest::Client::builder().timeout(timeout).build()?;
         Ok(Self {
             http,
@@ -164,13 +186,32 @@ impl TypeSafeClient {
             base_url,
             model,
             usage: Arc::new(UsageMeter::default()),
+            redact,
+            redactions: Arc::new(Mutex::new(RedactionLog::default())),
         })
+    }
+
+    /// Turns off secret redaction (`--no-redact`): states are sent verbatim.
+    pub fn without_redaction(mut self) -> Self {
+        self.redact = false;
+        self
     }
 
     /// Evaluates one `system_one` request: a state plus a map of named
     /// questions. Retries transient failures — connection/timeout errors and
     /// `429`/`529`/`5xx` responses — with backoff.
-    pub async fn system_one(&self, state: Value, questions: Value) -> Result<SystemOneResponse> {
+    ///
+    /// Unless redaction is off, every string in `state` is scrubbed of
+    /// secrets first (`domain::redact`); `questions` are policy text we own.
+    pub async fn system_one(&self, mut state: Value, questions: Value) -> Result<SystemOneResponse> {
+        if self.redact {
+            let mut found = Redactions::default();
+            redact_value(&mut state, &mut found);
+            if !found.is_empty() {
+                // Held only for a hash insert, never across an await.
+                self.redactions.lock().unwrap_or_else(|e| e.into_inner()).record(found);
+            }
+        }
         let url = format!("{}/v1/systemone", self.base_url);
         let body = json!({ "state": state, "questions": questions, "model": self.model });
 
@@ -211,6 +252,11 @@ impl TypeSafeClient {
     /// has made (shared across clones, so the whole review reports one total).
     pub fn usage_summary(&self) -> UsageSummary {
         self.usage.summary()
+    }
+
+    /// Distinct secret values redacted per rule across the whole review.
+    pub fn redaction_summary(&self) -> BTreeMap<String, usize> {
+        self.redactions.lock().unwrap_or_else(|e| e.into_inner()).summary()
     }
 }
 
@@ -323,6 +369,16 @@ mod tests {
         assert_eq!(c.base_url, DEFAULT_BASE_URL);
         assert_eq!(c.model, DEFAULT_MODEL);
         assert_eq!(c.timeout, DEFAULT_TIMEOUT);
+        assert!(c.redact, "redaction is on by default");
+    }
+
+    #[test]
+    fn redaction_can_be_switched_off() {
+        let local = ("TYPESAFE_BASE_URL", "http://localhost:8091");
+        assert!(!config(&[local, ("MOMUS_REDACT", "off")]).unwrap().redact);
+        assert!(!config(&[local, ("MOMUS_REDACT", "0")]).unwrap().redact);
+        assert!(config(&[local, ("MOMUS_REDACT", "ON")]).unwrap().redact);
+        assert!(config(&[local, ("MOMUS_REDACT", "maybe")]).is_err());
     }
 
     #[test]
@@ -369,6 +425,65 @@ mod tests {
         assert_eq!(totals.calls, 3);
         assert_eq!(totals.input_tokens, 120);
         assert_eq!(totals.output_tokens, 3);
+    }
+
+    /// Starts a loopback System One stub that records each request body.
+    async fn recording_server() -> (String, Arc<Mutex<Vec<Value>>>) {
+        use axum::{Json, Router, routing::post};
+        let bodies: Arc<Mutex<Vec<Value>>> = Arc::default();
+        let sink = bodies.clone();
+        let app = Router::new().route(
+            "/v1/systemone",
+            post(move |Json(body): Json<Value>| {
+                let sink = sink.clone();
+                async move {
+                    sink.lock().unwrap().push(body);
+                    Json(json!({ "model": "stub", "answers": {} }))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (url, bodies)
+    }
+
+    fn stub_client(url: &str, redact: bool) -> TypeSafeClient {
+        let config = config(&[("TYPESAFE_BASE_URL", url)]).unwrap();
+        TypeSafeClient::from_config(ClientConfig { redact, ..config }).unwrap()
+    }
+
+    /// The wire body carries placeholders, never the secret; questions pass
+    /// through untouched; the report-facing summary counts distinct values.
+    #[tokio::test]
+    async fn secrets_never_reach_the_wire() {
+        let (url, bodies) = recording_server().await;
+        let client = stub_client(&url, true);
+        let secret = "AKIAIOSFODNN7EXAMPLE";
+        let state = json!({ "file": { "path": "a.ts", "content": format!("const k = \"{secret}\";\n") } });
+        let questions = json!({ "q": noul(json!("mentions AKIAIOSFODNN7EXAMPLE?"), json!({})) });
+
+        client.system_one(state.clone(), questions.clone()).await.unwrap();
+        client.system_one(state, questions).await.unwrap();
+
+        let sent = bodies.lock().unwrap();
+        assert_eq!(sent.len(), 2);
+        let wire = sent[0].to_string();
+        assert!(!wire.contains(&format!("\"{secret}")), "secret left in state: {wire}");
+        assert_eq!(sent[0]["state"]["file"]["content"], "const k = \"<redacted:aws-access-key>\";\n");
+        assert_eq!(sent[0]["questions"], sent[1]["questions"]);
+        assert_eq!(sent[0]["questions"]["q"]["instructions"], "mentions AKIAIOSFODNN7EXAMPLE?");
+        assert_eq!(client.redaction_summary(), BTreeMap::from([("aws-access-key".to_string(), 1)]));
+    }
+
+    #[tokio::test]
+    async fn no_redact_sends_state_verbatim() {
+        let (url, bodies) = recording_server().await;
+        let client = stub_client(&url, true).without_redaction();
+        let state = json!({ "content": "k = AKIAIOSFODNN7EXAMPLE" });
+        client.system_one(state.clone(), json!({})).await.unwrap();
+        assert_eq!(bodies.lock().unwrap()[0]["state"], state);
+        assert!(client.redaction_summary().is_empty());
     }
 
     /// A server that reports camelCase token keys still meters (serde alias).

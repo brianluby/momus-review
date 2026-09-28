@@ -14,6 +14,7 @@ use crate::domain::report::Action;
 use crate::review::changes::ChangesStrategy;
 use crate::review::codebase::CodebaseStrategy;
 use crate::review::strategy::ReviewStrategy;
+use crate::review::typesafe::TypeSafeClient;
 use crate::review::workflow::{ReviewOptions, run_review};
 
 #[derive(Parser)]
@@ -53,6 +54,11 @@ pub enum Command {
         /// ranking): fewer API calls, noisier findings
         #[arg(long)]
         no_refine: bool,
+
+        /// Send code to the API without redacting secrets (also
+        /// `MOMUS_REDACT=off`); redaction is on by default
+        #[arg(long)]
+        no_redact: bool,
     },
 
     /// Scan every non-ignored source file under a scope
@@ -82,6 +88,11 @@ pub enum Command {
         /// ranking): fewer API calls, noisier findings
         #[arg(long)]
         no_refine: bool,
+
+        /// Send code to the API without redacting secrets (also
+        /// `MOMUS_REDACT=off`); redaction is on by default
+        #[arg(long)]
+        no_redact: bool,
     },
 
     /// Serve the loopback dashboard
@@ -94,18 +105,25 @@ pub enum Command {
 
 pub async fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        Command::Review { paths, fail_on_blocking, exclude, follow_ups, sarif, no_refine } => {
-            let strategy = ChangesStrategy::new(Exclude::new(&exclude)?)?;
+        Command::Review { paths, fail_on_blocking, exclude, follow_ups, sarif, no_refine, no_redact } => {
+            let strategy = ChangesStrategy::new(client(no_redact)?, Exclude::new(&exclude)?);
             let sarif = sarif.map(PathBuf::from);
             run_mode(paths, fail_on_blocking, options(follow_ups, no_refine), sarif, strategy).await
         }
-        Command::Scan { paths, fail_on_blocking, exclude, follow_ups, sarif, no_refine } => {
-            let strategy = CodebaseStrategy::new(Exclude::new(&exclude)?)?;
+        Command::Scan { paths, fail_on_blocking, exclude, follow_ups, sarif, no_refine, no_redact } => {
+            let strategy = CodebaseStrategy::new(client(no_redact)?, Exclude::new(&exclude)?);
             let sarif = sarif.map(PathBuf::from);
             run_mode(paths, fail_on_blocking, options(follow_ups, no_refine), sarif, strategy).await
         }
         Command::Dashboard { port } => crate::dashboard::serve(port).await,
     }
+}
+
+/// The System One client from the environment; `--no-redact` overrides
+/// `MOMUS_REDACT`.
+fn client(no_redact: bool) -> Result<TypeSafeClient> {
+    let client = TypeSafeClient::from_env()?;
+    Ok(if no_redact { client.without_redaction() } else { client })
 }
 
 /// Review options from CLI flags plus the saved feedback log. Feedback is
@@ -135,6 +153,12 @@ async fn run_mode<S: ReviewStrategy>(
     let log = |msg: &str| eprintln!("{msg}");
 
     let report = run_review(&scopes, &log, options, strategy).await?;
+
+    if !report.redactions.is_empty() {
+        let rules: Vec<String> =
+            report.redactions.iter().map(|(rule, n)| format!("{rule} ×{n}")).collect();
+        eprintln!("redacted secrets before sending: {}", rules.join(", "));
+    }
 
     let out = report_path();
     save_report(&report, &out)?;

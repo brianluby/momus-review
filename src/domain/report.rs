@@ -250,6 +250,9 @@ pub struct ReviewReport {
     pub profiles: Vec<FileProfile>,
     pub workflow: WorkflowCounts,
     pub usage: UsageSummary,
+    /// Distinct secret values redacted from outgoing requests, per rule
+    /// (`domain::redact`); empty when nothing matched or redaction was off.
+    pub redactions: BTreeMap<String, usize>,
     pub findings: Vec<Finding>,
     /// Uncalibrated heuristic P(revert) in [0, 1) from the review signals.
     /// A spike (see `review/merge_confidence.rs`); calibration is #17.
@@ -295,6 +298,7 @@ mod tests {
         let value = serde_json::to_value(&report).unwrap();
 
         assert_eq!(value["usage"]["calls"], 0);
+        assert_eq!(value["redactions"], serde_json::json!({}));
         assert_eq!(value["usage"]["inputTokens"], 0);
         assert_eq!(value["screenedFiles"], 1);
         assert_eq!(value["screened_files"], serde_json::Value::Null);

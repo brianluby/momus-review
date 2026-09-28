@@ -295,6 +295,7 @@ pub async fn run_review<S: ReviewStrategy>(
             needs_human_findings: refine_counts.needs_human,
         },
         usage: strategy.client().usage_summary(),
+        redactions: strategy.client().redaction_summary(),
         findings,
         p_revert,
     })

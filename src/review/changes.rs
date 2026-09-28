@@ -20,8 +20,8 @@ pub struct ChangesStrategy {
 }
 
 impl ChangesStrategy {
-    pub fn new(exclude: Exclude) -> Result<Self> {
-        Ok(Self { client: TypeSafeClient::from_env()?, exclude })
+    pub fn new(client: TypeSafeClient, exclude: Exclude) -> Self {
+        Self { client, exclude }
     }
 }
 
