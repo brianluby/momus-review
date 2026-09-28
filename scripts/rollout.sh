@@ -27,6 +27,7 @@ while [ $# -gt 0 ]; do
     --rotate-secret) rotate=true ;;
     --file)
       [ $# -ge 2 ] || { echo "--file needs a path" >&2; exit 2; }
+      [ -f "$2" ] || { echo "no such file: $2" >&2; exit 2; }
       while IFS= read -r line; do
         line="${line%%#*}"
         line="${line//[[:space:]]/}"
@@ -94,8 +95,13 @@ for repo in "${repos[@]}"; do
   if $has_secret && ! $rotate; then
     echo "   secret: present"
   elif $apply; then
-    printf '%s' "$key" | gh secret set TYPESAFE_API_KEY --repo "$repo"
-    echo "   secret: set"
+    # Each step checks its own result: one repo's failure is recorded and
+    # the batch moves on (set -e would otherwise end the whole rollout).
+    if printf '%s' "$key" | gh secret set TYPESAFE_API_KEY --repo "$repo"; then
+      echo "   secret: set"
+    else
+      echo "   secret: FAILED, skipping this repo"; status=1; continue
+    fi
   else
     echo "   secret: would set"
   fi
@@ -106,14 +112,19 @@ for repo in "${repos[@]}"; do
   elif $has_branch; then
     echo "   workflow: branch $BRANCH already exists (open PR?), skipped"
   elif $apply; then
-    sha=$(gh api "repos/$repo/git/ref/heads/$default" -q .object.sha)
-    gh api -X POST "repos/$repo/git/refs" -f ref="refs/heads/$BRANCH" -f sha="$sha" --silent
-    gh api -X PUT "repos/$repo/contents/$WORKFLOW" -f branch="$BRANCH" \
-      -f message="Add momus pull request review" -f content="$content" --silent
-    url=$(gh pr create --repo "$repo" --base "$default" --head "$BRANCH" \
-      --title "Add momus pull request review" \
-      --body "Adds \`$WORKFLOW\`: [momus](https://github.com/brianluby/momus-review) reviews each pull request and posts inline comments plus one summary comment. It uses the \`TYPESAFE_API_KEY\` repository secret; fork PRs are skipped. This pull request is its first run.")
-    echo "   workflow: PR opened $url"
+    if sha=$(gh api "repos/$repo/git/ref/heads/$default" -q .object.sha) &&
+       gh api -X POST "repos/$repo/git/refs" -f ref="refs/heads/$BRANCH" -f sha="$sha" --silent &&
+       gh api -X PUT "repos/$repo/contents/$WORKFLOW" -f branch="$BRANCH" \
+         -f message="Add momus pull request review" -f content="$content" --silent &&
+       url=$(gh pr create --repo "$repo" --base "$default" --head "$BRANCH" \
+         --title "Add momus pull request review" \
+         --body "Adds \`$WORKFLOW\`: [momus](https://github.com/brianluby/momus-review) reviews each pull request and posts inline comments plus one summary comment. It uses the \`TYPESAFE_API_KEY\` repository secret; fork PRs are skipped. This pull request is its first run."); then
+      echo "   workflow: PR opened $url"
+    else
+      # A partial run leaves the branch behind; the next run skips it and
+      # says so, and deleting the branch retries from scratch.
+      echo "   workflow: FAILED (delete branch $BRANCH to retry)"; status=1
+    fi
   else
     echo "   workflow: would open a PR adding $WORKFLOW on $default"
   fi
