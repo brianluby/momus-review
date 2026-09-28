@@ -15,12 +15,15 @@ trap 'rm -rf "$stub"' EXIT
 #   has-branch    momus/enable already exists
 #   secretfail    `gh secret set` fails (403)
 #   prfail        creating the workflow file fails (422)
+#   branchfail    creating the momus/enable branch fails
+#   stuck         the file fails and so does deleting the branch
 #   private       a private repository
 #   archived      an archived repository
 # NOSCOPE=1 makes the token lack the `workflow` scope.
 cat > "$stub/gh" <<'EOF'
 #!/bin/bash
 args="$*"
+echo "$args" >> "$(dirname "$0")/calls"
 case "$args" in
   "api user -q .login") echo me ;;
   "auth status"*)
@@ -41,9 +44,12 @@ case "$args" in
   "api repos/me/archived -q"*) printf 'true\tpublic\tmain\n' ;;
   "api repos/me/"*" -q"*"archived"*) printf 'false\tpublic\tmain\n' ;;
   "api repos/me/"*"/git/ref/heads/main"*) echo abc123 ;;
+  "api -X POST repos/me/branchfail/"*) echo "HTTP 403" >&2; exit 1 ;;
   "api -X POST"*) ;;
-  "api -X PUT repos/me/prfail/"*) echo "HTTP 422" >&2; exit 1 ;;
+  "api -X PUT repos/me/prfail/"*|"api -X PUT repos/me/stuck/"*) echo "HTTP 422" >&2; exit 1 ;;
   "api -X PUT"*) ;;
+  "api -X DELETE repos/me/stuck/"*) echo "HTTP 500" >&2; exit 1 ;;
+  "api -X DELETE"*) ;;
   "pr create"*) r=${args#*--repo }; echo "https://github.com/${r%% *}/pull/1" ;;
   *) echo "unexpected: gh $args" >&2; exit 97 ;;
 esac
@@ -89,9 +95,24 @@ expect "apply sets the secret on stdin and opens a PR" 0 \
 
 expect "one repo failing does not stop the batch" 1 \
   "== me/secretfail" "secret: FAILED, skipping this repo" \
-  "== me/prfail" "workflow: FAILED (delete branch momus/enable to retry)" \
+  "== me/prfail" "workflow: FAILED; removed branch momus/enable, rerun to retry" \
   "PR opened https://github.com/me/good/pull/1" \
   -- --apply secretfail prfail good
+
+# The rollback deletes only a branch this run created.
+: > "$stub/calls"
+expect "a failed step after the branch removes it" 1 \
+  "workflow: FAILED; removed branch momus/enable, rerun to retry" \
+  "workflow: FAILED to create branch momus/enable; rerun to retry" \
+  "workflow: FAILED; could not remove branch momus/enable, delete it to retry" \
+  -- --apply prfail branchfail stuck
+deletes=$(grep "^api -X DELETE" "$stub/calls" | sed 's|.*repos/me/\([^/]*\)/.*|\1|' | sort | tr '\n' ' ')
+if [ "$deletes" = "prfail stuck " ]; then
+  echo "ok   rollback deletes only branches this run created"
+else
+  echo "FAIL rollback deletes only branches this run created (deleted: $deletes)"
+  failures=$((failures + 1))
+fi
 
 expect "rotate replaces an existing secret" 0 \
   "secret: set" \

@@ -48,9 +48,18 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # Moves with this workflow: the release workflow advances v0 to each
-      # release, so callers pinned to @v0 get the action from the same tag.
-      - uses: brianluby/momus-review@v0
+      # The action from the same commit as this workflow file
+      # (job.workflow_repository @ job.workflow_sha), so pinning review.yml to
+      # a tag or SHA pins the action that receives the secret too. The checkout
+      # is untracked in the caller's repo, which `momus review --base` ignores.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .momus-action
+          persist-credentials: false
+
+      - uses: ./.momus-action
         with:
           api-key: ${{ secrets.TYPESAFE_API_KEY }}
           paths: ${{ inputs.paths }}

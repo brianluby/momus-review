@@ -1,0 +1,7 @@
+# actionlint 1.7.12 predates the job.workflow_* context properties GitHub
+# documents for reusable workflows (the commit and repository of the
+# workflow file that defines the job); review.yml relies on them.
+paths:
+  .github/workflows/review.yml:
+    ignore:
+      - 'property "workflow_(repository|sha)" is not defined'

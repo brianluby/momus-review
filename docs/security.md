@@ -81,9 +81,14 @@ request content with a write token, so:
 - **Many repositories**: the caller passes only `TYPESAFE_API_KEY` to the
   reusable workflow, never `secrets: inherit`. Pinning callers to the
   moving `v0` tag means every repository runs whatever this repository
-  releases next; pin to a release tag or commit SHA instead where that
-  trust is too broad. `scripts/rollout.sh` hands the key to `gh` on stdin,
-  never on a command line.
+  releases next; pin `review.yml` to a release tag or commit SHA instead
+  where that trust is too broad. The workflow loads the action from its own
+  commit (`job.workflow_sha`), so that pin covers the action that receives
+  the secret too. The `momus` binary follows the `version` input (default
+  `latest`); set it to the same release tag for a full pin. The release
+  workflow moves `v0` only for the newest `v0.x.y`, never for a backport or
+  pre-release. `scripts/rollout.sh` hands the key to `gh` on stdin, never on
+  a command line.
 - **Same-repo PRs**: anyone who can push a branch can change `action.yml` or
   the code `version: source` builds, and so can reach the step's secrets.
   That is already true of push access; the dogfood workflow accepts it.

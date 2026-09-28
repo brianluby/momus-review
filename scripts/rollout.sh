@@ -112,18 +112,24 @@ for repo in "${repos[@]}"; do
   elif $has_branch; then
     echo "   workflow: branch $BRANCH already exists (open PR?), skipped"
   elif $apply; then
-    if sha=$(gh api "repos/$repo/git/ref/heads/$default" -q .object.sha) &&
-       gh api -X POST "repos/$repo/git/refs" -f ref="refs/heads/$BRANCH" -f sha="$sha" --silent &&
-       gh api -X PUT "repos/$repo/contents/$WORKFLOW" -f branch="$BRANCH" \
-         -f message="Add momus pull request review" -f content="$content" --silent &&
-       url=$(gh pr create --repo "$repo" --base "$default" --head "$BRANCH" \
-         --title "Add momus pull request review" \
-         --body "Adds \`$WORKFLOW\`: [momus](https://github.com/brianluby/momus-review) reviews each pull request and posts inline comments plus one summary comment. It uses the \`TYPESAFE_API_KEY\` repository secret; fork PRs are skipped. This pull request is its first run."); then
+    if ! { sha=$(gh api "repos/$repo/git/ref/heads/$default" -q .object.sha) &&
+           gh api -X POST "repos/$repo/git/refs" -f ref="refs/heads/$BRANCH" -f sha="$sha" --silent; }; then
+      echo "   workflow: FAILED to create branch $BRANCH; rerun to retry"; status=1
+    elif gh api -X PUT "repos/$repo/contents/$WORKFLOW" -f branch="$BRANCH" \
+           -f message="Add momus pull request review" -f content="$content" --silent &&
+         url=$(gh pr create --repo "$repo" --base "$default" --head "$BRANCH" \
+           --title "Add momus pull request review" \
+           --body "Adds \`$WORKFLOW\`: [momus](https://github.com/brianluby/momus-review) reviews each pull request and posts inline comments plus one summary comment. It uses the \`TYPESAFE_API_KEY\` repository secret; fork PRs are skipped. This pull request is its first run."); then
       echo "   workflow: PR opened $url"
     else
-      # A partial run leaves the branch behind; the next run skips it and
-      # says so, and deleting the branch retries from scratch.
-      echo "   workflow: FAILED (delete branch $BRANCH to retry)"; status=1
+      # Roll back the branch this run created, so a plain rerun retries from
+      # scratch instead of skipping the repo as "branch already exists".
+      if gh api -X DELETE "repos/$repo/git/refs/heads/$BRANCH" --silent; then
+        echo "   workflow: FAILED; removed branch $BRANCH, rerun to retry"
+      else
+        echo "   workflow: FAILED; could not remove branch $BRANCH, delete it to retry"
+      fi
+      status=1
     fi
   else
     echo "   workflow: would open a PR adding $WORKFLOW on $default"
