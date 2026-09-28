@@ -171,7 +171,8 @@ in [`src/domain/policy.rs`](src/domain/policy.rs). Full judgment graph:
 - Not a scanner replacement: compilers and linters own facts; Momus judges impact
 - Not hosted: local-first, loopback dashboard, your API key, your code stays yours
   except for the Jev API calls you explicitly make (see `docs/security.md`).
-  Secrets are redacted before anything is sent: API keys and tokens (AWS,
+  Secrets are redacted from each request's `state` (the code and context
+  momus sends; the question text is momus's own and goes unchanged): API keys and tokens (AWS,
   GitHub, GitLab, Slack, Stripe, Google, Anthropic, OpenAI), JWTs, PEM private
   keys, URL credentials, quoted values assigned to secret-looking names, and
   long random-looking literals become typed placeholders such as

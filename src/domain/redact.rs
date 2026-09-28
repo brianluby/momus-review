@@ -22,10 +22,6 @@ use serde_json::Value;
 /// The placeholder prefix; values already carrying it are never re-redacted.
 const PLACEHOLDER_PREFIX: &str = "<redacted:";
 
-/// A PEM private-key block left open this many lines is assumed malformed;
-/// redaction stops there instead of swallowing the rest of the text.
-const MAX_PEM_LINES: usize = 200;
-
 /// The placeholder that replaces a secret matched by `rule`.
 pub fn placeholder(rule: &str) -> String {
     format!("{PLACEHOLDER_PREFIX}{rule}>")
@@ -33,31 +29,43 @@ pub fn placeholder(rule: &str) -> String {
 
 /// One detection rule. Group 1 holds the secret; the rest of the match (key
 /// names, quotes, URL scheme) is kept so the model still sees the shape of
-/// the code. A provider rule's prefix is proof enough; a name-based rule
-/// (`guarded`) also skips values that are references or plain identifiers.
+/// the code.
 struct Rule {
     name: &'static str,
     regex: Regex,
-    guarded: bool,
+    guard: Guard,
+}
+
+/// Which matched values a rule lets through as not-a-secret.
+#[derive(Clone, Copy)]
+enum Guard {
+    /// A provider prefix is proof enough: always redact.
+    None,
+    /// Skip references and templates (`${DB_PASS}`, `<password>`) only: a
+    /// URL password is a secret whatever it looks like, even `pw`.
+    Reference,
+    /// Also skip identifiers, UI labels, and the other shapes in
+    /// `is_benign_value`: a secret-looking *name* is weak evidence.
+    Benign,
+}
+
+fn rule(name: &'static str, guard: Guard, pattern: &str) -> Rule {
+    Rule {
+        name,
+        regex: Regex::new(pattern).expect("valid redaction regex"),
+        guard,
+    }
 }
 
 /// A provider token rule: the distinctive prefix identifies the secret.
 fn token(name: &'static str, pattern: &str) -> Rule {
-    Rule {
-        name,
-        regex: Regex::new(pattern).expect("valid redaction regex"),
-        guarded: false,
-    }
+    rule(name, Guard::None, pattern)
 }
 
-/// A context rule (a secret-looking name or URL userinfo): the value may be
-/// a reference or identifier rather than a secret.
+/// A rule keyed on a secret-looking name: the value may be an identifier,
+/// label, or reference rather than a secret.
 fn named(name: &'static str, pattern: &str) -> Rule {
-    Rule {
-        name,
-        regex: Regex::new(pattern).expect("valid redaction regex"),
-        guarded: true,
-    }
+    rule(name, Guard::Benign, pattern)
 }
 
 /// Token rules, most specific first: a value taken by an earlier rule is a
@@ -90,10 +98,13 @@ static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
             "jwt",
             r"\b(eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})",
         ),
-        // `scheme://user:password@host` — only the password is replaced.
-        named(
+        // `scheme://user:password@host` — only the password is replaced. The
+        // authority ends at its *last* `@`, so a password holding an
+        // unescaped `@` (`u:p@ss@db`) is replaced whole.
+        rule(
             "url-credentials",
-            r#"\b[A-Za-z][A-Za-z0-9+.-]*://[^/\s:@'"`]+:([^@\s/'"`]+)@"#,
+            Guard::Reference,
+            r#"\b[A-Za-z][A-Za-z0-9+.-]*://[^/\s:@'"`]+:([^\s/?#'"`]*[^@\s/?#'"`])@"#,
         ),
         // `password = "…"`, `"apiKey": '…'`, `client_secret => "…"`: a quoted
         // literal assigned to a secret-looking name (any case). A quoted name
@@ -123,12 +134,35 @@ static PEM_BEGIN: LazyLock<Regex> = LazyLock::new(|| {
 static PEM_END: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"-----END[A-Z0-9 ]* PRIVATE KEY( BLOCK)?-----").expect("valid regex")
 });
+/// What a line inside a PEM block looks like: a base64 run or an RFC 1421
+/// header, optionally wrapped as a string literal (`'MIIE…\n' +`).
+static PEM_BODY: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"^[ \t]*["'`]?(?:(?:Proc-Type|DEK-Info):[^"'`]*|[A-Za-z0-9+/=]*)(?:\\r)?(?:\\n)?["'`]?[ \t]*[+,]?[ \t]*\r?$"#,
+    )
+    .expect("valid regex")
+});
 
 /// A value that is obviously not a secret: a reference or template, an
 /// existing placeholder, a plain identifier (`access_token`, `X-Api-Key`)
 /// naming the secret rather than holding it, a UI label (`Password`,
 /// translated text), a version range (`"ngx-window-token": "^7.0.0"`), or a
 /// public on-chain address.
+/// A reference or template standing in for a secret, a mask, or an
+/// existing placeholder.
+fn is_reference(value: &str) -> bool {
+    value.starts_with(PLACEHOLDER_PREFIX)
+        || value.starts_with('$')
+        || value.starts_with('{')
+        || value.starts_with('<')
+        || value.contains("process.env")
+        || value.contains("${")
+        || value.contains("{{")
+        || value
+            .chars()
+            .all(|c| c == '*' || c == 'x' || c == 'X' || c == '.')
+}
+
 fn is_benign_value(value: &str) -> bool {
     static IDENTIFIER: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(
@@ -137,19 +171,7 @@ fn is_benign_value(value: &str) -> bool {
         .expect("valid regex")
     });
     let translated = !value.is_ascii() && !value.chars().any(|c| c.is_ascii_digit());
-    value.starts_with(PLACEHOLDER_PREFIX)
-        || value.starts_with('$')
-        || value.starts_with('{')
-        || value.starts_with('<')
-        || value.starts_with('%')
-        || value.contains("process.env")
-        || value.contains("${")
-        || value.contains("{{")
-        || value
-            .chars()
-            .all(|c| c == '*' || c == 'x' || c == 'X' || c == '.')
-        || translated
-        || IDENTIFIER.is_match(value)
+    is_reference(value) || value.starts_with('%') || translated || IDENTIFIER.is_match(value)
 }
 
 /// Shannon entropy in bits per character.
@@ -240,7 +262,12 @@ fn replace_group(caps: &Captures, rule: &Rule, found: &mut Redactions) -> String
     let Some(secret) = caps.get(1) else {
         return whole.as_str().to_string();
     };
-    if rule.guarded && is_benign_value(secret.as_str()) {
+    let skip = match rule.guard {
+        Guard::None => false,
+        Guard::Reference => is_reference(secret.as_str()),
+        Guard::Benign => is_benign_value(secret.as_str()),
+    };
+    if skip {
         return whole.as_str().to_string();
     }
     found.push(rule.name, secret.as_str());
@@ -257,13 +284,19 @@ fn replace_group(caps: &Captures, rule: &Rule, found: &mut Redactions) -> String
 /// Redacts PEM private-key blocks line by line, so a block inside a diff
 /// keeps each line's `+`/`-`/` ` marker and every newline. A block on one
 /// line (a string with `\n` escapes) collapses to one placeholder.
+///
+/// A block runs to its END marker for as long as its lines look like PEM
+/// body (`PEM_BODY`), with no length cap. A line that does not ends it: a
+/// hunk that cuts a key short stops at the first line of code after it. A
+/// BEGIN marker followed by code on its own line (a PEM parser's constant or
+/// `starts_with` check) is a reference, not a key, and is left alone.
 fn redact_pem(text: &str, found: &mut Redactions) -> String {
     if !PEM_BEGIN.is_match(text) {
         return text.to_string();
     }
     let rule = "private-key";
     let mut out = String::with_capacity(text.len());
-    let mut open_lines: Option<usize> = None;
+    let mut open = false;
     let mut body = String::new();
 
     for line in text.split_inclusive('\n') {
@@ -271,8 +304,8 @@ fn redact_pem(text: &str, found: &mut Redactions) -> String {
             Some(content) => (content, "\n"),
             None => (line, ""),
         };
-        match open_lines {
-            None => match PEM_BEGIN.find(content) {
+        if !open {
+            match PEM_BEGIN.find(content) {
                 Some(begin) => {
                     let rest = &content[begin.end()..];
                     if let Some(end) = PEM_END.find(rest) {
@@ -280,39 +313,41 @@ fn redact_pem(text: &str, found: &mut Redactions) -> String {
                         out.push_str(&content[..begin.start()]);
                         out.push_str(&placeholder(rule));
                         out.push_str(&rest[end.end()..]);
-                    } else {
+                    } else if PEM_BODY.is_match(rest) {
                         body = rest.to_string();
                         out.push_str(&content[..begin.start()]);
                         out.push_str(&placeholder(rule));
-                        open_lines = Some(1);
+                        open = true;
+                    } else {
+                        out.push_str(content);
                     }
                 }
                 None => out.push_str(content),
-            },
-            Some(lines) => {
-                // Keep a leading diff marker so the patch stays well-formed.
-                let marker_len = usize::from(content.starts_with(['+', '-', ' ']));
+            }
+        } else {
+            // Keep a leading diff marker so the patch stays well-formed.
+            let marker_len = usize::from(content.starts_with(['+', '-', ' ']));
+            let payload = &content[marker_len..];
+            if let Some(end) = PEM_END.find(payload) {
+                body.push_str(&payload[..end.start()]);
+                found.push(rule, &body);
+                body.clear();
                 out.push_str(&content[..marker_len]);
-                if let Some(end) = PEM_END.find(content) {
-                    body.push_str(&content[marker_len..end.start()]);
-                    found.push(rule, &body);
-                    body.clear();
-                    out.push_str(&content[end.end()..]);
-                    open_lines = None;
-                } else if lines >= MAX_PEM_LINES {
-                    found.push(rule, &body);
-                    body.clear();
-                    out.push_str(&content[marker_len..]);
-                    open_lines = None;
-                } else {
-                    body.push_str(&content[marker_len..]);
-                    open_lines = Some(lines + 1);
-                }
+                out.push_str(&payload[end.end()..]);
+                open = false;
+            } else if PEM_BODY.is_match(payload) {
+                body.push_str(payload);
+                out.push_str(&content[..marker_len]);
+            } else {
+                found.push(rule, &body);
+                body.clear();
+                out.push_str(content);
+                open = false;
             }
         }
         out.push_str(newline);
     }
-    if open_lines.is_some() {
+    if open {
         found.push(rule, &body);
     }
     out
@@ -427,6 +462,18 @@ mod tests {
             r#"{"apiKey": "<redacted:generic-secret>", "name": "x"}"#
         );
 
+        let (out, _) = run("postgres://u:p@ss@db/x");
+        assert_eq!(out, "postgres://u:<redacted:url-credentials>@db/x");
+
+        // A plain-word URL password is still a password; a template is not.
+        let (out, _) = run("postgres://admin:hunter@db/app");
+        assert_eq!(out, "postgres://admin:<redacted:url-credentials>@db/app");
+        let (out, rules) = run("postgres://admin:${DB_PASS}@db/app");
+        assert!(rules.is_empty(), "{out}");
+
+        let (out, _) = run("https://u:pw@host/a@b?c=d@e");
+        assert_eq!(out, "https://u:<redacted:url-credentials>@host/a@b?c=d@e");
+
         let (out, _) = run("postgres://admin:s3cretPass@db:5432/app");
         assert_eq!(
             out,
@@ -495,6 +542,46 @@ mod tests {
         let (out, rules) = run(text);
         assert_eq!(rules, vec!["private-key"]);
         assert_eq!(out, r#"key: "<redacted:private-key>\n","#);
+    }
+
+    #[test]
+    fn long_pem_is_redacted_through_its_end_marker() {
+        let body: Vec<String> = (0..300).map(|i| format!("+QUJD{i:04}RUZH")).collect();
+        let patch = format!(
+            "+-----BEGIN PRIVATE KEY-----\n{}\n+-----END PRIVATE KEY-----\n+next();",
+            body.join("\n")
+        );
+        let (out, rules) = run(&patch);
+        assert_eq!(rules, vec!["private-key"]);
+        assert!(
+            !out.contains("QUJD"),
+            "key body leaked past the old 200-line cap"
+        );
+        assert!(out.ends_with("+\n+next();"));
+    }
+
+    #[test]
+    fn pem_marker_in_parser_code_is_left_alone() {
+        let text =
+            "if pem.starts_with(\"-----BEGIN RSA PRIVATE KEY-----\") {\n    parse_rsa(pem)\n}";
+        let (out, rules) = run(text);
+        assert!(rules.is_empty());
+        assert_eq!(out, text);
+    }
+
+    #[test]
+    fn truncated_pem_stops_at_the_first_code_line() {
+        let (out, rules) = run("+-----BEGIN PRIVATE KEY-----\n+MIIBVQIBADAN\n+fn next() {}");
+        assert_eq!(rules, vec!["private-key"]);
+        assert_eq!(out, "+<redacted:private-key>\n+\n+fn next() {}");
+    }
+
+    #[test]
+    fn pem_as_concatenated_string_literals() {
+        let text = "const k = '-----BEGIN RSA PRIVATE KEY-----\\n' +\n  'MIIEpAIBAAKCAQEA\\n' +\n  '-----END RSA PRIVATE KEY-----'";
+        let (out, rules) = run(text);
+        assert_eq!(rules, vec!["private-key"]);
+        assert!(!out.contains("MIIE"), "{out}");
     }
 
     #[test]
