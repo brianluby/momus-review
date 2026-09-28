@@ -4,7 +4,7 @@
 use anyhow::Result;
 use serde_json::{Map, Value, json};
 
-use crate::domain::patch::parse_hunks;
+use crate::domain::patch::{first_added_line, parse_hunks};
 use crate::domain::policy::{
     BLOCKING_SEVERITY, MIN_LOCATION_CONFIDENCE, MIN_META_JUDGE_CONFIDENCE, Probabilities,
     REVIEW_PRIORITY_RUBRIC, ROUTE_SEVERITY, SEVERITY_RUBRIC, Dimension,
@@ -337,7 +337,9 @@ pub async fn locate_signal(
 
     Ok(Some(Finding {
         file: signal.file.path.to_string(),
-        line: hunk.start_line,
+        // The first changed line, not the hunk's leading context: what a
+        // reader (and a PR review comment) should land on.
+        line: first_added_line(hunk),
         dimension: signal.dimension,
         probability: signal.probability,
         location_confidence: selected_confidence,

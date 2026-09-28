@@ -17,11 +17,13 @@ use crate::review::typesafe::TypeSafeClient;
 pub struct ChangesStrategy {
     client: TypeSafeClient,
     exclude: Exclude,
+    /// `--base`: diff against the merge base with this revision, not `HEAD`.
+    base: Option<String>,
 }
 
 impl ChangesStrategy {
-    pub fn new(client: TypeSafeClient, exclude: Exclude) -> Self {
-        Self { client, exclude }
+    pub fn new(client: TypeSafeClient, exclude: Exclude, base: Option<String>) -> Self {
+        Self { client, exclude, base }
     }
 }
 
@@ -45,7 +47,10 @@ impl ReviewStrategy for ChangesStrategy {
     }
 
     fn discover(&self, scopes: &[PathBuf]) -> Result<Discovery<ChangedFile>> {
-        let changed = git::changed_files(scopes, &self.exclude)?;
+        let changed = match &self.base {
+            Some(base) => git::changed_files_since(scopes, &self.exclude, base)?,
+            None => git::changed_files(scopes, &self.exclude)?,
+        };
         let mut files = Vec::new();
         let mut context_files = Vec::new();
         for f in changed {

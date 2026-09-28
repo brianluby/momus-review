@@ -41,6 +41,23 @@ pub fn parse_hunks(patch: &str) -> Vec<Hunk> {
     hunks
 }
 
+/// The new-file line of the hunk's first added line: where a finding in this
+/// hunk points, rather than the hunk's leading context. A deletion-only hunk
+/// has no added line and falls back to its start line (still inside the diff,
+/// so a review comment can anchor there).
+pub fn first_added_line(hunk: &Hunk) -> usize {
+    let mut line = hunk.start_line;
+    for text in hunk.patch.split('\n').skip(1) {
+        match text.as_bytes().first() {
+            Some(b'+') => return line,
+            Some(b' ') => line += 1,
+            // `-` removals and `\ No newline at end of file` take no new line.
+            _ => {}
+        }
+    }
+    hunk.start_line
+}
+
 /// Maps a new-file line to the matching base (pre-change) line using the
 /// patch's hunk headers. A line inside a hunk maps to the same offset in the
 /// hunk's old range (clamped to it); a line between hunks is shifted by the
@@ -122,6 +139,29 @@ mod tests {
         assert_eq!(hunks[0].start_line, 1);
         assert_eq!(hunks[1].id, "hunk_2");
         assert_eq!(hunks[1].start_line, 7);
+    }
+
+    #[test]
+    fn first_added_line_skips_leading_context_and_removals() {
+        // Three context lines, one removal, then the addition at new line 13.
+        let patch = "@@ -10,5 +10,5 @@\n a\n b\n c\n-old\n+new\n d";
+        let hunk = &parse_hunks(patch)[0];
+        assert_eq!(hunk.start_line, 10);
+        assert_eq!(first_added_line(hunk), 13);
+
+        // An empty context line is a lone space and still advances the count.
+        let blank = &parse_hunks("@@ -1,3 +1,4 @@\n x\n \n+y\n z")[0];
+        assert_eq!(first_added_line(blank), 3);
+
+        // All additions: the first line of the hunk.
+        let added = &parse_hunks("@@ -0,0 +1,2 @@\n+a\n+b")[0];
+        assert_eq!(first_added_line(added), 1);
+    }
+
+    #[test]
+    fn deletion_only_hunk_falls_back_to_its_start() {
+        let hunk = &parse_hunks("@@ -4,4 +4,3 @@\n a\n-b\n c\n d\n\\ No newline at end of file")[0];
+        assert_eq!(first_added_line(hunk), 4);
     }
 
     #[test]
