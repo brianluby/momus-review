@@ -72,6 +72,10 @@ Now is complete.
 
 ## Later (bets)
 
+- Whole-repo scale (epic #31): bounded per-request context, a
+  content-addressed result cache (incremental, resumable), a repo index,
+  sharded scans with `momus merge`, tiered screening under a budget. Design
+  in `docs/scaling.md`.
 - Decision-theoretic budgets: value-of-information follow-up selection
   ("which 8 would most change the merge decision?") instead of top-8 by
   probability; per-dimension thresholds; cost/latency meter; result caching.

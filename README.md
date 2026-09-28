@@ -195,6 +195,7 @@ fixes), `docs/implementation.md` (build decisions).
 - `docs/language-support.md` — how file discovery and test context work, adding languages
 - `docs/security.md` — threat model, FIND-001–005, CI (GitHub Action) security
 - `docs/roadmap.md` — Now/Next/Later, metrics, open bets
+- `docs/scaling.md` — whole-repo scale: context budgets, result cache, shards, tiered screening
 - `docs/implementation.md` — build decisions (thin client vs. `jev_sdk`), pending upgrades
 - `docs/rust-types.md` — the shipped Rust types/traits + the `jev_sdk` finding
 - `docs/security-taxonomy.md` — code-findable security classes vs. screen coverage, and the steering decisions
