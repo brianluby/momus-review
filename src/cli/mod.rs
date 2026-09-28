@@ -44,6 +44,11 @@ pub enum Command {
         #[arg(long = "exclude", value_name = "GLOB")]
         exclude: Vec<String>,
 
+        /// No changed source files is an empty report and exit 0, not an
+        /// error (CI: a docs- or config-only pull request)
+        #[arg(long)]
+        allow_empty: bool,
+
         /// Diff against the merge base of REV and HEAD instead of HEAD: the
         /// branch's commits plus uncommitted changes to tracked files;
         /// untracked files are ignored (a PR's diff in CI)
@@ -138,15 +143,15 @@ pub enum Command {
 
 pub async fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        Command::Review { paths, fail_on_blocking, exclude, base, follow_ups, sarif, no_refine, no_redact } => {
+        Command::Review { paths, fail_on_blocking, exclude, allow_empty, base, follow_ups, sarif, no_refine, no_redact } => {
             let strategy = ChangesStrategy::new(client(no_redact)?, Exclude::new(&exclude)?, base);
             let sarif = sarif.map(PathBuf::from);
-            run_mode(paths, fail_on_blocking, options(follow_ups, no_refine), sarif, strategy).await
+            run_mode(paths, fail_on_blocking, options(follow_ups, no_refine, allow_empty), sarif, strategy).await
         }
         Command::Scan { paths, fail_on_blocking, exclude, follow_ups, sarif, no_refine, no_redact } => {
             let strategy = CodebaseStrategy::new(client(no_redact)?, Exclude::new(&exclude)?);
             let sarif = sarif.map(PathBuf::from);
-            run_mode(paths, fail_on_blocking, options(follow_ups, no_refine), sarif, strategy).await
+            run_mode(paths, fail_on_blocking, options(follow_ups, no_refine, false), sarif, strategy).await
         }
         Command::GithubReview { report, max_comments, event, fail_on_blocking, dry_run } => {
             let options = PublishOptions { max_comments, event: event.into(), dry_run };
@@ -215,13 +220,13 @@ fn client(no_redact: bool) -> Result<TypeSafeClient> {
 
 /// Review options from CLI flags plus the saved feedback log. Feedback is
 /// best-effort: an unreadable log is reported and ignored, not fatal.
-fn options(max_follow_ups: Option<usize>, no_refine: bool) -> ReviewOptions {
+fn options(max_follow_ups: Option<usize>, no_refine: bool, allow_empty: bool) -> ReviewOptions {
     let path = feedback_path();
     let feedback = read_feedback(&path).unwrap_or_else(|e| {
         eprintln!("feedback ignored: {e:#}");
         Default::default()
     });
-    ReviewOptions { max_follow_ups, refine: !no_refine, feedback }
+    ReviewOptions { max_follow_ups, refine: !no_refine, feedback, allow_empty }
 }
 
 /// Runs a review, saves the report, prints JSON to stdout, and applies the
