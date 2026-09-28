@@ -85,7 +85,10 @@ Now is complete.
 
 The five refinement judgments run as one post-locate stage
 (`review/refine`, `--no-refine` to skip); see `docs/jev-pipeline.md`.
-- GitHub Action with inline comments; secret redaction pre-send.
+- ✅ Secret redaction pre-send (#25): typed placeholders, per-rule counts in
+  the report, `--no-redact` to opt out.
+- GitHub Action with inline comments (#26 `--base`, #27 publisher, #28
+  Action + release binaries).
 - ✅ Golden-set eval harness (shipped: `momus-eval` + curated Juice Shop
   ground truth) — precision/recall on labeled vulns.
 

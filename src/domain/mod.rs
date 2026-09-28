@@ -5,4 +5,5 @@ pub mod feedback;
 pub mod language;
 pub mod patch;
 pub mod policy;
+pub mod redact;
 pub mod report;

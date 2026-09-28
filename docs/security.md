@@ -45,16 +45,27 @@ All verified with smoke tests; `npm run check` passes.
 
 ## Residual Risks
 
-- **FIND-005, by design**: full patches/contents are transmitted to the TypeSafe
-  API. Key handling is correct (env file, gitignored), but users must know that
-  `scan` uploads the scoped tree. Needs a README note + eventual secret
-  redaction pre-send.
+- **FIND-005, by design, mitigated (#25)**: full patches/contents are
+  transmitted to the TypeSafe API, and `scan` uploads the scoped tree.
+  Secret redaction (`domain/redact.rs`) now scrubs every request `state` in
+  `TypeSafeClient::system_one`, the single egress point, replacing each
+  secret with a typed placeholder (`<redacted:rule>`) and preserving line
+  structure. It is pattern-based: provider token formats, PEM keys, JWTs,
+  URL userinfo, secret-named assignments, and a high-entropy fallback. A
+  secret with none of those shapes (a short password in an unlabeled
+  variable, a pure-hex key under a neutral name) still goes out. On by
+  default, including for loopback servers; `--no-redact` / `MOMUS_REDACT=off`
+  disables it.
 - No framing beyond CSP, no CORS headers (loopback + no cross-origin reads
   suffices for now).
-- Report file (`reviews/latest.json`, overridable via `REVIEW_FILE`) is
-  world-readable by default; contains code-derived findings, not secrets —
-  but treat it as sensitive.
-- No audit log of what was sent to the API per run.
+- Report file (`reviews/latest.json`, overridable via `MOMUS_REPORT`) is
+  world-readable by default. Redaction applies only to what is sent, so
+  `evidence` excerpts are verbatim and **can contain a hardcoded secret**
+  (keeping them local keeps fingerprints stable). Treat the report as
+  sensitive, and redact before publishing any excerpt (PR comments, #27).
+- Per-run audit: each report's `redactions` field counts distinct values
+  redacted per rule (hashed, never stored). There is still no log of the
+  full request bodies.
 
 ## Rust Port Must-Preserve List
 

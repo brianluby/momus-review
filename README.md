@@ -28,8 +28,9 @@ Two modes, one funnel:
 Both accept one or more scope directories (unioned into one run) plus
 `--exclude GLOB` (skip vendored/third-party subtrees), `--follow-ups N`
 (opt into a follow-up budget; unlimited by default), and
-`--fail-on-blocking` (CI exit contract), and `--no-refine` (skip the
-refinement stage below).
+`--fail-on-blocking` (CI exit contract), `--no-refine` (skip the
+refinement stage below), and `--no-redact` (send code without secret
+redaction; see below).
 
 Source languages: the 20-language consensus set (Python, JavaScript,
 TypeScript, Java, C#, C++, C, Go, Rust, PHP, Ruby, Kotlin, Swift, shell, SQL,
@@ -57,6 +58,7 @@ Read from the environment (or `.env`):
 | `TYPESAFE_DEFAULT_MODEL` | `jev-latest` | model id sent with each request |
 | `TYPESAFE_TIMEOUT_SECS` | `60` | per-request timeout |
 | `MOMUS_CONCURRENCY` | `3` | parallel `system_one` requests |
+| `MOMUS_REDACT` | `on` | redact secrets before sending (`off` or `--no-redact` disables) |
 
 To run against a local System One server such as
 [Winnow-12B](https://github.com/EldanRing/winnow-inference), point the base
@@ -168,4 +170,10 @@ in [`src/domain/policy.rs`](src/domain/policy.rs). Full judgment graph:
   severity, owner) before they are narrated
 - Not a scanner replacement: compilers and linters own facts; Momus judges impact
 - Not hosted: local-first, loopback dashboard, your API key, your code stays yours
-  except for the Jev API calls you explicitly make (see `docs/security.md`)
+  except for the Jev API calls you explicitly make (see `docs/security.md`).
+  Secrets are redacted before anything is sent: API keys and tokens (AWS,
+  GitHub, GitLab, Slack, Stripe, Google, Anthropic, OpenAI), JWTs, PEM private
+  keys, URL credentials, quoted values assigned to secret-looking names, and
+  long random-looking literals become typed placeholders such as
+  `<redacted:aws-access-key>`, so hardcoded-secret findings still surface.
+  Each report's `redactions` field counts what was hidden per rule.
