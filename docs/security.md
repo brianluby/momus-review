@@ -78,6 +78,12 @@ request content with a write token, so:
   "already posted", and the summary is found and edited, only in
   bot-authored comments. Fingerprints are deterministic, so otherwise a PR
   author could pre-post a finding's marker to suppress it.
+- **Many repositories**: the caller passes only `TYPESAFE_API_KEY` to the
+  reusable workflow, never `secrets: inherit`. Pinning callers to the
+  moving `v0` tag means every repository runs whatever this repository
+  releases next; pin to a release tag or commit SHA instead where that
+  trust is too broad. `scripts/rollout.sh` hands the key to `gh` on stdin,
+  never on a command line.
 - **Same-repo PRs**: anyone who can push a branch can change `action.yml` or
   the code `version: source` builds, and so can reach the step's secrets.
   That is already true of push access; the dogfood workflow accepts it.

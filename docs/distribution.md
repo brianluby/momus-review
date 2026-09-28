@@ -29,6 +29,15 @@ requests.
 - **Any CI**: `momus review --base origin/main --fail-on-blocking` is the
   exit-code contract; `--sarif <path>` writes SARIF 2.1.0 for other
   uploaders.
+- **Many repositories**: `.github/workflows/review.yml` is a reusable
+  workflow (`workflow_call`); each repository carries only the caller in
+  `examples/momus.yml`, pinned to the moving `v0` tag, and passes the
+  `TYPESAFE_API_KEY` secret explicitly. `scripts/rollout.sh` sets the secret
+  and opens the pull request that adds the caller, for a list of
+  repositories (dry run by default). Personal accounts have no account-wide
+  Actions secrets, so the script sets one per repository; in an
+  organization, an org secret shared with selected repositories replaces
+  that step.
 - This repository reviews its own pull requests with the action
   (`.github/workflows/momus.yml`, `version: source`, advisory only).
 
@@ -37,7 +46,8 @@ requests.
 1. Bump `version` in `Cargo.toml` (and `Cargo.lock`), merge to `main`.
 2. Tag and push: `git tag v0.1.0 && git push origin v0.1.0`. The workflow
    refuses a tag that does not match `Cargo.toml`, runs the tests on every
-   target, and creates the release with generated notes.
+   target, creates the release with generated notes, and moves the major
+   tag (`v0`) to the release so `@v0` callers pick it up.
 3. `workflow_dispatch` on the release workflow builds the same archives as
    run artifacts without publishing anything, for a dry run.
 
