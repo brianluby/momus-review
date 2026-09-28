@@ -40,6 +40,22 @@ the PR's diff. The checkout needs enough history to find the merge base,
 e.g. `actions/checkout` with `fetch-depth: 0`. Each finding points at the
 first changed line of its hunk.
 
+`momus github-review` then publishes the saved report to the pull request
+from inside GitHub Actions. It reads `GITHUB_TOKEN` (needs
+`pull-requests: write`), `GITHUB_REPOSITORY`, and the `pull_request` event
+at `GITHUB_EVENT_PATH`. Findings on a line of the PR's diff become inline
+review comments, at most `--max-comments N` (default 10), best-ranked first;
+everything else goes into one summary comment with counts, P(revert), usage,
+and redaction totals. Re-runs are idempotent: each comment carries a hidden
+fingerprint marker, so a finding is posted once, and the summary is edited in
+place. The review is a plain comment by default and blocking is left to the
+check status (`--fail-on-blocking`); `--event request-changes` requests
+changes when an inline finding blocks. Published text is redacted like
+outgoing requests. `--dry-run` reads the pull request and prints what would
+be posted. Check out the PR head (`ref: ${{ github.event.pull_request.head.sha }}`),
+not the default merge commit, so line numbers match the PR's diff; if GitHub
+still rejects an anchor, those findings move to the summary.
+
 Source languages: the 20-language consensus set (Python, JavaScript,
 TypeScript, Java, C#, C++, C, Go, Rust, PHP, Ruby, Kotlin, Swift, shell, SQL,
 R, Scala, Dart, Lua, PowerShell), each with its own mechanism vocabulary — see
