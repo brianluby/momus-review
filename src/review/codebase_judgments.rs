@@ -1,6 +1,6 @@
 //! Codebase-scan judgments: screen / profile / locate for whole-file mode.
 //! These ask whether an issue exists in complete source, rather than whether
-//! a patch introduced one. Mirrors `review/codebase-judgments.ts`.
+//! a patch introduced one.
 
 use std::collections::BTreeSet;
 
@@ -357,7 +357,7 @@ pub async fn locate_source_signal(
     }))
 }
 
-// ---- Helpers (mirror the private fns in codebase-judgments.ts) ---------
+// ---- Helpers ---------------------------------------------------------
 
 fn basename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)

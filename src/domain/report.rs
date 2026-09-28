@@ -1,6 +1,6 @@
 //! Report shapes shared by both review modes and the saved dashboard report.
 //! Serde-only: no logic, no imports beyond `serde`, `serde_json`, and the
-//! policy vocabulary. Mirrors `src/domain/types.ts`.
+//! policy vocabulary.
 
 use std::collections::BTreeMap;
 
@@ -34,8 +34,8 @@ pub struct SourceFile {
     pub content: String,
 }
 
-/// `Hunk { id, startLine, patch }` — a single diff hunk. Serialized camelCase
-/// to match the prototype's wire shape in `candidateHunks`/`selectedEvidence`.
+/// `Hunk { id, startLine, patch }` — a single diff hunk. Serialized camelCase,
+/// the wire shape judgments send in `candidateHunks`/`selectedEvidence`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Hunk {
@@ -233,9 +233,8 @@ pub struct UsageSummary {
     pub output_tokens: u64,
 }
 
-/// The full review report. `#[serde(default)]` reproduces the prototype's
-/// deliberately loose `isReviewReport`: a report saved by an older version
-/// stays viewable.
+/// The full review report. `#[serde(default)]` keeps reads deliberately
+/// tolerant: a report saved by an older version stays viewable.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ReviewReport {
@@ -269,7 +268,7 @@ mod tests {
     /// TypeSafe API: camelCase dimension keys and report fields, snake_case
     /// action, and the flattened matrix rows.
     #[test]
-    fn wire_shape_matches_prototype() {
+    fn wire_shape_is_pinned() {
         let mut probabilities = std::collections::BTreeMap::new();
         probabilities.insert(Dimension::TestGap, 0.93);
 

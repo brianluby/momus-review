@@ -1,6 +1,5 @@
 //! CLI entry points: `review` (diff), `scan` (codebase), `github-review`
-//! (publish to a pull request), `dashboard`.
-//! Mirrors the four `cli/*.ts` entry points consolidated under one clap binary.
+//! (publish to a pull request), `dashboard`, under one clap binary.
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};

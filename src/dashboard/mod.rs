@@ -1,6 +1,6 @@
 //! Local-only dashboard server: three allowlisted static assets plus the saved
-//! review report as JSON. Binds to loopback only. Mirrors `dashboard/server.ts`
-//! with the same Host/CSP/nosniff hardening.
+//! review report as JSON. Binds to loopback only, with Host allowlist, CSP,
+//! and nosniff hardening (see `docs/security.md`).
 
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, Request, StatusCode, header};

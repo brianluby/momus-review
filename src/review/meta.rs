@@ -1,6 +1,6 @@
 //! Meta-judge false-positive filter: a second, skeptical pass after mechanism
 //! classification that drops located findings whose evidence does not
-//! concretely support the mechanism. Mirrors `review/meta.ts`.
+//! concretely support the mechanism.
 
 use anyhow::Result;
 use serde_json::{json, Value};

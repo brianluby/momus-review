@@ -1,6 +1,5 @@
 //! Filesystem adapter for the saved review report that the dashboard reads.
-//! Writes are atomic: unique `O_EXCL` temp file then rename. Mirrors
-//! `adapters/report-store.ts`.
+//! Writes are atomic: unique `O_EXCL` temp file then rename.
 
 use std::fs::{OpenOptions, create_dir_all, metadata, read_dir, read_to_string, remove_file, rename};
 use std::io::Write;
@@ -12,8 +11,8 @@ use anyhow::{Result, anyhow, bail};
 
 use crate::domain::report::{ReviewMode, ReviewReport};
 
-/// The result of reading a saved report, mirroring the prototype's
-/// `StoredReport` shape consumed by the dashboard client.
+/// The result of reading a saved report: the report with its save time, no
+/// report yet, or a file that is not review output (the dashboard shows each).
 ///
 /// The `Ok` variant is large (it carries a whole report) but is read once and
 /// moved straight into the dashboard response; boxing would be overkill.
@@ -25,7 +24,7 @@ pub enum StoredReport {
 }
 
 /// Defaults to `./reviews/latest.json`. Override with `MOMUS_REPORT=path`
-/// (successor to the prototype's `REVIEW_FILE`). Never in the install dir.
+/// Never in the install dir.
 pub fn report_path() -> PathBuf {
     if let Ok(p) = std::env::var("MOMUS_REPORT")
         && !p.trim().is_empty()

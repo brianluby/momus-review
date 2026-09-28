@@ -1,40 +1,36 @@
 # Rust Types & Traits (`domain/`, `review/`)
 
 The concrete `serde` structs, policy data, and the `ReviewStrategy` trait as
-they ship in the Rust port. Every symbol maps to a TypeScript symbol in the
-prototype (`src/domain/*.ts`, `src/review/*.ts`); the mapping is noted so the
-port stays mechanical and reviewable.
+they ship, plus the `github-review` types.
 
 ## Key decision: a thin HTTP client, not `jev_sdk`
 
-`jev-sdk` 0.1.0 (crates.io) could not express the prototype's judgment
-questions. Its question types are string-only:
+`jev-sdk` 0.1.0 (crates.io) could not express momus's judgment questions.
+Its question types are string-only:
 
 - `NoulCriteria { yes: Option<String>, no: Option<String> }`
 - `Choice { criteria: IndexMap<String, Option<String>> }`
 - `Score { criteria: Vec<String> }`
 
-…but the prototype sends *structured JSON* in `instructions`/`criteria` — e.g.
+…but momus sends *structured JSON* in `instructions`/`criteria` — e.g.
 `{ what, examples }`, `not_for`, `inspect`/`focus`/`ignore`/`compare`/`caution`
 on the instruction object:
 
-```js
+```rust
 noul(
-  { question: "…", inspect: "file.patch", focus: "…", ignore: ["…"] },
-  { true: { what: "…", examples: ["…"] }, false: { what: "…", not_for: "…" } },
+    json!({ "question": "…", "inspect": "file.patch", "focus": "…", "ignore": ["…"] }),
+    json!({ "true": { "what": "…", "examples": ["…"] }, "false": { "what": "…", "not_for": "…" } }),
 )
 ```
 
-This is exactly the gap `docs/rust-port.md` Step 0 anticipated ("if anything
-is missing, the underlying API is plain HTTP — fill gaps directly"). So the
-port speaks the wire format directly in `src/review/typesafe.rs` — a thin
-`POST /v1/systemone` client that sends/parses arbitrary JSON and matches the
-TypeScript SDK's request shape byte-for-byte. `jev-sdk` is **not** a
-dependency; its only reference value was the response answer shapes
+The underlying API is plain HTTP, so momus speaks the wire format directly in
+`src/review/typesafe.rs`: a thin `POST /v1/systemone` client that sends and
+parses arbitrary JSON. `jev-sdk` is **not** a dependency; its only reference
+value was the response answer shapes
 (`NoulAnswer.noul`, `ChoiceAnswer.choice`/`confidence`, `ScoreAnswer.score`
 /`confidence`), which `typesafe.rs` reproduces as accessors.
 
-## 1. `domain/policy.rs` — pure data (mirrors `config.ts`)
+## 1. `domain/policy.rs` — pure data
 
 ```rust
 #[derive(..., Serialize, Deserialize)]
@@ -69,7 +65,7 @@ behind `Language::from_path`, `is_source_path`, and `is_test_path`. See
 `Dimension` also carries `key()` (`"testGap"`, …) and `definition()` (the
 `dimensions` record string used in `locate` state).
 
-## 2. `domain/report.rs` — serialized shapes (mirrors `types.ts`)
+## 2. `domain/report.rs` — serialized shapes
 
 Serde-only. Fields are `snake_case` in Rust, `camelCase` on the wire via
 `#[serde(rename_all = "camelCase")]`; `Action` is `snake_case`.
@@ -78,7 +74,7 @@ Serde-only. Fields are `snake_case` in Rust, `camelCase` on the wire via
 #[serde(rename_all = "lowercase")]
 pub enum ReviewMode { Changes, Codebase }
 
-pub struct ChangedFile { pub path: String, pub patch: String }
+pub struct ChangedFile { pub path: String, pub patch: String, pub base: String }  // base: pre-change content
 pub struct SourceFile  { pub path: String, pub content: String }
 
 #[serde(rename_all = "camelCase")]
@@ -107,20 +103,21 @@ pub struct ReviewReport { /* mode, scope, dimensions, config, screened_files,
                              workflow, findings */ }
 ```
 
-`#[serde(default)]` on the report reproduces the prototype's loose
-`isReviewReport`: an older report still deserializes. `#[serde(flatten)]` on
-`MatrixRow` reproduces `Record<Dimension, number>` flattened onto the row.
+`#[serde(default)]` on the report keeps reads tolerant: a report saved by an
+older version still deserializes. `#[serde(flatten)]` on `MatrixRow` puts the
+per-dimension probabilities directly on the row (`{ "file", "testGap", … }`).
 
-## 3. `domain/patch.rs` — diff helpers (mirrors `patch.ts`)
+## 3. `domain/patch.rs` — diff helpers
 
 ```rust
 pub fn parse_hunks(patch: &str) -> Vec<Hunk>;       // @@ +N parsing, start-line tracking
+pub fn first_added_line(hunk: &Hunk) -> usize;      // where a finding in the hunk points
 pub fn patch_for_new_file(source: &str) -> String;  // all-additions, 80-line chunks
 ```
 
 Pure string functions; no async, I/O, or SDK.
 
-## 4. `review/` — the `ReviewStrategy` trait (mirrors `workflow.ts`)
+## 4. `review/` — the `ReviewStrategy` trait
 
 ```rust
 pub trait FileEntry: Debug + Clone + Serialize {
@@ -146,8 +143,8 @@ pub trait ReviewStrategy: Send + Sync {
 }
 ```
 
-Both modes use the same concrete type for `File` and `Context`, so the two
-TS type params collapse to one associated type. Two strategy structs
+Both modes use the same concrete type for the reviewed files and their
+context, so one associated type serves both roles. Two strategy structs
 (`ChangesStrategy`, `CodebaseStrategy`) own a `TypeSafeClient` and delegate to
 `review/judgments.rs` / `review/codebase_judgments.rs` respectively. Two
 shared modules back the actionability and region work: `review/explain.rs`
@@ -160,24 +157,60 @@ concurrency (`futures` `buffered(CONCURRENCY)` — ordered, bounded
 concurrency), thresholding (`SCREEN_THRESHOLD`), ranking, follow-up budget
 (`MAX_FOLLOW_UPS`), and report assembly.
 
-**Deviation from the prototype:** follow-ups are unlimited by default — every
+**Follow-ups are unlimited by default:** every
 signal at/above `SCREEN_THRESHOLD` gets a follow-up. `--follow-ups N` opts back
 into a budget; when capped, selection is per-dimension (each dimension with a
 signal gets a slot before global probability fills the rest), so a saturated
-cheap dimension (`testGap`) can't starve security/correctness. The prototype's
-global top-8 starved real findings (observed as 0 on an intentionally
-vulnerable codebase that holds 99 under the new default). See
+cheap dimension (`testGap`) can't starve security/correctness. An earlier
+global top-8 budget starved real findings (0 on an intentionally vulnerable
+codebase that yields 99 under the current default). See
 `select_follow_ups` + its unit tests.
+
+## 5. `github-review` — publishing to a pull request
+
+```rust
+// domain/github_review.rs — pure planning and text, no I/O
+pub struct PrFile { pub filename: String, pub patch: Option<String> }   // GET /pulls/{n}/files
+pub fn commentable_lines(patch: &str) -> BTreeSet<usize>;               // RIGHT-side added + context lines
+pub struct InlineComment { pub path: String, pub line: usize, pub side: &'static str, pub body: String }
+pub enum SummaryReason { NotADiffReview, OutsideDiff, OverCap, Rejected }
+pub struct Plan<'a> { pub inline: Vec<(&'a Finding, InlineComment)>,
+                      pub summary_only: Vec<(&'a Finding, SummaryReason)>, pub already_posted: usize }
+pub fn plan<'a>(report: &'a ReviewReport, files: &[PrFile], posted: &HashSet<String>, max_inline: usize) -> Plan<'a>;
+pub fn comment_body(finding: &Finding) -> String;                      // redacted + <!-- momus:fp=… -->
+pub fn summary_body(report: &ReviewReport, plan: &Plan, head_sha: &str) -> String;  // starts with SUMMARY_MARKER
+
+// adapters/github.rs — the REST calls, behind a trait so tests use a fake
+pub struct PullRequest { pub repository: String, pub number: u64, pub head_sha: String }  // from the Actions event
+pub trait GitHubApi {
+    fn pull_files(&self, pr: &PullRequest) -> impl Future<Output = Result<Vec<PrFile>>> + Send;
+    fn review_comments(&self, pr: &PullRequest) -> impl Future<Output = Result<Vec<Comment>>> + Send;
+    fn issue_comments(&self, pr: &PullRequest) -> impl Future<Output = Result<Vec<Comment>>> + Send;
+    fn create_review(&self, pr: &PullRequest, review: &NewReview) -> impl Future<Output = Result<()>> + Send;
+    fn create_issue_comment(&self, pr: &PullRequest, body: &str) -> impl Future<Output = Result<()>> + Send;
+    fn update_issue_comment(&self, pr: &PullRequest, id: u64, body: &str) -> impl Future<Output = Result<()>> + Send;
+}
+pub struct ApiStatusError { pub status: u16, pub message: String, pub errors: Vec<String> }
+pub fn is_unresolvable_anchor(error: &anyhow::Error) -> bool;          // the one 422 that demotes to the summary
+
+// review/publish.rs
+pub async fn publish<A: GitHubApi>(api: &A, pr: &PullRequest, report: &ReviewReport,
+                                   options: &PublishOptions) -> Result<PublishOutcome>;
+```
+
+The trait returns `impl Future + Send` rather than using `async fn`, so a
+public trait can promise `Send` futures; implementations still write
+`async fn`.
 
 ## Type-level decisions
 
 | # | Decision | Rationale |
 |---|---|---|
 | T1 | `Dimension` = closed enum, `#[serde(rename_all="camelCase")]` | Exhaustive `match`; wire key `testGap` |
-| T2 | Collapse `<File, Context>` → one `type File` | Both modes use identical types for the two roles |
+| T2 | One `type File` for reviewed and context files | Both modes use identical types for the two roles |
 | T3 | `async fn` trait + `buffered` (no `tokio::spawn`) | Ordered concurrency; futures needn't be `Send` |
 | T4 | Strategy owns `TypeSafeClient` | One client per run, one mode |
-| T5 | `#[serde(default)]` + `#[serde(flatten)]` | Reproduces loose `isReviewReport` + flattened matrix |
+| T5 | `#[serde(default)]` + `#[serde(flatten)]` | Tolerant reads of older reports + flattened matrix rows |
 | T6 | `LazyLock<Regex>` statics | `Regex` isn't `const`-safe; std |
 | T7 | `Action` `snake_case`, report `camelCase` | Wire value `request_changes`, `screenedFiles` |
 | T8 | `DimensionMeta` owns `String` label/short | `&'static str` is not `Deserialize` |
@@ -185,7 +218,7 @@ vulnerable codebase that holds 99 under the new default). See
 ## Verification
 
 The wire shape is pinned by `domain/report.rs` unit tests
-(`wire_shape_matches_prototype`, `tolerant_read_of_partial_report`). End-to-end:
+(`wire_shape_is_pinned`, `tolerant_read_of_partial_report`). End-to-end:
 `momus review` and `momus scan` both run against a live TypeSafe key and
 produce a report the dashboard deserializes; the dashboard enforces the Host
-allowlist (403), CSP, `nosniff`, and `no-store` exactly as the prototype did.
+allowlist (403), CSP, `nosniff`, and `no-store`.

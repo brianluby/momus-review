@@ -1,5 +1,5 @@
-//! The per-mode strategy abstraction and shared workflow types. Mirrors the
-//! `Strategy<File, Context>` structural type in `review/workflow.ts`.
+//! The per-mode strategy abstraction and shared workflow types: each mode
+//! implements `ReviewStrategy`, and `workflow::run_review` drives it.
 
 use std::path::PathBuf;
 
@@ -16,7 +16,7 @@ const CONTEXT_RADIUS: usize = 60;
 /// Cap on a changed file's patch carried as refinement context.
 const MAX_CONTEXT_PATCH_CHARS: usize = 6_000;
 
-/// A file payload discovered by a mode. Mirrors `File extends { path }`.
+/// A file payload discovered by a mode: anything with a repo-relative path.
 pub trait FileEntry: std::fmt::Debug + Clone + serde::Serialize {
     fn path(&self) -> &str;
     /// The file around `line`, as `fileContext` state for refinement

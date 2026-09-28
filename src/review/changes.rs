@@ -1,5 +1,4 @@
 //! Diff-review strategy: discovery via git diff, judgments via `judgments`.
-//! Mirrors `review/changes.ts`.
 
 use std::path::PathBuf;
 

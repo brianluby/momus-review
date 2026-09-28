@@ -1,6 +1,5 @@
 //! Shared staged orchestration. Each review mode owns discovery and judgments;
 //! this module owns concurrency, thresholds, ranking, and report assembly.
-//! Mirrors `review/workflow.ts`.
 
 use std::cmp::Ordering;
 use std::path::PathBuf;

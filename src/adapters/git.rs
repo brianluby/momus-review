@@ -1,7 +1,6 @@
 //! Git adapter: discovers changed source files under a scope (with unified
 //! diffs) and complete source files for codebase scans. Every worktree read
 //! is guarded against symlinks, special files, and ancestor-swap races.
-//! Mirrors `adapters/git.ts` + `adapters/repository-files.ts`.
 
 use std::fs::{File, OpenOptions};
 use std::io::Read;

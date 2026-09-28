@@ -1,6 +1,6 @@
 //! Review policy: thresholds, limits, and the vocabulary of concerns the
-//! reviewer screens for. Pure data. Mirrors `domain/config.ts`; file
-//! patterns live in `domain/language.rs`.
+//! reviewer screens for. Pure data; file patterns live in
+//! `domain/language.rs`.
 
 use std::collections::BTreeMap;
 
@@ -43,7 +43,7 @@ impl Dimension {
         }
     }
 
-    /// The one-line concern definition (`config.ts` `dimensions` record),
+    /// The one-line concern definition,
     /// carried into `locate` state as `suspectedConcern.definition`.
     pub fn definition(self) -> &'static str {
         match self {
@@ -95,7 +95,7 @@ pub const MIN_LOCATION_CONFIDENCE: f64 = 0.55;
 // skeptical pass; below this the finding is dropped as an unsupported claim.
 pub const MIN_META_JUDGE_CONFIDENCE: f64 = 0.55;
 
-/// The prototype's follow-up cap (top-8). The CLI defaults to unlimited
+/// The original follow-up cap (top-8). The CLI defaults to unlimited
 /// follow-ups and offers `--follow-ups N` to re-impose a cap; this constant
 /// documents the original budget for reference.
 pub const MAX_FOLLOW_UPS: usize = 8;

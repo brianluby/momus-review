@@ -3,16 +3,16 @@
 ## Where We Are
 
 Strong core loop (cheap screening → focused follow-ups → quiet dashboard),
-proven on TS and Rust. Stops at triage signals where users need actionable
-findings in their workflow. Biggest ROI is not more dimensions — it's evidence
-excerpts, explanations, and meeting reviewers where they work (PRs, CI gates).
+and findings now reach reviewers where they work: inline PR comments from a
+GitHub Action. Biggest ROI is not more dimensions — it's precision,
+calibration, and staying in the reviewer's workflow.
 
 ## Progress (2026-09-25)
 
 Completed ahead of / from this plan:
 
-- **Rust port shipped** — `review`/`scan`/`dashboard`, a thin `system_one`
-  client, hardening, MIT + public repo.
+- **Rust implementation shipped** — `review`/`scan`/`dashboard`, a thin
+  `system_one` client, hardening, MIT + public repo.
 - **Golden-set eval harness** (`momus-eval`, from "Later") — category coverage
   + curated known-vulnerable corroboration, run against Juice Shop.
 - **Follow-up budget fixed** — unlimited by default (the old top-8 starved real
@@ -87,8 +87,9 @@ The five refinement judgments run as one post-locate stage
 (`review/refine`, `--no-refine` to skip); see `docs/jev-pipeline.md`.
 - ✅ Secret redaction pre-send (#25): typed placeholders, per-rule counts in
   the report, `--no-redact` to opt out.
-- GitHub Action with inline comments (#26 `--base`, #27 publisher, #28
-  Action + release binaries).
+- ✅ GitHub Action with inline comments: `momus review --base` (#26), the
+  `momus github-review` publisher (#27), and the composite action + prebuilt
+  release binaries (#28). See README "CI".
 - ✅ Golden-set eval harness (shipped: `momus-eval` + curated Juice Shop
   ground truth) — precision/recall on labeled vulns.
 

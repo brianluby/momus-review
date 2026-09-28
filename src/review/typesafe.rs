@@ -1,11 +1,10 @@
 //! Thin HTTP client for the TypeSafe System One API.
 //!
-//! `jev-sdk` 0.1.0 cannot express the prototype's structured question
-//! criteria (its `NoulCriteria`/`Choice`/`Score` criteria are string-only,
-//! while the prototype sends JSON objects such as `{ what, examples }` and
-//! `not_for`). Per `docs/rust-port.md` Step 0, the underlying API is plain
-//! HTTP, so the port speaks the wire format directly and matches the
-//! TypeScript SDK's `POST /v1/systemone` exactly.
+//! `jev-sdk` 0.1.0 cannot express momus's structured question criteria (its
+//! `NoulCriteria`/`Choice`/`Score` criteria are string-only, while momus
+//! sends JSON objects such as `{ what, examples }` and `not_for`). The API is
+//! plain HTTP, so this client speaks the `POST /v1/systemone` wire format
+//! directly (see `docs/implementation.md`).
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
