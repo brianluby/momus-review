@@ -6,7 +6,8 @@ name: release
 
 on:
   push:
-    tags: ["v*"]
+    # Release tags only (v1.2.3); the moving major tag (v0) is not a release.
+    tags: ["v*.*.*"]
   workflow_dispatch:
 
 permissions:
@@ -93,3 +94,31 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" \
             --generate-notes --verify-tag
+
+      # Callers pin the reusable workflow and the action to the major tag
+      # (review.yml@v0), so each release moves it; v1.x would move v1.
+      - name: Move the major tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          major="${GITHUB_REF_NAME%%.*}"
+          if ! [[ "$major" =~ ^v[0-9]+$ ]]; then
+            echo "::error::cannot derive a major tag from $GITHUB_REF_NAME"
+            exit 1
+          fi
+          # Only the newest vN.x.y moves vN: a backport (v0.1.5 after v0.2.0)
+          # or a pre-release (v0.3.0-rc1) must not move callers onto it.
+          newest=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$major." \
+            -q '.[].ref | sub("^refs/tags/"; "")' | grep -E "^$major\.[0-9]+\.[0-9]+$" | sort -V | tail -n 1)
+          if [ "$newest" != "$GITHUB_REF_NAME" ]; then
+            echo "$GITHUB_REF_NAME is not the newest $major release ($newest); leaving $major where it is"
+            exit 0
+          fi
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$major" --silent 2>/dev/null; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$major" \
+              -f sha="$GITHUB_SHA" -F force=true --silent
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/tags/$major" -f sha="$GITHUB_SHA" --silent
+          fi
+          echo "$major -> $GITHUB_SHA"

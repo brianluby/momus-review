@@ -1,0 +1,71 @@
+# Reusable momus review for any repository: check out the PR head with
+# history for the merge base, then run the momus action. A repository only
+# needs the small caller in examples/momus.yml (scripts/rollout.sh adds it)
+# and a TYPESAFE_API_KEY secret passed explicitly, never `secrets: inherit`.
+#
+# The caller grants the permissions (contents: read, pull-requests: write);
+# a reusable workflow cannot raise them.
+name: momus review
+
+on:
+  workflow_call:
+    inputs:
+      paths:
+        description: Scope directories to review, separated by whitespace
+        type: string
+        default: "."
+      exclude:
+        description: Gitignore-style globs to skip, one per line
+        type: string
+        default: ""
+      fail-on-blocking:
+        description: Fail the check when a finding requests changes
+        type: boolean
+        default: true
+      max-comments:
+        description: New inline comments per run; the rest go in the summary
+        type: number
+        default: 10
+      version:
+        description: momus release to download (`latest`, a tag, or `source`)
+        type: string
+        default: latest
+    secrets:
+      TYPESAFE_API_KEY:
+        required: false
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: momus-${{ github.repository }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The action from the same commit as this workflow file
+      # (job.workflow_repository @ job.workflow_sha), so pinning review.yml to
+      # a tag or SHA pins the action that receives the secret too. The checkout
+      # is untracked in the caller's repo, which `momus review --base` ignores.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .momus-action
+          persist-credentials: false
+
+      - uses: ./.momus-action
+        with:
+          api-key: ${{ secrets.TYPESAFE_API_KEY }}
+          paths: ${{ inputs.paths }}
+          exclude: ${{ inputs.exclude }}
+          fail-on-blocking: ${{ inputs.fail-on-blocking }}
+          max-comments: ${{ inputs.max-comments }}
+          version: ${{ inputs.version }}
+          # A local-path action cannot see its own repository.
+          release-repo: ${{ job.workflow_repository }}

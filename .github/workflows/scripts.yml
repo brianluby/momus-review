@@ -1,0 +1,26 @@
+# Lint and test the shell scripts (scripts/rollout.sh against a stub gh).
+name: scripts
+
+on:
+  pull_request:
+    paths: ["scripts/**", "examples/**", ".github/workflows/scripts.yml"]
+  push:
+    branches: [main]
+    paths: ["scripts/**", "examples/**", ".github/workflows/scripts.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: shellcheck
+        run: shellcheck scripts/*.sh
+
+      - name: Test rollout.sh
+        run: scripts/test-rollout.sh

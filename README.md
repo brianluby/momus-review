@@ -148,6 +148,22 @@ then `momus github-review`. Inputs:
 | `version` | `latest` | a release tag, `latest`, or `source` to build the action's own checkout |
 | `github-token` | `github.token` | token for reading the PR and posting |
 
+**Many repositories.** A reusable workflow keeps the setup in one place:
+each repository only needs the small caller in
+[`examples/momus.yml`](examples/momus.yml), which runs
+`brianluby/momus-review/.github/workflows/review.yml@v0` and passes just the
+`TYPESAFE_API_KEY` secret. `v0` moves to each release, so callers upgrade
+without edits. `scripts/rollout.sh` sets the secret and opens a pull request
+adding the caller in every repository you list; it is a dry run unless you
+pass `--apply`, and needs a `gh` token with the `workflow` scope
+(`gh auth refresh -s workflow`):
+
+```bash
+scripts/rollout.sh repo-a repo-b                 # dry run: what would change
+scripts/rollout.sh --apply --file repos.txt      # set the secret, open the PRs
+scripts/rollout.sh --apply --rotate-secret ...   # also replace an existing key
+```
+
 Fork pull requests are skipped (secrets are not available to them), and
 `pull_request_target` is not supported; see `docs/security.md` for why.
 Re-runs never repeat a comment: findings already posted are skipped and the

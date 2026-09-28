@@ -60,6 +60,13 @@ inputs:
       the action's own source is built.
     required: false
     default: latest
+  release-repo:
+    description: >-
+      Repository whose releases hold the momus binaries. Defaults to this
+      action's repository; set it when the action is used from a local path
+      (the reusable workflow does), where that is unknown.
+    required: false
+    default: ""
   github-token:
     description: Token for reading the PR and posting comments
     required: false
@@ -110,7 +117,7 @@ runs:
         VERSION: ${{ inputs.version }}
         GH_TOKEN: ${{ inputs.github-token }}
         ACTION_PATH: ${{ github.action_path }}
-        RELEASE_REPO: ${{ github.action_repository || github.repository }}
+        RELEASE_REPO: ${{ inputs.release-repo || github.action_repository || github.repository }}
       run: |
         root="$RUNNER_TEMP/momus-bin"
         mkdir -p "$root/bin"
