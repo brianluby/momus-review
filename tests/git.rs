@@ -210,6 +210,135 @@ fn unresolvable_detached_head_is_an_error_not_unborn() {
     assert!(git::changed_files(std::slice::from_ref(&repo), &Exclude::default()).is_err());
 }
 
+/// Paths of `files`, sorted.
+fn sorted_paths(files: &[momus_review::domain::report::ChangedFile]) -> Vec<&str> {
+    let mut paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+    paths.sort();
+    paths
+}
+
+#[test]
+fn base_reviews_a_clean_feature_branch() {
+    let (_dir, repo) = fixture_repo();
+    let v1 = "pub fn f() -> i32 { 1 }\n";
+    write(&repo, "src/lib.rs", v1);
+    write(&repo, "src/keep.rs", "pub fn k() {}\n");
+    run_git(&repo, &["add", "-A"]);
+    run_git(&repo, &["commit", "-q", "-m", "seed"]);
+    run_git(&repo, &["branch", "base"]);
+
+    run_git(&repo, &["checkout", "-q", "-b", "feature"]);
+    write(&repo, "src/lib.rs", "pub fn f() -> i32 { 1 }\npub fn g() -> i32 { 2 }\n");
+    write(&repo, "src/new.rs", "pub fn n() {}\n");
+    run_git(&repo, &["add", "-A"]);
+    run_git(&repo, &["commit", "-q", "-m", "feature work"]);
+
+    // A clean checkout (CI) has nothing to review against HEAD...
+    let head = git::changed_files(std::slice::from_ref(&repo), &Exclude::default()).unwrap();
+    assert!(head.is_empty(), "unexpected: {:?}", sorted_paths(&head));
+
+    // ...but against the base it is the branch's diff.
+    let files =
+        git::changed_files_since(std::slice::from_ref(&repo), &Exclude::default(), "base").unwrap();
+    assert_eq!(sorted_paths(&files), vec!["src/lib.rs", "src/new.rs"]);
+
+    let lib = files.iter().find(|f| f.path == "src/lib.rs").unwrap();
+    assert!(lib.patch.contains("+pub fn g() -> i32 { 2 }"), "patch: {}", lib.patch);
+    assert_eq!(lib.base, v1, "base content comes from the merge base");
+
+    let new = files.iter().find(|f| f.path == "src/new.rs").unwrap();
+    assert!(new.patch.contains("@@ -0,0 +1 @@"), "patch: {}", new.patch);
+    assert!(new.base.is_empty());
+
+    // Uncommitted edits to tracked files are reviewed too; untracked files
+    // are not part of the branch's diff and are ignored.
+    write(&repo, "src/keep.rs", "pub fn k() { todo!() }\n");
+    write(&repo, "src/stray.rs", "pub fn s() {}\n");
+    let files =
+        git::changed_files_since(std::slice::from_ref(&repo), &Exclude::default(), "base").unwrap();
+    assert_eq!(sorted_paths(&files), vec!["src/keep.rs", "src/lib.rs", "src/new.rs"]);
+
+    // Without --base the untracked file is still reviewed.
+    let head = git::changed_files(std::slice::from_ref(&repo), &Exclude::default()).unwrap();
+    assert_eq!(sorted_paths(&head), vec!["src/keep.rs", "src/stray.rs"]);
+}
+
+#[test]
+fn base_head_parent_anchors_on_the_first_added_line() {
+    use momus_review::domain::patch::{first_added_line, parse_hunks};
+
+    let (_dir, repo) = fixture_repo();
+    let v1: String = (1..=10).map(|i| format!("pub fn f{i}() {{}}\n")).collect();
+    write(&repo, "src/lib.rs", &v1);
+    run_git(&repo, &["add", "-A"]);
+    run_git(&repo, &["commit", "-q", "-m", "one"]);
+
+    // Second commit: replace line 6 and append an eleventh line.
+    let v2 = v1.replace("pub fn f6() {}\n", "pub fn f6() { 6; }\n") + "pub fn f11() {}\n";
+    write(&repo, "src/lib.rs", &v2);
+    write(&repo, "src/added.rs", "pub fn a() {}\npub fn b() {}\n");
+    run_git(&repo, &["add", "-A"]);
+    run_git(&repo, &["commit", "-q", "-m", "two"]);
+
+    let files =
+        git::changed_files_since(std::slice::from_ref(&repo), &Exclude::default(), "HEAD~1")
+            .unwrap();
+    assert_eq!(sorted_paths(&files), vec!["src/added.rs", "src/lib.rs"]);
+
+    let lib = files.iter().find(|f| f.path == "src/lib.rs").unwrap();
+    assert_eq!(lib.base, v1);
+    let hunks = parse_hunks(&lib.patch);
+    // Three lines of context put the hunk start at line 3; the edit is line 6.
+    assert_eq!(hunks[0].start_line, 3, "patch: {}", lib.patch);
+    assert_eq!(first_added_line(&hunks[0]), 6);
+    // The two edits are close enough to share one hunk.
+    assert_eq!(hunks.len(), 1, "patch: {}", lib.patch);
+
+    let added = files.iter().find(|f| f.path == "src/added.rs").unwrap();
+    assert_eq!(first_added_line(&parse_hunks(&added.patch)[0]), 1);
+}
+
+#[test]
+fn base_diffs_from_the_merge_base_not_the_base_tip() {
+    let (_dir, repo) = fixture_repo();
+    write(&repo, "src/a.rs", "pub fn a() {}\n");
+    write(&repo, "src/b.rs", "pub fn b() {}\n");
+    run_git(&repo, &["add", "-A"]);
+    run_git(&repo, &["commit", "-q", "-m", "seed"]);
+    run_git(&repo, &["branch", "base"]);
+
+    run_git(&repo, &["checkout", "-q", "-b", "feature"]);
+    write(&repo, "src/a.rs", "pub fn a() { 1; }\n");
+    run_git(&repo, &["commit", "-q", "-am", "feature changes a"]);
+
+    // The base branch moves on after the fork.
+    run_git(&repo, &["checkout", "-q", "base"]);
+    write(&repo, "src/b.rs", "pub fn b() { 2; }\n");
+    run_git(&repo, &["commit", "-q", "-am", "base changes b"]);
+    run_git(&repo, &["checkout", "-q", "feature"]);
+
+    // Only the branch's own change: b.rs is not shown as a revert.
+    let files =
+        git::changed_files_since(std::slice::from_ref(&repo), &Exclude::default(), "base").unwrap();
+    assert_eq!(sorted_paths(&files), vec!["src/a.rs"]);
+}
+
+#[test]
+fn unknown_or_option_like_base_is_a_clear_error() {
+    let (_dir, repo) = fixture_repo();
+    write(&repo, "src/lib.rs", "pub fn f() {}\n");
+    run_git(&repo, &["add", "-A"]);
+    run_git(&repo, &["commit", "-q", "-m", "seed"]);
+    let scopes = std::slice::from_ref(&repo);
+
+    let err = git::changed_files_since(scopes, &Exclude::default(), "no-such-branch").unwrap_err();
+    assert!(err.to_string().contains("not found"), "{err:#}");
+    assert!(err.to_string().contains("fetch-depth: 0"), "{err:#}");
+
+    let err = git::changed_files_since(scopes, &Exclude::default(), "--output=/tmp/x").unwrap_err();
+    assert!(err.to_string().contains("must name a revision"), "{err:#}");
+}
+
 #[test]
 fn repo_path_with_trailing_space_is_preserved() {
     let dir = tempfile::tempdir().unwrap();

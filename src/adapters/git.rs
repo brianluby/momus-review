@@ -59,7 +59,9 @@ fn git_diff(cwd: &Path, base: &str, args: &[&str]) -> Result<String> {
 
 /// What changes are diffed against.
 enum DiffBase {
-    Head,
+    /// A commit: `HEAD`, or the merge base with `--base`. File content before
+    /// the change is read from it.
+    Commit(String),
     /// Unborn `HEAD`: the repository's empty-tree id (object-format aware).
     EmptyTree(String),
 }
@@ -67,8 +69,7 @@ enum DiffBase {
 impl DiffBase {
     fn rev(&self) -> &str {
         match self {
-            DiffBase::Head => "HEAD",
-            DiffBase::EmptyTree(id) => id,
+            DiffBase::Commit(rev) | DiffBase::EmptyTree(rev) => rev,
         }
     }
 }
@@ -80,7 +81,7 @@ impl DiffBase {
 /// an error, not an empty repository.
 fn diff_base(repo_root: &Path) -> Result<DiffBase> {
     if git(repo_root, &["rev-parse", "--verify", "--quiet", "HEAD"]).is_ok() {
-        return Ok(DiffBase::Head);
+        return Ok(DiffBase::Commit("HEAD".to_string()));
     }
     let branch = git_value(repo_root, &["symbolic-ref", "--quiet", "HEAD"])
         .context("HEAD does not resolve to a commit and is not a branch ref")?;
@@ -91,6 +92,32 @@ fn diff_base(repo_root: &Path) -> Result<DiffBase> {
     // (SHA-1 or SHA-256); stdin is closed, so it hashes an empty tree.
     let empty_tree = git_value(repo_root, &["hash-object", "-t", "tree", "--stdin"])?;
     Ok(DiffBase::EmptyTree(empty_tree))
+}
+
+/// The `--base` diff base: the merge base of `rev` and `HEAD`, so the diff is
+/// what the branch changed since it forked (a PR's diff), not everything
+/// `rev` gained since. A `rev` that looks like an option is rejected before
+/// it reaches git.
+fn merge_base(repo_root: &Path, rev: &str) -> Result<DiffBase> {
+    if rev.is_empty() || rev.starts_with('-') {
+        bail!("--base must name a revision, got '{rev}'");
+    }
+    let commit = git_value(
+        repo_root,
+        &["rev-parse", "--verify", "--quiet", &format!("{rev}^{{commit}}")],
+    )
+    .map_err(|_| {
+        anyhow!(
+            "base revision '{rev}' not found in {} (in CI, fetch it: actions/checkout with fetch-depth: 0)",
+            repo_root.display()
+        )
+    })?;
+    let base = git_value(repo_root, &["merge-base", &commit, "HEAD"]).map_err(|_| {
+        anyhow!(
+            "'{rev}' and HEAD share no history (a shallow clone lacks it: actions/checkout with fetch-depth: 0)"
+        )
+    })?;
+    Ok(DiffBase::Commit(base))
 }
 
 /// Resolves the repository under `scope` to its current `HEAD` commit sha
@@ -186,10 +213,30 @@ fn is_benign_open_error(e: &std::io::Error) -> bool {
 /// untracked contents rendered as all-additions patches. Paths matching
 /// `exclude` are skipped before any read; overlapping scopes are deduped.
 pub fn changed_files(scopes: &[PathBuf], exclude: &Exclude) -> Result<Vec<ChangedFile>> {
+    collect_changed_files(scopes, exclude, None)
+}
+
+/// `changed_files` against the merge base of `base` and `HEAD` instead of
+/// `HEAD` (`momus review --base`): the branch's commits plus uncommitted
+/// changes to tracked files; untracked files are ignored. On a clean CI
+/// checkout of a PR head that is exactly the PR's diff.
+pub fn changed_files_since(
+    scopes: &[PathBuf],
+    exclude: &Exclude,
+    base: &str,
+) -> Result<Vec<ChangedFile>> {
+    collect_changed_files(scopes, exclude, Some(base))
+}
+
+fn collect_changed_files(
+    scopes: &[PathBuf],
+    exclude: &Exclude,
+    base: Option<&str>,
+) -> Result<Vec<ChangedFile>> {
     let mut files = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for scope in scopes {
-        for file in changed_files_in_scope(scope, exclude)? {
+        for file in changed_files_in_scope(scope, exclude, base)? {
             if seen.insert(file.path.clone()) {
                 files.push(file);
             }
@@ -198,7 +245,11 @@ pub fn changed_files(scopes: &[PathBuf], exclude: &Exclude) -> Result<Vec<Change
     Ok(files)
 }
 
-fn changed_files_in_scope(scope: &Path, exclude: &Exclude) -> Result<Vec<ChangedFile>> {
+fn changed_files_in_scope(
+    scope: &Path,
+    exclude: &Exclude,
+    base: Option<&str>,
+) -> Result<Vec<ChangedFile>> {
     let real_scope = scope
         .canonicalize()
         .with_context(|| format!("resolve scope {}", scope.display()))?;
@@ -207,7 +258,10 @@ fn changed_files_in_scope(scope: &Path, exclude: &Exclude) -> Result<Vec<Changed
         .with_context(|| "resolve repo root")?;
     let relative_scope = relative_scope(&repo_root, &real_scope);
 
-    let base_kind = diff_base(&repo_root)?;
+    let base_kind = match base {
+        Some(rev) => merge_base(&repo_root, rev)?,
+        None => diff_base(&repo_root)?,
+    };
     let base_rev = base_kind.rev();
 
     // Rename destinations don't exist at the base; remember new→old so both
@@ -231,10 +285,15 @@ fn changed_files_in_scope(scope: &Path, exclude: &Exclude) -> Result<Vec<Changed
         base_rev,
         &["--name-only", "-z", "--diff-filter=ACMRTUXB", "--", relative_scope],
     )?;
-    let untracked_output = git(
-        &repo_root,
-        &["ls-files", "--others", "--exclude-standard", "-z", "--", relative_scope],
-    )?;
+    // With `--base` the review is the branch's diff: untracked files are not
+    // part of it (in CI they are build or checkout leftovers), so skip them.
+    let untracked_output = match base {
+        Some(_) => String::new(),
+        None => git(
+            &repo_root,
+            &["ls-files", "--others", "--exclude-standard", "-z", "--", relative_scope],
+        )?,
+    };
     let tracked = nul_lines(&tracked_output);
     let untracked = nul_lines(&untracked_output);
 
@@ -255,10 +314,10 @@ fn changed_files_in_scope(scope: &Path, exclude: &Exclude) -> Result<Vec<Changed
                 diff_args.push(base_path);
             }
             let patch = git_diff(&repo_root, base_rev, &diff_args)?.trim_end().to_string();
-            let base = match base_kind {
+            let base = match &base_kind {
                 DiffBase::EmptyTree(_) => String::new(),
-                DiffBase::Head => {
-                    git(&repo_root, &["show", &format!("HEAD:{base_path}")]).unwrap_or_default()
+                DiffBase::Commit(rev) => {
+                    git(&repo_root, &["show", &format!("{rev}:{base_path}")]).unwrap_or_default()
                 }
             };
             files.push(ChangedFile { path: path.to_string(), patch, base });

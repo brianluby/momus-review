@@ -27,10 +27,18 @@ Two modes, one funnel:
 
 Both accept one or more scope directories (unioned into one run) plus
 `--exclude GLOB` (skip vendored/third-party subtrees), `--follow-ups N`
-(opt into a follow-up budget; unlimited by default), and
+(opt into a follow-up budget; unlimited by default),
 `--fail-on-blocking` (CI exit contract), `--no-refine` (skip the
 refinement stage below), and `--no-redact` (send code without secret
 redaction; see below).
+
+`momus review --base REV` diffs against the merge base of `REV` and `HEAD`
+instead of `HEAD`: the branch's commits plus uncommitted changes to tracked
+files (untracked files are ignored). On a
+clean CI checkout of a pull request that is exactly the PR's diff
+(`--base origin/main`, with enough history fetched for the merge base,
+e.g. `actions/checkout` with `fetch-depth: 0`). Each finding points at the
+first changed line of its hunk.
 
 Source languages: the 20-language consensus set (Python, JavaScript,
 TypeScript, Java, C#, C++, C, Go, Rust, PHP, Ruby, Kotlin, Swift, shell, SQL,

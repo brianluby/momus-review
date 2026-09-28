@@ -42,6 +42,12 @@ pub enum Command {
         #[arg(long = "exclude", value_name = "GLOB")]
         exclude: Vec<String>,
 
+        /// Diff against the merge base of REV and HEAD instead of HEAD: the
+        /// branch's commits plus uncommitted changes to tracked files;
+        /// untracked files are ignored (a PR's diff in CI)
+        #[arg(long = "base", value_name = "REV")]
+        base: Option<String>,
+
         /// Cap follow-ups at N signals (default: follow every threshold signal)
         #[arg(long = "follow-ups", value_name = "N")]
         follow_ups: Option<usize>,
@@ -105,8 +111,8 @@ pub enum Command {
 
 pub async fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        Command::Review { paths, fail_on_blocking, exclude, follow_ups, sarif, no_refine, no_redact } => {
-            let strategy = ChangesStrategy::new(client(no_redact)?, Exclude::new(&exclude)?);
+        Command::Review { paths, fail_on_blocking, exclude, base, follow_ups, sarif, no_refine, no_redact } => {
+            let strategy = ChangesStrategy::new(client(no_redact)?, Exclude::new(&exclude)?, base);
             let sarif = sarif.map(PathBuf::from);
             run_mode(paths, fail_on_blocking, options(follow_ups, no_refine), sarif, strategy).await
         }
