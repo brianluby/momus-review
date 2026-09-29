@@ -26,8 +26,9 @@ const DEFAULT_MODEL: &str = "jev-latest";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_RETRIES: usize = 3;
 
-/// Token usage attached to a `system_one` response. Winnow sends it on every
-/// response; hosted Jev omits the block.
+/// Token usage attached to a `system_one` response. Both hosted Jev and
+/// Winnow report it on every response (measured 2026-09-29, ticket #32);
+/// `Option` keeps a server that omits the block parseable.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct Usage {
@@ -269,8 +270,8 @@ struct UsageMeter {
 }
 
 impl UsageMeter {
-    /// Adds one successful response. Servers that omit `usage` (hosted Jev)
-    /// still count the call; token sums stay unchanged.
+    /// Adds one successful response; one without `usage` (none observed:
+    /// hosted Jev reports it, ticket #32) still counts the call.
     fn record(&self, usage: Option<Usage>) {
         self.calls.fetch_add(1, Ordering::Relaxed);
         if let Some(usage) = usage {
@@ -402,9 +403,9 @@ mod tests {
         assert!(!is_loopback("not a url"));
     }
 
-    /// Winnow attaches `usage` to every response; hosted Jev omits it. Both
-    /// parse, and the meter counts calls either way, summing tokens only when
-    /// they are reported.
+    /// Hosted Jev and Winnow both attach `usage` to every response
+    /// (ticket #32); a response without it still parses and counts as a
+    /// call, summing tokens only when they are reported.
     #[test]
     fn usage_is_optional_and_accumulates() {
         let winnow: SystemOneResponse = serde_json::from_str(
