@@ -149,3 +149,182 @@ async fn failed_requests_are_skipped_reported_and_recorded() {
     );
     assert!(report["skipped"][0]["reason"].as_str().unwrap().contains("max_tokens_exceeded"));
 }
+/// A stub System One server that records every request body: answers `noul`
+/// questions with a low probability, fails non-`noul` ones (profiles).
+async fn capturing_stub_server() -> (String, std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>) {
+    use std::sync::{Arc, Mutex};
+    use axum::http::StatusCode;
+    use axum::routing::post;
+    use axum::{Json, Router};
+    use serde_json::{Value, json};
+
+    let bodies: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let seen = bodies.clone();
+    let app = Router::new().route(
+        "/v1/systemone",
+        post(move |Json(body): Json<Value>| {
+            let seen = seen.clone();
+            async move {
+                let questions = body["questions"].as_object().cloned().unwrap_or_default();
+                let all_noul = questions.values().all(|q| q["type"] == "noul");
+                seen.lock().unwrap().push(body);
+                if !all_noul {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({ "detail": { "error_type": "max_tokens_exceeded" } })),
+                    );
+                }
+                let answers: serde_json::Map<String, Value> = questions
+                    .keys()
+                    .map(|k| (k.clone(), json!({ "noul": 0.1 })))
+                    .collect();
+                (StatusCode::OK, Json(json!({ "model": "stub", "answers": answers })))
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (url, bodies)
+}
+
+/// A repo whose `feature` branch adds `src/widget.rs` plus `count` changed
+/// test files, each `test_lines` assertions wide.
+fn widget_branch(count: usize, source_lines: usize, test_lines: usize) -> tempfile::TempDir {
+    let dir = config_only_branch();
+    let repo = dir.path();
+    fs::create_dir_all(repo.join("src")).unwrap();
+    fs::create_dir_all(repo.join("tests")).unwrap();
+    let source: String = (0..source_lines)
+        .map(|i| format!("pub fn widget_{i}() -> u32 {{ {i} }}\n"))
+        .collect();
+    fs::write(repo.join("src/widget.rs"), source).unwrap();
+    for i in 0..count {
+        let test: String = (0..test_lines)
+            .map(|j| format!("it('widget {j}', () => {{ assert.ok(widget_{j}); }});\n"))
+            .collect();
+        fs::write(repo.join(format!("tests/widget_{i}.test.ts")), test).unwrap();
+    }
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", "widget plus tests"]);
+    dir
+}
+
+fn run_review(repo: &std::path::Path, url: &str, budget: Option<&str>) -> std::process::Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_momus"));
+    command
+        .args(["review", "--base", "base"])
+        .current_dir(repo)
+        .env_remove("TYPESAFE_API_KEY")
+        .env("TYPESAFE_BASE_URL", url)
+        .env("MOMUS_REPORT", repo.join("report.json"))
+        .env("MOMUS_CONCURRENCY", "1")
+        .env_remove("MOMUS_CONTEXT_BUDGET_CHARS");
+    if let Some(budget) = budget {
+        command.env("MOMUS_CONTEXT_BUDGET_CHARS", budget);
+    }
+    command.output().expect("momus runs")
+}
+
+/// The screen requests sent for the changed source files (those whose state
+/// carries `changedTests`).
+fn screen_states(bodies: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    bodies
+        .iter()
+        .filter(|b| !b["state"]["changedTests"].is_null())
+        .cloned()
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hundreds_of_changed_test_files_stay_under_the_context_budget() {
+    let (url, bodies) = capturing_stub_server().await;
+    // 300 changed test files, ~2.5k characters each: ~750k characters of
+    // test context that must never reach a single request (the Juice Shop
+    // PR shape). A tight budget proves the bound, not just the selection.
+    let dir = widget_branch(300, 10, 50);
+    let repo = dir.path().to_path_buf();
+    let out = tokio::task::spawn_blocking(move || run_review(&repo, &url, Some("8000")))
+        .await
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "exit {:?}: {stderr}", out.status.code());
+
+    let bodies = bodies.lock().unwrap().clone();
+    let screens = screen_states(&bodies);
+    assert!(!screens.is_empty(), "at least one screen request was sent");
+    for body in &screens {
+        let tests = body["state"]["changedTests"].as_array().unwrap();
+        assert!(tests.len() <= 4, "{} changed tests sent", tests.len());
+        // The budget bounds context characters; JSON keys, paths, and
+        // escaping add a little structure around them.
+        let state = serde_json::to_string(&body["state"]).unwrap();
+        assert!(state.len() <= 8000 + 1000, "state was {} chars", state.len());
+    }
+
+    let report: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(dir.path().join("report.json")).unwrap()).unwrap();
+    assert_eq!(report["screenedFiles"], 1, "the one source file was screened");
+    assert_eq!(
+        report["workflow"]["droppedContextChars"],
+        0,
+        "nothing needed dropping under the tight budget"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn context_over_the_budget_is_trimmed_and_counted() {
+    let (url, bodies) = capturing_stub_server().await;
+    // One ~130k-character source file against a 5k budget: the patch itself
+    // must be trimmed and the drop recorded in the report.
+    let dir = widget_branch(0, 5000, 0);
+    let repo = dir.path().to_path_buf();
+    let out = tokio::task::spawn_blocking(move || run_review(&repo, &url, Some("5000")))
+        .await
+        .unwrap();
+    assert!(out.status.success(), "exit {:?}", out.status.code());
+
+    let bodies = bodies.lock().unwrap().clone();
+    for body in &screen_states(&bodies) {
+        let state = serde_json::to_string(&body["state"]).unwrap();
+        assert!(state.len() <= 5000 + 1000, "state was {} chars", state.len());
+    }
+    let report: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(dir.path().join("report.json")).unwrap()).unwrap();
+    assert!(
+        report["workflow"]["droppedContextChars"].as_u64().unwrap_or(0) > 100_000,
+        "the trimmed patch is counted: {}",
+        report["workflow"]["droppedContextChars"]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_small_diff_sends_equivalent_context_with_nothing_dropped() {
+    let (url, bodies) = capturing_stub_server().await;
+    let dir = widget_branch(1, 3, 2);
+    let repo = dir.path().to_path_buf();
+    let out = tokio::task::spawn_blocking(move || run_review(&repo, &url, None))
+        .await
+        .unwrap();
+    assert!(out.status.success(), "exit {:?}", out.status.code());
+
+    let bodies = bodies.lock().unwrap().clone();
+    let screens = screen_states(&bodies);
+    assert_eq!(screens.len(), 1, "one source file, one screen request");
+    let tests = screens[0]["state"]["changedTests"].as_array().unwrap();
+    assert_eq!(tests.len(), 1, "the one related changed test travels");
+    assert_eq!(tests[0]["path"], "tests/widget_0.test.ts");
+    // Equivalence with the pre-budget behavior: every assertion line of the
+    // changed test is still present, in full, untrimmed.
+    let patch = tests[0]["patch"].as_str().unwrap();
+    for j in 0..2 {
+        let line = format!("assert.ok(widget_{j});");
+        assert!(patch.contains(&line), "missing {line} in {patch}");
+    }
+    assert!(!patch.contains("\n...\n"), "the snippet was not truncated");
+
+    let report: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(dir.path().join("report.json")).unwrap()).unwrap();
+    assert_eq!(report["workflow"]["droppedContextChars"], 0);
+    assert_eq!(report["workflow"]["droppedContextItems"], 0);
+}

@@ -75,6 +75,8 @@ pub struct Discovery<F> {
 pub struct Screening<F> {
     pub file: F,
     pub probabilities: Probabilities,
+    /// Context that did not fit this screen's budget (never sent).
+    pub dropped: crate::review::context::ContextDrops,
 }
 
 /// A single dimension's probability for a file, above threshold → follow-up.

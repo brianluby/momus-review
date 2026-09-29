@@ -89,6 +89,7 @@ Read from the environment (or `.env`):
 | `TYPESAFE_TIMEOUT_SECS` | `60` | per-request timeout |
 | `MOMUS_CONCURRENCY` | `3` | parallel `system_one` requests |
 | `MOMUS_REDACT` | `on` | redact secrets before sending (`off` or `--no-redact` disables) |
+| `MOMUS_CONTEXT_BUDGET_CHARS` | `96000` | per-request context budget; sources beyond it are trimmed and counted |
 
 To run against a local System One server such as
 [Winnow-12B](https://github.com/EldanRing/winnow-inference), point the base

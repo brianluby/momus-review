@@ -17,6 +17,7 @@ use crate::domain::policy::{
     CONCURRENCY, DIMENSIONS, MAX_PROFILES, SCREEN_THRESHOLD, SEVERITY_MAX, Dimension,
     dimension_metadata,
 };
+use crate::review::context::ContextDrops;
 use crate::domain::report::{
     ConfigSnapshot, FileProfile, Finding, MatrixRow, ReviewReport, ReviewStage, SkippedFile,
     WorkflowCounts,
@@ -353,6 +354,10 @@ pub async fn run_review<S: ReviewStrategy>(
         }
     }
 
+    let context_drops = matrix
+        .iter()
+        .fold(ContextDrops::default(), |acc, screening| acc + screening.dropped);
+
     let matrix_rows: Vec<MatrixRow> = matrix
         .iter()
         .map(|s| MatrixRow {
@@ -391,6 +396,8 @@ pub async fn run_review<S: ReviewStrategy>(
             clustered_findings: refine_counts.clustered,
             exonerated_findings: refine_counts.exonerated,
             needs_human_findings: refine_counts.needs_human,
+            dropped_context_chars: context_drops.chars,
+            dropped_context_items: context_drops.items,
         },
         usage: strategy.client().usage_summary(),
         redactions: strategy.client().redaction_summary(),
