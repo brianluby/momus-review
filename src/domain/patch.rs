@@ -57,6 +57,100 @@ pub fn first_added_line(hunk: &Hunk) -> usize {
     hunk.start_line
 }
 
+/// Splits `hunk` into consecutive sub-hunks, starting a new piece at each
+/// new-file line in `cuts`, so a large hunk (a whole new file, a rewritten
+/// function) offers smaller evidence candidates and a finding anchors near
+/// its code instead of at the hunk's first line. Every piece is a valid hunk
+/// with its own `@@` header. Removed lines stay with the lines that follow
+/// them (a replacement stays whole); cuts that fall outside the hunk or would
+/// leave a piece with no new-side line are ignored. Ids are the caller's.
+pub fn split_hunk(hunk: &Hunk, cuts: &[usize]) -> Vec<Hunk> {
+    let mut body = hunk.patch.split('\n');
+    let Some((old_start, old_len, new_start, new_len)) = body.next().and_then(hunk_ranges) else {
+        return vec![hunk.clone()];
+    };
+    // The next old/new line numbers; a zero-length range names the line before.
+    let mut old_next = if old_len == 0 { old_start + 1 } else { old_start };
+    let mut new_next = if new_len == 0 { new_start + 1 } else { new_start };
+
+    struct Piece<'a> {
+        lines: Vec<&'a str>,
+        old_first: usize,
+        new_first: usize,
+        old_count: usize,
+        new_count: usize,
+    }
+    impl Piece<'_> {
+        fn hunk(&self) -> Hunk {
+            let old_start = if self.old_count == 0 { self.old_first - 1 } else { self.old_first };
+            let new_start = if self.new_count == 0 { self.new_first - 1 } else { self.new_first };
+            let mut patch =
+                format!("@@ -{old_start},{} +{new_start},{} @@", self.old_count, self.new_count);
+            for line in &self.lines {
+                patch.push('\n');
+                patch.push_str(line);
+            }
+            Hunk { id: String::new(), start_line: new_start, patch }
+        }
+    }
+    let removals = |lines: &[&str]| lines.iter().filter(|l| l.starts_with('-')).count();
+    let new_piece = |old_first, new_first| Piece {
+        lines: Vec::new(),
+        old_first,
+        new_first,
+        old_count: 0,
+        new_count: 0,
+    };
+
+    let mut pieces: Vec<Piece> = Vec::new();
+    let mut current = new_piece(old_next, new_next);
+    // Removals (and their no-newline markers) wait for the next kept line.
+    let mut pending: Vec<&str> = Vec::new();
+    let mut pending_old_first = old_next;
+    let mut last_was_removal = false;
+
+    for line in body {
+        match line.as_bytes().first() {
+            Some(b'-') => {
+                if pending.is_empty() {
+                    pending_old_first = old_next;
+                }
+                pending.push(line);
+                old_next += 1;
+                last_was_removal = true;
+            }
+            Some(b'+') | Some(b' ') => {
+                if cuts.contains(&new_next) && current.new_count > 0 {
+                    let first_old = if pending.is_empty() { old_next } else { pending_old_first };
+                    pieces.push(std::mem::replace(&mut current, new_piece(first_old, new_next)));
+                }
+                current.old_count += removals(&pending);
+                current.lines.append(&mut pending);
+                current.lines.push(line);
+                current.new_count += 1;
+                if line.starts_with(' ') {
+                    current.old_count += 1;
+                    old_next += 1;
+                }
+                new_next += 1;
+                last_was_removal = false;
+            }
+            // `\ No newline at end of file` belongs to the line before it.
+            Some(b'\\') if last_was_removal => pending.push(line),
+            Some(b'\\') => current.lines.push(line),
+            _ => {}
+        }
+    }
+    current.old_count += removals(&pending);
+    current.lines.append(&mut pending);
+    pieces.push(current);
+
+    if pieces.len() == 1 {
+        return vec![hunk.clone()];
+    }
+    pieces.iter().map(Piece::hunk).collect()
+}
+
 /// Maps a new-file line to the matching base (pre-change) line using the
 /// patch's hunk headers. A line inside a hunk maps to the same offset in the
 /// hunk's old range (clamped to it); a line between hunks is shifted by the
@@ -161,6 +255,87 @@ mod tests {
     fn deletion_only_hunk_falls_back_to_its_start() {
         let hunk = &parse_hunks("@@ -4,4 +4,3 @@\n a\n-b\n c\n d\n\\ No newline at end of file")[0];
         assert_eq!(first_added_line(hunk), 4);
+    }
+
+    /// Each piece's header counts match its body, and the bodies rejoin to
+    /// the original hunk's body.
+    fn assert_valid_split(original: &Hunk, pieces: &[Hunk]) {
+        let mut rejoined = Vec::new();
+        for piece in pieces {
+            let mut lines = piece.patch.split('\n');
+            let (_, old_len, new_start, new_len) = hunk_ranges(lines.next().unwrap()).unwrap();
+            let body: Vec<&str> = lines.collect();
+            let old = body.iter().filter(|l| l.starts_with(' ') || l.starts_with('-')).count();
+            let new = body.iter().filter(|l| l.starts_with(' ') || l.starts_with('+')).count();
+            assert_eq!((old, new), (old_len, new_len), "{}", piece.patch);
+            assert_eq!(piece.start_line, new_start);
+            rejoined.extend(body);
+        }
+        let original_body: Vec<&str> = original.patch.split('\n').skip(1).collect();
+        assert_eq!(rejoined, original_body);
+    }
+
+    #[test]
+    fn a_new_file_splits_into_pieces_that_anchor_on_their_own_lines() {
+        let body: String = (1..=10).map(|i| format!("\n+line {i}")).collect();
+        let hunk = &parse_hunks(&format!("@@ -0,0 +1,10 @@{body}"))[0];
+        let pieces = split_hunk(hunk, &[4, 8]);
+        let headers: Vec<&str> = pieces.iter().map(|p| p.patch.split('\n').next().unwrap()).collect();
+        assert_eq!(headers, ["@@ -0,0 +1,3 @@", "@@ -0,0 +4,4 @@", "@@ -0,0 +8,3 @@"]);
+        let anchors: Vec<usize> = pieces.iter().map(first_added_line).collect();
+        assert_eq!(anchors, [1, 4, 8]);
+        assert_valid_split(hunk, &pieces);
+    }
+
+    #[test]
+    fn a_replacement_stays_whole_and_old_lines_are_counted() {
+        // old 10..15 = a b c d e f; new 10..15 = a b C d e f; cut at the new line 12 (C).
+        let hunk = &parse_hunks("@@ -10,6 +10,6 @@\n a\n b\n-c\n+C\n d\n e\n f")[0];
+        let pieces = split_hunk(hunk, &[12]);
+        assert_eq!(pieces.len(), 2);
+        assert_eq!(pieces[0].patch, "@@ -10,2 +10,2 @@\n a\n b");
+        assert_eq!(pieces[1].patch, "@@ -12,4 +12,4 @@\n-c\n+C\n d\n e\n f");
+        assert_eq!(first_added_line(&pieces[1]), 12);
+        assert_valid_split(hunk, &pieces);
+    }
+
+    #[test]
+    fn cuts_outside_the_hunk_or_at_its_start_change_nothing() {
+        let hunk = &parse_hunks("@@ -1,3 +1,3 @@\n a\n-b\n+B\n c")[0];
+        for cuts in [vec![], vec![1], vec![50], vec![0, 1, 99]] {
+            let pieces = split_hunk(hunk, &cuts);
+            assert_eq!(pieces.len(), 1, "cuts {cuts:?}");
+            assert_eq!(pieces[0].patch, hunk.patch);
+        }
+    }
+
+    #[test]
+    fn a_no_newline_marker_stays_with_its_line() {
+        let hunk = &parse_hunks("@@ -1,2 +1,3 @@\n a\n+b\n-c\n\\ No newline at end of file\n+d")[0];
+        let pieces = split_hunk(hunk, &[3]);
+        assert_eq!(pieces.len(), 2);
+        assert_eq!(pieces[1].patch, "@@ -2,1 +3,1 @@\n-c\n\\ No newline at end of file\n+d");
+        assert_valid_split(hunk, &pieces);
+    }
+
+    #[test]
+    fn a_long_mixed_hunk_splits_validly_at_every_cut() {
+        // 40 lines alternating context, replacements, and additions.
+        let mut body = String::new();
+        for i in 0..40 {
+            match i % 4 {
+                0 => body.push_str(&format!("\n ctx{i}")),
+                1 => body.push_str(&format!("\n-old{i}\n+new{i}")),
+                2 => body.push_str(&format!("\n+add{i}")),
+                _ => body.push_str(&format!("\n-gone{i}")),
+            }
+        }
+        let old = 10 + 10 + 10; // ctx + old + gone
+        let new = 10 + 10 + 10; // ctx + new + add
+        let hunk = &parse_hunks(&format!("@@ -100,{old} +200,{new} @@{body}"))[0];
+        let pieces = split_hunk(hunk, &[205, 211, 219, 226]);
+        assert_eq!(pieces.len(), 5);
+        assert_valid_split(hunk, &pieces);
     }
 
     #[test]

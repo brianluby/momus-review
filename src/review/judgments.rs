@@ -4,12 +4,13 @@
 use anyhow::Result;
 use serde_json::{Map, Value, json};
 
-use crate::domain::patch::{first_added_line, parse_hunks};
+use crate::domain::patch::{first_added_line, parse_hunks, split_hunk};
 use crate::domain::policy::{
     BLOCKING_SEVERITY, MIN_LOCATION_CONFIDENCE, MIN_META_JUDGE_CONFIDENCE, Probabilities,
     REVIEW_PRIORITY_RUBRIC, ROUTE_SEVERITY, SEVERITY_RUBRIC, Dimension,
 };
-use crate::domain::report::{Action, ChangedFile, FileProfile, Finding};
+use crate::domain::report::{Action, ChangedFile, FileProfile, Finding, Hunk};
+use crate::review::regions::function_regions;
 use crate::review::{meta, strategy::{Screening, Signal}};
 use crate::review::typesafe::{
     TypeSafeClient, choice, choice_criteria, mechanism_criteria, noul, score, score_criteria,
@@ -197,12 +198,50 @@ pub async fn profile_file(
     })
 }
 
+/// A hunk with more new-side lines than this is split before evidence
+/// selection (the same size as codebase mode's evidence regions and the
+/// chunks of an untracked file), so the chosen piece, and the finding's
+/// line, sit near the code instead of at the start of a large hunk.
+const MAX_EVIDENCE_LINES: usize = 80;
+
+/// The evidence candidates for a changed file: its hunks, with each large
+/// one split at declaration boundaries (`regions::function_regions` over the
+/// hunk's new-side text), or into `MAX_EVIDENCE_LINES` windows where it has
+/// none. A newly added file is one hunk, so this is what keeps its findings
+/// off line 1.
+fn candidate_hunks(file: &ChangedFile) -> Vec<Hunk> {
+    let mut candidates = Vec::new();
+    for hunk in parse_hunks(&file.patch) {
+        let new_side: Vec<&str> = hunk
+            .patch
+            .split('\n')
+            .skip(1)
+            .filter(|line| line.starts_with(' ') || line.starts_with('+'))
+            .map(|line| &line[1..])
+            .collect();
+        if new_side.len() <= MAX_EVIDENCE_LINES {
+            candidates.push(hunk);
+            continue;
+        }
+        let cuts: Vec<usize> = function_regions(&new_side.join("\n"), &file.path, MAX_EVIDENCE_LINES)
+            .iter()
+            .skip(1)
+            .map(|region| hunk.start_line + region.start_line - 1)
+            .collect();
+        candidates.extend(split_hunk(&hunk, &cuts));
+    }
+    for (index, hunk) in candidates.iter_mut().enumerate() {
+        hunk.id = format!("hunk_{}", index + 1);
+    }
+    candidates
+}
+
 /// Locates, classifies, scores, and routes a signals from a changed file.
 pub async fn locate_signal(
     client: &TypeSafeClient,
     signal: &Signal<ChangedFile>,
 ) -> Result<Option<Finding>> {
-    let hunks = parse_hunks(&signal.file.patch);
+    let hunks = candidate_hunks(&signal.file);
     if hunks.is_empty() {
         return Ok(None);
     }
@@ -353,4 +392,56 @@ pub async fn locate_signal(
         evidence: hunk.patch.clone(),
         ..Default::default()
     }))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::patch::first_added_line;
+
+    fn new_file(path: &str, content: &str) -> ChangedFile {
+        let lines: Vec<&str> = content.split('\n').collect();
+        let body: String = lines.iter().map(|l| format!("\n+{l}")).collect();
+        ChangedFile {
+            path: path.into(),
+            patch: format!("@@ -0,0 +1,{} @@{body}", lines.len()),
+            base: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_large_new_rust_file_offers_one_candidate_per_declaration() {
+        // Two 60-line functions: 120 lines, one hunk, over the evidence cap.
+        let func = |name: &str| {
+            let body: String = (0..58).map(|i| format!("    let _{i} = {i};\n")).collect();
+            format!("fn {name}() {{\n{body}}}")
+        };
+        let file = new_file("src/lib.rs", &format!("{}\n{}", func("alpha"), func("beta")));
+        let candidates = candidate_hunks(&file);
+        let anchors: Vec<usize> = candidates.iter().map(first_added_line).collect();
+        assert_eq!(anchors, [1, 61], "one piece per function, anchored on its fn line");
+        assert!(candidates[1].patch.lines().nth(1).unwrap().starts_with("+fn beta"));
+        let ids: Vec<&str> = candidates.iter().map(|h| h.id.as_str()).collect();
+        assert_eq!(ids, ["hunk_1", "hunk_2"]);
+    }
+
+    #[test]
+    fn a_large_declaration_free_file_splits_into_windows() {
+        let content: String = (1..=200).map(|i| format!("echo {i}")).collect::<Vec<_>>().join("\n");
+        let candidates = candidate_hunks(&new_file("deploy.sh", &content));
+        let anchors: Vec<usize> = candidates.iter().map(first_added_line).collect();
+        assert_eq!(anchors, [1, 81, 161]);
+    }
+
+    #[test]
+    fn small_hunks_are_unchanged() {
+        let file = ChangedFile {
+            path: "src/a.rs".into(),
+            patch: "@@ -1,2 +1,3 @@\n a\n+b\n c\n@@ -40,1 +41,1 @@\n-x\n+y".into(),
+            base: String::new(),
+        };
+        let candidates = candidate_hunks(&file);
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].patch, parse_hunks(&file.patch)[0].patch);
+        assert_eq!(candidates[1].id, "hunk_2");
+    }
 }

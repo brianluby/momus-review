@@ -60,13 +60,22 @@ impl PullRequest {
 
 /// A comment on the pull request: an issue (conversation) comment or a
 /// review (inline) comment; both list with the same `id`/`body`/`user`.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct Comment {
     pub id: u64,
     #[serde(default)]
     pub body: String,
     #[serde(default)]
     pub user: Option<CommentUser>,
+    /// Review comments only: the file and the line it is anchored on.
+    /// `line` is null once GitHub considers the comment outdated;
+    /// `original_line` keeps where it was posted.
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub line: Option<usize>,
+    #[serde(default)]
+    pub original_line: Option<usize>,
 }
 
 impl Comment {

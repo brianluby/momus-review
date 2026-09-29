@@ -36,7 +36,9 @@ flowchart TD
    priority on `REVIEW_PRIORITY_RUBRIC`. Cheap triage aid, not gating.
 3. **Locate** (every signal ≥ 0.7; unlimited by default, `--follow-ups N`
    re-imposes a per-dimension budget): `choice` strongest-evidence hunk
-   (`parse_hunks`, 80-line chunks for new files) or function-aware source
+   (`parse_hunks`; a hunk over 80 lines, such as a whole new file, is split
+   at declaration boundaries or into 80-line windows so the finding anchors
+   near its code, `judgments::candidate_hunks`) or function-aware source
    region (`regions::function_regions`, a tree-sitter-free heuristic splitting
    at column-0 top-level declarations; oversized declarations and
    declaration-free files fall back to uniform windows; screening uses the
@@ -118,7 +120,11 @@ and `--follow-ups N` re-imposes a cap in code.
 `screenedFiles`, `contextFiles`, full probability `matrix`, `profiles`,
 workflow funnel counts (including suppressed / clustered / exonerated /
 needs-human), per-run `usage` (successful calls, plus token totals when the
-server reports them), and `findings` (file, line, dimension, mechanism +
+server reports them), `skipped` (requests that failed after retries and were
+skipped instead of ending the run: file, stage, reason; each stage sends its
+first five requests at most five at a time, and all five failing aborts the
+run, except for profiles, which never gate findings), and `findings` (file,
+line, dimension, mechanism +
 confidences, severity + confidence, owner + confidence, action, the
 `evidence` excerpt, generated `title` / `why` / `fix` / `test`, and the
 refinement results `fingerprint`, `related`, `rank`, `taint`,
@@ -138,9 +144,16 @@ screened it found nothing there.
 
 In CI, `momus github-review` publishes the report to its pull request:
 findings on a line of the PR's diff become inline review comments (the
-dashboard's copy-as-PR-comment format plus a hidden fingerprint marker, at
+dashboard's copy-as-PR-comment format plus hidden fingerprint and topic
+(`dimension/mechanism`) markers, at
 most `--max-comments`, best-ranked first) and the rest go into one sticky
-summary comment with counts, `pRevert`, usage, and redaction totals. No Jev
+summary comment with counts, `pRevert`, usage, redaction totals, and any
+skipped requests. A finding is not posted again when a bot comment already
+carries its fingerprint. When a bot comment carries its topic on the same
+file within 20 lines (the fingerprint hashes the evidence, so an edit nearby
+changes it), the finding is listed in the summary as "same concern already
+posted nearby" instead of inline: probably a repost, possibly a second
+defect, never silently dropped. No Jev
 calls are made at this stage.
 
 ## Cost Model

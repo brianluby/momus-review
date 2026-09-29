@@ -50,8 +50,10 @@ from inside GitHub Actions. It reads `GITHUB_TOKEN` (needs
 at `GITHUB_EVENT_PATH`. Findings on a line of the PR's diff become inline
 review comments, at most `--max-comments N` (default 10), best-ranked first;
 everything else goes into one summary comment with counts, P(revert), usage,
-and redaction totals. Re-runs are idempotent: each comment carries a hidden
-fingerprint marker, so a finding is posted once, and the summary is edited in
+and redaction totals. Re-runs are idempotent: each comment carries hidden
+fingerprint and topic markers, so a finding is posted once (after an edit to
+the code around it, the same concern nearby is listed in the summary rather
+than posted again), and the summary is edited in
 place. The review is a plain comment by default and blocking is left to the
 check status (`--fail-on-blocking`); `--event request-changes` requests
 changes when an inline finding blocks. Published text is redacted like
