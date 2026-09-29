@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
-use futures::{StreamExt, stream};
+use futures::{Stream, StreamExt, stream};
 
 use std::collections::HashMap;
 
@@ -17,7 +17,8 @@ use crate::domain::policy::{
     dimension_metadata,
 };
 use crate::domain::report::{
-    ConfigSnapshot, FileProfile, Finding, MatrixRow, ReviewReport, WorkflowCounts,
+    ConfigSnapshot, FileProfile, Finding, MatrixRow, ReviewReport, ReviewStage, SkippedFile,
+    WorkflowCounts,
 };
 use crate::review::explain::{self, MAX_ENRICH};
 use crate::review::merge_confidence;
@@ -32,6 +33,48 @@ fn concurrency_from_env() -> Result<usize> {
         Ok(raw) if !raw.trim().is_empty() => parse_positive("MOMUS_CONCURRENCY", &raw),
         _ => Ok(CONCURRENCY),
     }
+}
+
+/// A stage aborts when its first this-many results all failed: the failure
+/// is systemic (a bad key, an unreachable server, requests that can never
+/// fit), so sending the rest would only repeat it.
+const CIRCUIT_BREAKER: usize = 5;
+
+/// A skipped request's reason is shortened to this many characters.
+const MAX_SKIP_REASON_CHARS: usize = 300;
+
+/// Drains a stage's `(file, result)` stream in order, keeping successes and
+/// recording each failure in `skipped` so one bad file cannot end the run.
+/// When the first `CIRCUIT_BREAKER` results all failed, stops at once
+/// (dropping the stream cancels the requests still in flight) and returns
+/// the error.
+async fn tolerate<O>(
+    results: impl Stream<Item = (String, Result<O>)>,
+    stage: ReviewStage,
+    log: &dyn Fn(&str),
+    skipped: &mut Vec<SkippedFile>,
+) -> Result<Vec<O>> {
+    let mut results = std::pin::pin!(results);
+    let mut kept = Vec::new();
+    let mut failures = 0usize;
+    while let Some((file, result)) = results.next().await {
+        match result {
+            Ok(value) => kept.push(value),
+            Err(error) => {
+                failures += 1;
+                if kept.is_empty() && failures >= CIRCUIT_BREAKER {
+                    return Err(error.context(format!(
+                        "the first {CIRCUIT_BREAKER} {} requests all failed; stopping instead of sending the rest",
+                        stage.key()
+                    )));
+                }
+                let reason: String = format!("{error:#}").chars().take(MAX_SKIP_REASON_CHARS).collect();
+                log(&format!("  {} {file} failed, skipped: {reason}", stage.key()));
+                skipped.push(SkippedFile { file, stage, reason });
+            }
+        }
+    }
+    Ok(kept)
 }
 
 /// Per-run knobs beyond the scope and strategy. The default matches the CLI:
@@ -118,23 +161,26 @@ pub async fn run_review<S: ReviewStrategy>(
     ));
 
     // 1. Screen: ordered, bounded concurrency (CONCURRENCY, or MOMUS_CONCURRENCY).
-    let matrix: Vec<Screening<S::File>> = stream::iter(files)
+    //    A file whose screen fails is skipped and recorded; a review needs at
+    //    least one screened file.
+    let mut skipped: Vec<SkippedFile> = Vec::new();
+    let screens = stream::iter(files)
         .map(|file| {
             let strategy = &strategy;
             let context = &context_files;
             async move {
                 log(&format!("  screen {}", file.path()));
-                strategy
-                    .screen(&file, context)
-                    .await
-                    .map_err(|e| anyhow!("Screening {} failed: {e:#}", file.path()))
+                (file.path().to_string(), strategy.screen(&file, context).await)
             }
         })
-        .buffered(concurrency)
-        .collect::<Vec<_>>()
+        .buffered(concurrency);
+    let matrix: Vec<Screening<S::File>> = tolerate(screens, ReviewStage::Screen, log, &mut skipped)
         .await
-        .into_iter()
-        .collect::<Result<Vec<_>>>()?;
+        .map_err(|e| anyhow!("Screening failed: {e:#}"))?;
+    if matrix.is_empty() {
+        let first = skipped.first().map(|s| s.reason.as_str()).unwrap_or("");
+        return Err(anyhow!("Screening failed for every file: {first}"));
+    }
     let screened_files = matrix.len();
 
     // 2. Rank: flatten to signals, keep those at/above the (feedback-tuned)
@@ -165,19 +211,18 @@ pub async fn run_review<S: ReviewStrategy>(
     profile_candidates.truncate(MAX_PROFILES);
 
     log(&format!("Profiling {} files...", profile_candidates.len()));
-    let profiles: Vec<FileProfile> = stream::iter(profile_candidates)
+    let profile_results = stream::iter(profile_candidates)
         .map(|screening| {
             let strategy = &strategy;
             async move {
                 log(&format!("  profile {}", screening.file.path()));
-                strategy.profile(&screening.file, &screening.probabilities).await
+                let path = screening.file.path().to_string();
+                (path, strategy.profile(&screening.file, &screening.probabilities).await)
             }
         })
-        .buffered(concurrency)
-        .collect::<Vec<_>>()
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>>>()?;
+        .buffered(concurrency);
+    let profiles: Vec<FileProfile> =
+        tolerate(profile_results, ReviewStage::Profile, log, &mut skipped).await?;
     let profiled_files = profiles.len();
 
     // 4. Locate: follow up every threshold signal (unlimited), or cap with a
@@ -188,7 +233,7 @@ pub async fn run_review<S: ReviewStrategy>(
         "Following {} of {} threshold signals...",
         followed_signals, threshold_signals
     ));
-    let located: Vec<Option<Finding>> = stream::iter(follow_ups)
+    let locate_results = stream::iter(follow_ups)
         .map(|signal| {
             let strategy = &strategy;
             async move {
@@ -198,14 +243,13 @@ pub async fn run_review<S: ReviewStrategy>(
                     signal.dimension.key(),
                     signal.probability
                 ));
-                strategy.locate(&signal).await
+                let label = format!("{} [{}]", signal.file.path(), signal.dimension.key());
+                (label, strategy.locate(&signal).await)
             }
         })
-        .buffered(concurrency)
-        .collect::<Vec<_>>()
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>>>()?;
+        .buffered(concurrency);
+    let located: Vec<Option<Finding>> =
+        tolerate(locate_results, ReviewStage::Locate, log, &mut skipped).await?;
 
     let mut findings: Vec<Finding> = located.into_iter().flatten().collect();
     let located_findings = findings.len();
@@ -315,6 +359,7 @@ pub async fn run_review<S: ReviewStrategy>(
         },
         usage: strategy.client().usage_summary(),
         redactions: strategy.client().redaction_summary(),
+        skipped,
         findings,
         p_revert,
     })
@@ -368,6 +413,70 @@ mod tests {
     use super::*;
     use crate::domain::policy::Dimension;
     use crate::domain::report::ChangedFile;
+
+    /// `(file, result)` items for `tolerate`: `true` succeeds with the index.
+    fn results(outcomes: &[bool]) -> Vec<(String, Result<usize>)> {
+        outcomes
+            .iter()
+            .enumerate()
+            .map(|(i, ok)| {
+                let file = format!("f{i}.rs");
+                let result = if *ok { Ok(i) } else { Err(anyhow!("400 max_tokens_exceeded")) };
+                (file, result)
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn one_failure_is_skipped_not_fatal() {
+        let mut skipped = Vec::new();
+        let kept = tolerate(stream::iter(results(&[true, false, true])), ReviewStage::Screen, &|_| {}, &mut skipped)
+            .await
+            .unwrap();
+        assert_eq!(kept, vec![0, 2]);
+        assert_eq!(
+            skipped,
+            vec![SkippedFile {
+                file: "f1.rs".into(),
+                stage: ReviewStage::Screen,
+                reason: "400 max_tokens_exceeded".into(),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failing_start_trips_the_breaker_without_draining_the_stream() {
+        let pulled = std::sync::atomic::AtomicUsize::new(0);
+        let items = stream::iter(results(&[false; 300])).inspect(|_| {
+            pulled.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+        let mut skipped = Vec::new();
+        let err = tolerate(items, ReviewStage::Screen, &|_| {}, &mut skipped).await.unwrap_err();
+        assert!(format!("{err:#}").contains("first 5 screen requests all failed"), "{err:#}");
+        assert!(format!("{err:#}").contains("max_tokens_exceeded"), "{err:#}");
+        assert_eq!(pulled.load(std::sync::atomic::Ordering::SeqCst), CIRCUIT_BREAKER, "stops at the breaker");
+    }
+
+    #[tokio::test]
+    async fn failures_after_a_success_never_trip_the_breaker() {
+        let mut outcomes = vec![true];
+        outcomes.extend([false; 10]);
+        let mut skipped = Vec::new();
+        let kept = tolerate(stream::iter(results(&outcomes)), ReviewStage::Locate, &|_| {}, &mut skipped)
+            .await
+            .unwrap();
+        assert_eq!(kept, vec![0]);
+        assert_eq!(skipped.len(), 10);
+        assert!(skipped.iter().all(|s| s.stage == ReviewStage::Locate));
+    }
+
+    #[tokio::test]
+    async fn long_reasons_are_shortened() {
+        let items = stream::iter(vec![("f.rs".to_string(), Err::<usize, _>(anyhow!("x".repeat(1000))))]);
+        let mut skipped = Vec::new();
+        tolerate(items, ReviewStage::Profile, &|_| {}, &mut skipped).await.unwrap();
+        assert_eq!(skipped[0].reason.chars().count(), MAX_SKIP_REASON_CHARS);
+    }
 
     fn sig(dim: Dimension, p: f64) -> Signal<ChangedFile> {
         Signal {

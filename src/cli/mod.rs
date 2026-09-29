@@ -252,6 +252,13 @@ async fn run_mode<S: ReviewStrategy>(
         eprintln!("redacted secrets before sending: {}", rules.join(", "));
     }
 
+    if !report.skipped.is_empty() {
+        eprintln!(
+            "skipped {} failed request(s); see `skipped` in the report",
+            report.skipped.len()
+        );
+    }
+
     let out = report_path();
     save_report(&report, &out)?;
     eprintln!("saved {}", out.display());

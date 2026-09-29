@@ -74,10 +74,10 @@ request content with a write token, so:
 - **Published text is redacted**: comment bodies and the summary go through
   `domain::redact`, the same rules as outgoing requests. Raw evidence is
   never published.
-- **Markers are trusted only from bots**: fingerprint markers count as
-  "already posted", and the summary is found and edited, only in
-  bot-authored comments. Fingerprints are deterministic, so otherwise a PR
-  author could pre-post a finding's marker to suppress it.
+- **Markers are trusted only from bots**: fingerprint and topic markers
+  count as "already posted", and the summary is found and edited, only in
+  bot-authored comments. Both are deterministic, so otherwise a PR author
+  could pre-post a finding's marker to suppress it.
 - **Many repositories**: the caller passes only `TYPESAFE_API_KEY` to the
   reusable workflow, never `secrets: inherit`, and skips fork pull requests
   at the job. `scripts/rollout.sh` pins the caller to the latest release's

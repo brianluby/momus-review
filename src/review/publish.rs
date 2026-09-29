@@ -6,7 +6,9 @@
 use anyhow::Result;
 
 use crate::adapters::github::{GitHubApi, NewReview, PullRequest, is_unresolvable_anchor};
-use crate::domain::github_review::{SUMMARY_MARKER, plan, posted_fingerprints, summary_body};
+use crate::domain::github_review::{
+    Posted, SUMMARY_MARKER, plan, posted_fingerprints, posted_topics, summary_body,
+};
 use crate::domain::report::{Action, ReviewReport};
 
 /// Inline comments per run unless `--max-comments` says otherwise.
@@ -71,8 +73,14 @@ pub async fn publish<A: GitHubApi>(
     // Markers count only in bot comments: a PR author could otherwise
     // pre-post a finding's (deterministic) fingerprint to suppress it.
     let comments = api.review_comments(pr).await?;
-    let posted =
-        posted_fingerprints(comments.iter().filter(|c| c.by_bot()).map(|c| c.body.as_str()));
+    let bot: Vec<_> = comments.iter().filter(|c| c.by_bot()).collect();
+    let posted = Posted {
+        fingerprints: posted_fingerprints(bot.iter().map(|c| c.body.as_str())),
+        // Where each comment was posted (an outdated one keeps original_line).
+        topics: posted_topics(bot.iter().filter_map(|c| {
+            Some((c.path.as_deref()?, c.line.or(c.original_line), c.body.as_str()))
+        })),
+    };
     let mut plan = plan(report, &files, &posted, options.max_comments);
 
     let mut review = None;

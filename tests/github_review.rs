@@ -61,7 +61,12 @@ impl GitHubApi for FakeGitHub {
             return Err(ApiStatusError { status: 422, message: "Unprocessable Entity".into(), errors }.into());
         }
         let mut state = self.state();
-        let posted: Vec<Comment> = review.comments.iter().map(|c| bot_comment(0, &c.body)).collect();
+        // Posted review comments keep their path and line, as GitHub's do.
+        let posted: Vec<Comment> = review
+            .comments
+            .iter()
+            .map(|c| Comment { path: Some(c.path.clone()), line: Some(c.line), ..bot_comment(0, &c.body) })
+            .collect();
         state.review_comments.extend(posted);
         state.reviews.push(review.clone());
         Ok(())
@@ -84,7 +89,7 @@ impl GitHubApi for FakeGitHub {
 }
 
 fn comment(id: u64, body: &str, kind: &str) -> Comment {
-    Comment { id, body: body.to_string(), user: Some(CommentUser { kind: kind.into() }) }
+    Comment { id, body: body.to_string(), user: Some(CommentUser { kind: kind.into() }), ..Default::default() }
 }
 
 /// A comment as `github-actions[bot]` posts it.
@@ -199,6 +204,52 @@ async fn a_human_comment_with_the_marker_is_not_the_summary() {
     let state = github.state();
     assert_eq!(state.issue_comments.len(), 2);
     assert!(state.issue_comments[0].body.ends_with("planted"), "the human's comment is untouched");
+}
+
+#[tokio::test]
+async fn an_edited_finding_near_its_old_line_is_not_posted_again() {
+    let github = FakeGitHub::with_files(files());
+    let options = PublishOptions::default();
+    let first = ReviewReport {
+        findings: vec![Finding { mechanism: "boundary".into(), ..finding("src/a.rs", 2, "aaaa", Action::Comment) }],
+        ..Default::default()
+    };
+    publish(&github, &pr(), &first, &options).await.unwrap();
+
+    // The code around it was edited: a new fingerprint, the same concern one
+    // line down. Not posted again.
+    let edited = ReviewReport {
+        findings: vec![Finding { mechanism: "boundary".into(), ..finding("src/a.rs", 3, "bbbb", Action::Comment) }],
+        ..Default::default()
+    };
+    let outcome = publish(&github, &pr(), &edited, &options).await.unwrap();
+    assert!(outcome.review.is_none(), "reposted: {:?}", outcome.review);
+    assert_eq!(outcome.already_posted, 1);
+
+    // A different mechanism at the same place is a new concern.
+    let other = ReviewReport {
+        findings: vec![Finding { mechanism: "nullDeref".into(), ..finding("src/a.rs", 3, "cccc", Action::Comment) }],
+        ..Default::default()
+    };
+    let outcome = publish(&github, &pr(), &other, &options).await.unwrap();
+    assert_eq!(outcome.review.map(|r| r.comments.len()), Some(1));
+}
+
+#[tokio::test]
+async fn a_human_comment_with_a_topic_marker_suppresses_nothing() {
+    let github = FakeGitHub::with_files(files());
+    github.state().review_comments.push(Comment {
+        path: Some("src/a.rs".into()),
+        line: Some(2),
+        ..comment(5, "<!-- momus:topic=correctness/boundary -->", "User")
+    });
+    let report = ReviewReport {
+        findings: vec![Finding { mechanism: "boundary".into(), ..finding("src/a.rs", 2, "aaaa", Action::Comment) }],
+        ..Default::default()
+    };
+    let outcome = publish(&github, &pr(), &report, &PublishOptions::default()).await.unwrap();
+    assert_eq!(outcome.already_posted, 0);
+    assert_eq!(outcome.review.map(|r| r.comments.len()), Some(1));
 }
 
 #[tokio::test]

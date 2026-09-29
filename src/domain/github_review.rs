@@ -44,6 +44,67 @@ pub fn posted_fingerprints<'a>(bodies: impl IntoIterator<Item = &'a str>) -> Has
         .collect()
 }
 
+static TOPIC_MARKER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<!-- momus:topic=([A-Za-z]+/[A-Za-z0-9_]+) -->").expect("valid marker regex"));
+
+/// A finding already posted within this many lines, on the same file with
+/// the same dimension and mechanism, counts as posted even when its
+/// fingerprint changed: the fingerprint hashes the evidence text, so an edit
+/// to the code around a finding would otherwise post it again.
+const REPOST_LINE_WINDOW: usize = 20;
+
+/// The topic a finding is about, `dimension/mechanism`.
+fn topic(finding: &Finding) -> String {
+    format!("{}/{}", finding.dimension.key(), finding.mechanism)
+}
+
+/// The hidden marker that records a posted comment's topic, so a re-run can
+/// recognize the same concern after the code around it changed.
+pub fn topic_marker(finding: &Finding) -> String {
+    format!("<!-- momus:topic={} -->", topic(finding))
+}
+
+/// A posted comment's topic and where it sits.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PostedTopic {
+    pub path: String,
+    pub line: usize,
+    pub topic: String,
+}
+
+/// Topics already posted, from `(path, line, body)` of existing review
+/// comments (a comment GitHub no longer places on a line has none).
+pub fn posted_topics<'a>(
+    comments: impl IntoIterator<Item = (&'a str, Option<usize>, &'a str)>,
+) -> Vec<PostedTopic> {
+    comments
+        .into_iter()
+        .filter_map(|(path, line, body)| {
+            let caps = TOPIC_MARKER.captures(body)?;
+            Some(PostedTopic { path: path.to_string(), line: line?, topic: caps[1].to_string() })
+        })
+        .collect()
+}
+
+/// What earlier runs already posted on the pull request.
+#[derive(Debug, Default)]
+pub struct Posted {
+    pub fingerprints: HashSet<String>,
+    pub topics: Vec<PostedTopic>,
+}
+
+impl Posted {
+    /// The finding, or the same concern near the same line, is already posted.
+    fn covers(&self, finding: &Finding) -> bool {
+        (!finding.fingerprint.is_empty() && self.fingerprints.contains(&finding.fingerprint))
+            || self.topics.iter().any(|t| {
+                t.path == finding.file
+                    && t.line.abs_diff(finding.line) <= REPOST_LINE_WINDOW
+                    && t.topic == topic(finding)
+            })
+    }
+}
+
 /// A file of the pull request as `GET /pulls/{n}/files` lists it. `patch`
 /// is absent for binary files and diffs GitHub considers too large.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -134,12 +195,12 @@ fn fix_first(a: &Finding, b: &Finding) -> std::cmp::Ordering {
 }
 
 /// Splits `report`'s findings into at most `max_inline` new inline comments
-/// and summary-only findings. A finding whose fingerprint is in `posted` is
-/// counted but not posted again.
+/// and summary-only findings. A finding `posted` already covers (its
+/// fingerprint, or its topic near its line) is counted but not posted again.
 pub fn plan<'a>(
     report: &'a ReviewReport,
     files: &[PrFile],
-    posted: &HashSet<String>,
+    posted: &Posted,
     max_inline: usize,
 ) -> Plan<'a> {
     let commentable: HashMap<&str, BTreeSet<usize>> = files
@@ -154,7 +215,7 @@ pub fn plan<'a>(
     let mut seen: HashSet<&str> = HashSet::new();
     for finding in findings {
         let fp = finding.fingerprint.as_str();
-        if !fp.is_empty() && (posted.contains(fp) || !seen.insert(fp)) {
+        if posted.covers(finding) || (!fp.is_empty() && !seen.insert(fp)) {
             out.already_posted += 1;
             continue;
         }
@@ -221,9 +282,16 @@ pub fn comment_body(finding: &Finding) -> String {
         lines.push(format!("- Test: {test}"));
     }
     let mut body = redacted(&lines.join("\n"));
+    let mut markers = Vec::new();
     if !finding.fingerprint.is_empty() {
+        markers.push(fingerprint_marker(&finding.fingerprint));
+    }
+    if !finding.mechanism.is_empty() {
+        markers.push(topic_marker(finding));
+    }
+    if !markers.is_empty() {
         body.push_str("\n\n");
-        body.push_str(&fingerprint_marker(&finding.fingerprint));
+        body.push_str(&markers.join("\n"));
     }
     body
 }
@@ -235,7 +303,7 @@ pub fn summary_body(report: &ReviewReport, plan: &Plan, head_sha: &str) -> Strin
     let blocking = report.findings.iter().filter(|f| f.action == Action::RequestChanges).count();
     let mut out = vec!["### momus review".to_string(), String::new()];
 
-    if total == 0 && report.screened_files == 0 {
+    if total == 0 && report.screened_files == 0 && report.skipped.is_empty() {
         out.push("No source files to review in this pull request.".to_string());
     } else if total == 0 {
         out.push("No findings.".to_string());
@@ -270,6 +338,25 @@ pub fn summary_body(report: &ReviewReport, plan: &Plan, head_sha: &str) -> Strin
         }
         if plan.summary_only.len() > SUMMARY_LIST_MAX {
             out.push(format!("- … and {} more", plan.summary_only.len() - SUMMARY_LIST_MAX));
+        }
+        out.push(String::new());
+        out.push("</details>".to_string());
+    }
+
+    if !report.skipped.is_empty() {
+        out.push(String::new());
+        out.push(format!(
+            "<details><summary>{} request{} failed and {} skipped (not reviewed)</summary>",
+            report.skipped.len(),
+            if report.skipped.len() == 1 { "" } else { "s" },
+            if report.skipped.len() == 1 { "was" } else { "were" }
+        ));
+        out.push(String::new());
+        for skip in report.skipped.iter().take(SUMMARY_LIST_MAX) {
+            out.push(format!("- `{}` · {}: {}", skip.file, skip.stage.key(), skip.reason));
+        }
+        if report.skipped.len() > SUMMARY_LIST_MAX {
+            out.push(format!("- … and {} more", report.skipped.len() - SUMMARY_LIST_MAX));
         }
         out.push(String::new());
         out.push("</details>".to_string());
@@ -345,7 +432,7 @@ mod tests {
         };
         let files = [pr_file("src/a.rs", "@@ -10,2 +10,3 @@\n a\n+b\n c")];
 
-        let plan = plan(&report, &files, &HashSet::new(), 10);
+        let plan = plan(&report, &files, &Posted::default(), 10);
         assert_eq!(plan.inline.len(), 1);
         assert_eq!(plan.inline[0].1.path, "src/a.rs");
         assert_eq!(plan.inline[0].1.line, 11);
@@ -368,12 +455,43 @@ mod tests {
         };
         let files = [pr_file("src/a.rs", "@@ -0,0 +1,3 @@\n+a\n+b\n+c")];
 
-        let plan = plan(&report, &files, &HashSet::new(), 2);
+        let plan = plan(&report, &files, &Posted::default(), 2);
         let inline: Vec<usize> = plan.inline.iter().map(|(f, _)| f.line).collect();
         assert_eq!(inline, vec![1, 3], "rank 1 first, then the most severe");
         assert_eq!(plan.summary_only.len(), 1);
         assert_eq!(plan.summary_only[0].0.line, 2);
         assert_eq!(plan.summary_only[0].1, SummaryReason::OverCap);
+    }
+
+    #[test]
+    fn a_posted_topic_near_the_line_covers_a_changed_fingerprint() {
+        let at = |line, mechanism: &str, fp: &str| Finding { mechanism: mechanism.into(), ..finding("src/a.rs", line, 2.0, fp) };
+        let report = ReviewReport {
+            findings: vec![at(12, "boundary", "new1"), at(40, "boundary", "new2"), at(12, "nullDeref", "new3")],
+            ..Default::default()
+        };
+        let files = [pr_file("src/a.rs", "@@ -0,0 +1,50 @@\n+x")];
+        let body = comment_body(&at(10, "boundary", "old"));
+        let posted = Posted {
+            topics: posted_topics([("src/a.rs", Some(10), body.as_str()), ("src/b.rs", Some(12), body.as_str())]),
+            ..Default::default()
+        };
+        assert_eq!(posted.topics.len(), 2);
+        let plan = plan(&report, &files, &posted, 10);
+        // 12 is within the window of the posted boundary at 10: covered. 40 is
+        // too far, and nullDeref is another concern: both are new.
+        assert_eq!(plan.already_posted, 1);
+        let mut new: Vec<(usize, &str)> =
+            plan.inline.iter().map(|(f, _)| (f.line, f.mechanism.as_str())).collect();
+        new.extend(plan.summary_only.iter().map(|(f, _)| (f.line, f.mechanism.as_str())));
+        new.sort();
+        assert_eq!(new, [(12, "nullDeref"), (40, "boundary")]);
+    }
+
+    #[test]
+    fn a_comment_without_a_line_or_marker_records_no_topic() {
+        let body = comment_body(&Finding { mechanism: "boundary".into(), ..finding("src/a.rs", 1, 2.0, "f") });
+        assert!(posted_topics([("src/a.rs", None, body.as_str()), ("src/a.rs", Some(3), "plain text")]).is_empty());
     }
 
     #[test]
@@ -387,6 +505,7 @@ mod tests {
         let posted = posted_fingerprints(bodies);
         assert_eq!(posted, HashSet::from(["0123abcd".to_string()]));
 
+        let posted = Posted { fingerprints: posted, ..Default::default() };
         let plan = plan(&report, &files, &posted, 10);
         assert_eq!(plan.already_posted, 1);
         assert_eq!(plan.inline.len(), 1);
@@ -401,7 +520,7 @@ mod tests {
             ..Default::default()
         };
         let files = [pr_file("src/a.rs", "@@ -0,0 +1 @@\n+a")];
-        let plan = plan(&report, &files, &HashSet::new(), 10);
+        let plan = plan(&report, &files, &Posted::default(), 10);
         assert!(plan.inline.is_empty());
         assert_eq!(plan.summary_only[0].1, SummaryReason::NotADiffReview);
     }
@@ -412,6 +531,7 @@ mod tests {
             why: Some("User input reaches a SQL string.".into()),
             fix: Some("Use a parameterized query.".into()),
             test: Some("Add a test with a quote in the name.".into()),
+            mechanism: "sqlInjection".into(),
             ..finding("src/a.rs", 1, 2.24, "0123456789abcdef")
         };
         assert_eq!(
@@ -421,10 +541,12 @@ mod tests {
              - Fix: Use a parameterized query.\n\
              - Test: Add a test with a quote in the name.\n\
              \n\
-             <!-- momus:fp=0123456789abcdef -->"
+             <!-- momus:fp=0123456789abcdef -->\n\
+             <!-- momus:topic=security/sqlInjection -->"
         );
 
-        // No title: the dimension label heads the comment; no fingerprint, no marker.
+        // No title: the dimension label heads the comment; no fingerprint or
+        // mechanism, no markers.
         let bare = Finding { dimension: Dimension::TestGap, severity: 1.0, ..Default::default() };
         assert_eq!(comment_body(&bare), "**Test gap** (Test gap, severity 1.0)");
     }
@@ -461,7 +583,7 @@ mod tests {
             ..Default::default()
         };
         let files = [pr_file("src/a.rs", "@@ -0,0 +1,3 @@\n+a\n+b\n+c")];
-        let plan = plan(&report, &files, &HashSet::new(), 10);
+        let plan = plan(&report, &files, &Posted::default(), 10);
         let summary = summary_body(&report, &plan, "0123456789abcdef");
 
         assert!(summary.starts_with(SUMMARY_MARKER), "{summary}");
@@ -477,6 +599,23 @@ mod tests {
         let summary = summary_body(&ReviewReport::default(), &Plan::default(), "abc");
         assert!(summary.contains("No source files to review in this pull request."), "{summary}");
         assert!(!summary.contains("No findings."));
+    }
+
+    #[test]
+    fn summary_lists_skipped_requests() {
+        use crate::domain::report::{ReviewStage, SkippedFile};
+        let report = ReviewReport {
+            skipped: vec![SkippedFile {
+                file: "app.ts".into(),
+                stage: ReviewStage::Screen,
+                reason: "system_one failed (400 Bad Request): max_tokens_exceeded".into(),
+            }],
+            screened_files: 2,
+            ..Default::default()
+        };
+        let summary = summary_body(&report, &Plan::default(), "");
+        assert!(summary.contains("1 request failed and was skipped (not reviewed)"), "{summary}");
+        assert!(summary.contains("- `app.ts` · screen: system_one failed (400 Bad Request)"), "{summary}");
     }
 
     #[test]

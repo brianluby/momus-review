@@ -222,6 +222,38 @@ pub struct WorkflowCounts {
     pub needs_human_findings: usize,
 }
 
+/// The funnel stage a request belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReviewStage {
+    Screen,
+    Profile,
+    Locate,
+}
+
+impl ReviewStage {
+    pub fn key(self) -> &'static str {
+        match self {
+            ReviewStage::Screen => "screen",
+            ReviewStage::Profile => "profile",
+            ReviewStage::Locate => "locate",
+        }
+    }
+}
+
+/// A request that failed after the client's retries and was skipped, so the
+/// rest of the review could go on: that file (screen), triage aid (profile),
+/// or signal (locate) is missing from the report.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkippedFile {
+    /// The file; for a locate, also the signal's dimension (`a.rs [security]`).
+    pub file: String,
+    pub stage: ReviewStage,
+    /// The error, shortened.
+    pub reason: String,
+}
+
 /// Per-run System One usage accumulated across the whole review: successful
 /// calls plus token totals when the server reports them (hosted Jev omits
 /// usage, so only `calls` fills in there).
@@ -252,6 +284,9 @@ pub struct ReviewReport {
     /// Distinct secret values redacted from outgoing requests, per rule
     /// (`domain::redact`); empty when nothing matched or redaction was off.
     pub redactions: BTreeMap<String, usize>,
+    /// Requests that failed and were skipped rather than ending the run;
+    /// empty on a clean run.
+    pub skipped: Vec<SkippedFile>,
     pub findings: Vec<Finding>,
     /// Uncalibrated heuristic P(revert) in [0, 1) from the review signals.
     /// A spike (see `review/merge_confidence.rs`); calibration is #17.
