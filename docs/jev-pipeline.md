@@ -121,8 +121,10 @@ and `--follow-ups N` re-imposes a cap in code.
 workflow funnel counts (including suppressed / clustered / exonerated /
 needs-human), per-run `usage` (successful calls, plus token totals when the
 server reports them), `skipped` (requests that failed after retries and were
-skipped instead of ending the run: file, stage, reason; the first five of a
-stage all failing aborts it), and `findings` (file, line, dimension, mechanism +
+skipped instead of ending the run: file, stage, reason; each stage sends its
+first five requests at most five at a time, and all five failing aborts the
+run, except for profiles, which never gate findings), and `findings` (file,
+line, dimension, mechanism +
 confidences, severity + confidence, owner + confidence, action, the
 `evidence` excerpt, generated `title` / `why` / `fix` / `test`, and the
 refinement results `fingerprint`, `related`, `rank`, `taint`,
@@ -147,8 +149,11 @@ dashboard's copy-as-PR-comment format plus hidden fingerprint and topic
 most `--max-comments`, best-ranked first) and the rest go into one sticky
 summary comment with counts, `pRevert`, usage, redaction totals, and any
 skipped requests. A finding is not posted again when a bot comment already
-carries its fingerprint, or its topic on the same file within 20 lines (the
-fingerprint hashes the evidence, so an edit nearby would change it). No Jev
+carries its fingerprint. When a bot comment carries its topic on the same
+file within 20 lines (the fingerprint hashes the evidence, so an edit nearby
+changes it), the finding is listed in the summary as "same concern already
+posted nearby" instead of inline: probably a repost, possibly a second
+defect, never silently dropped. No Jev
 calls are made at this stage.
 
 ## Cost Model

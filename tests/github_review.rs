@@ -207,7 +207,7 @@ async fn a_human_comment_with_the_marker_is_not_the_summary() {
 }
 
 #[tokio::test]
-async fn an_edited_finding_near_its_old_line_is_not_posted_again() {
+async fn an_edited_finding_near_its_old_line_moves_to_the_summary() {
     let github = FakeGitHub::with_files(files());
     let options = PublishOptions::default();
     let first = ReviewReport {
@@ -224,7 +224,9 @@ async fn an_edited_finding_near_its_old_line_is_not_posted_again() {
     };
     let outcome = publish(&github, &pr(), &edited, &options).await.unwrap();
     assert!(outcome.review.is_none(), "reposted: {:?}", outcome.review);
-    assert_eq!(outcome.already_posted, 1);
+    // Kept, though: it could be a second defect, so the summary lists it.
+    assert_eq!(outcome.summary_only, 1);
+    assert!(outcome.summary.contains("`src/a.rs:3` · same concern already posted nearby"), "{}", outcome.summary);
 
     // A different mechanism at the same place is a new concern.
     let other = ReviewReport {

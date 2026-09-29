@@ -47,10 +47,12 @@ pub fn posted_fingerprints<'a>(bodies: impl IntoIterator<Item = &'a str>) -> Has
 static TOPIC_MARKER: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"<!-- momus:topic=([A-Za-z]+/[A-Za-z0-9_]+) -->").expect("valid marker regex"));
 
-/// A finding already posted within this many lines, on the same file with
-/// the same dimension and mechanism, counts as posted even when its
-/// fingerprint changed: the fingerprint hashes the evidence text, so an edit
-/// to the code around a finding would otherwise post it again.
+/// A bot comment within this many lines, on the same file with the same
+/// dimension and mechanism, means the finding is probably already posted even
+/// when its fingerprint changed (the fingerprint hashes the evidence text, so
+/// an edit nearby changes it). It could also be a second, distinct defect, so
+/// such a finding is not posted inline again but is listed in the summary:
+/// nothing is dropped on a guess.
 const REPOST_LINE_WINDOW: usize = 20;
 
 /// The topic a finding is about, `dimension/mechanism`.
@@ -94,14 +96,19 @@ pub struct Posted {
 }
 
 impl Posted {
-    /// The finding, or the same concern near the same line, is already posted.
-    fn covers(&self, finding: &Finding) -> bool {
-        (!finding.fingerprint.is_empty() && self.fingerprints.contains(&finding.fingerprint))
-            || self.topics.iter().any(|t| {
-                t.path == finding.file
-                    && t.line.abs_diff(finding.line) <= REPOST_LINE_WINDOW
-                    && t.topic == topic(finding)
-            })
+    /// This exact finding (its fingerprint) is already posted.
+    fn has(&self, finding: &Finding) -> bool {
+        !finding.fingerprint.is_empty() && self.fingerprints.contains(&finding.fingerprint)
+    }
+
+    /// The same concern is posted near the finding's line: probably the same
+    /// finding after an edit, possibly a distinct one.
+    fn has_near(&self, finding: &Finding) -> bool {
+        self.topics.iter().any(|t| {
+            t.path == finding.file
+                && t.line.abs_diff(finding.line) <= REPOST_LINE_WINDOW
+                && t.topic == topic(finding)
+        })
     }
 }
 
@@ -156,6 +163,9 @@ pub enum SummaryReason {
     /// GitHub rejected the review's anchors (the report was made from a
     /// different commit than the PR head).
     Rejected,
+    /// A bot comment with the same concern sits within a few lines: likely
+    /// this finding before an edit, so it is not posted inline again.
+    NearPosted,
 }
 
 impl SummaryReason {
@@ -165,6 +175,7 @@ impl SummaryReason {
             SummaryReason::OutsideDiff => "outside the diff",
             SummaryReason::OverCap => "over the inline cap",
             SummaryReason::Rejected => "GitHub rejected the anchor",
+            SummaryReason::NearPosted => "same concern already posted nearby",
         }
     }
 }
@@ -195,8 +206,9 @@ fn fix_first(a: &Finding, b: &Finding) -> std::cmp::Ordering {
 }
 
 /// Splits `report`'s findings into at most `max_inline` new inline comments
-/// and summary-only findings. A finding `posted` already covers (its
-/// fingerprint, or its topic near its line) is counted but not posted again.
+/// and summary-only findings. A finding whose fingerprint `posted` already
+/// has is counted but not posted again; one whose concern is posted nearby
+/// goes to the summary rather than inline (`SummaryReason::NearPosted`).
 pub fn plan<'a>(
     report: &'a ReviewReport,
     files: &[PrFile],
@@ -215,12 +227,14 @@ pub fn plan<'a>(
     let mut seen: HashSet<&str> = HashSet::new();
     for finding in findings {
         let fp = finding.fingerprint.as_str();
-        if posted.covers(finding) || (!fp.is_empty() && !seen.insert(fp)) {
+        if posted.has(finding) || (!fp.is_empty() && !seen.insert(fp)) {
             out.already_posted += 1;
             continue;
         }
         let reason = if report.mode == ReviewMode::Codebase {
             Some(SummaryReason::NotADiffReview)
+        } else if posted.has_near(finding) {
+            Some(SummaryReason::NearPosted)
         } else if !commentable
             .get(finding.file.as_str())
             .is_some_and(|lines| lines.contains(&finding.line))
@@ -464,7 +478,7 @@ mod tests {
     }
 
     #[test]
-    fn a_posted_topic_near_the_line_covers_a_changed_fingerprint() {
+    fn a_posted_topic_nearby_moves_a_changed_fingerprint_to_the_summary() {
         let at = |line, mechanism: &str, fp: &str| Finding { mechanism: mechanism.into(), ..finding("src/a.rs", line, 2.0, fp) };
         let report = ReviewReport {
             findings: vec![at(12, "boundary", "new1"), at(40, "boundary", "new2"), at(12, "nullDeref", "new3")],
@@ -478,14 +492,19 @@ mod tests {
         };
         assert_eq!(posted.topics.len(), 2);
         let plan = plan(&report, &files, &posted, 10);
-        // 12 is within the window of the posted boundary at 10: covered. 40 is
-        // too far, and nullDeref is another concern: both are new.
-        assert_eq!(plan.already_posted, 1);
-        let mut new: Vec<(usize, &str)> =
-            plan.inline.iter().map(|(f, _)| (f.line, f.mechanism.as_str())).collect();
-        new.extend(plan.summary_only.iter().map(|(f, _)| (f.line, f.mechanism.as_str())));
-        new.sort();
-        assert_eq!(new, [(12, "nullDeref"), (40, "boundary")]);
+        // 12 is within the window of the posted boundary at 10: not inline
+        // again, but listed, since it could be a second defect. 40 is too far,
+        // and nullDeref is another concern: both are new (outside this
+        // one-line diff, so summary too, but not as NearPosted).
+        assert_eq!(plan.already_posted, 0, "a topic match never silently drops a finding");
+        let near: Vec<(usize, &str)> = plan
+            .summary_only
+            .iter()
+            .filter(|(_, reason)| *reason == SummaryReason::NearPosted)
+            .map(|(f, _)| (f.line, f.mechanism.as_str()))
+            .collect();
+        assert_eq!(near, [(12, "boundary")]);
+        assert_eq!(plan.inline.len() + plan.summary_only.len(), 3, "all three findings are kept");
     }
 
     #[test]
