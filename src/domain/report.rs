@@ -220,6 +220,11 @@ pub struct WorkflowCounts {
     pub exonerated_findings: usize,
     /// Flagged for a human by ensemble disagreement.
     pub needs_human_findings: usize,
+    /// Context characters trimmed off (or wholly dropped) because they did
+    /// not fit a screen request's budget (`review::context`).
+    pub dropped_context_chars: usize,
+    /// Context items (unit, base, test, neighbor, region) so trimmed.
+    pub dropped_context_items: usize,
 }
 
 /// The funnel stage a request belongs to.

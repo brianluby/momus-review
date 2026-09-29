@@ -10,6 +10,7 @@ use crate::domain::policy::{
     REVIEW_PRIORITY_RUBRIC, ROUTE_SEVERITY, SEVERITY_RUBRIC, Dimension,
 };
 use crate::domain::report::{Action, ChangedFile, FileProfile, Finding, Hunk};
+use crate::review::context::{self, ContextBudget};
 use crate::review::regions::function_regions;
 use crate::review::{meta, strategy::{Screening, Signal}};
 use crate::review::typesafe::{
@@ -32,7 +33,26 @@ pub async fn screen_file(
     file: &ChangedFile,
     changed_tests: &[ChangedFile],
 ) -> Result<Screening<ChangedFile>> {
-    let state = json!({ "file": file, "changedTests": changed_tests });
+    // Same related-test selection as scan mode (`context`): at most 4
+    // changed tests, each compacted to its marker lines, never all of them.
+    let related_tests = context::select_related_changed_tests(file, changed_tests);
+    // One budget per request: the patch under review first, then its base,
+    // then the related tests; whatever does not fit is trimmed and counted.
+    let mut budget = ContextBudget::from_env()?;
+    let unit = ChangedFile {
+        path: file.path.clone(),
+        patch: budget.take(&file.patch),
+        base: budget.take(&file.base),
+    };
+    let tests: Vec<ChangedFile> = related_tests
+        .iter()
+        .map(|test| ChangedFile {
+            path: test.path.clone(),
+            patch: budget.take(&test.patch),
+            base: String::new(),
+        })
+        .collect();
+    let state = json!({ "file": unit, "changedTests": tests });
 
     let questions = json!({
         "correctness": noul(
@@ -164,7 +184,7 @@ pub async fn screen_file(
         (Dimension::TestGap, response.noul("testGap")?),
     ]);
 
-    Ok(Screening { file: file.clone(), probabilities })
+    Ok(Screening { file: file.clone(), probabilities, dropped: budget.drops })
 }
 
 /// Profiles a changed file: category + review priority.

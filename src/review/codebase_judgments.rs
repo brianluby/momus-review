@@ -2,12 +2,11 @@
 //! These ask whether an issue exists in complete source, rather than whether
 //! a patch introduced one.
 
-use std::collections::BTreeSet;
 
 use anyhow::Result;
 use serde_json::{Map, Value, json};
 
-use crate::domain::language::Language;
+use crate::review::context::{ContextBudget, ContextDrops, select_related_tests};
 use crate::domain::policy::{
     BLOCKING_SEVERITY, DIMENSIONS, MIN_LOCATION_CONFIDENCE, MIN_META_JUDGE_CONFIDENCE, Probabilities,
     REVIEW_PRIORITY_RUBRIC, ROUTE_SEVERITY, SEVERITY_RUBRIC, Dimension,
@@ -21,8 +20,6 @@ use crate::review::typesafe::{
 
 const REGION_LINES: usize = 80;
 const SCREEN_REGION_LINES: usize = 160;
-const MAX_RELATED_TESTS: usize = 4;
-const MAX_TEST_SNIPPET_CHARS: usize = 1_800;
 const MAX_NEIGHBOR_LINES: usize = 40;
 const MAX_NEIGHBOR_CHARS: usize = 1_800;
 
@@ -47,12 +44,27 @@ pub async fn screen_source_file(
     let related_tests = select_related_tests(file, test_files);
     let compact_neighbors: Vec<SourceFile> = neighbors.iter().map(compact_neighbor).collect();
     let mut results: Vec<Probabilities> = Vec::new();
+    let mut drops = ContextDrops::default();
 
     for region in function_regions(&file.content, &file.path, SCREEN_REGION_LINES) {
+        // One budget per request: the region under review first, then
+        // related tests, then neighbors; whatever does not fit is trimmed
+        // and counted.
+        let mut budget = ContextBudget::from_env()?;
+        let content = budget.take(&region.content);
+        let tests: Vec<SourceFile> = related_tests
+            .iter()
+            .map(|t| SourceFile { path: t.path.clone(), content: budget.take(&t.content) })
+            .collect();
+        let context_neighbors: Vec<SourceFile> = compact_neighbors
+            .iter()
+            .map(|n| SourceFile { path: n.path.clone(), content: budget.take(&n.content) })
+            .collect();
+        drops = drops + budget.drops;
         let state = json!({
-            "file": { "path": file.path, "startLine": region.start_line, "content": region.content },
-            "relatedTests": related_tests,
-            "neighbors": compact_neighbors,
+            "file": { "path": file.path, "startLine": region.start_line, "content": content },
+            "relatedTests": tests,
+            "neighbors": context_neighbors,
         });
         let questions = json!({
             "correctness": noul(
@@ -161,7 +173,7 @@ pub async fn screen_source_file(
         })
         .collect();
 
-    Ok(Screening { file: file.clone(), probabilities })
+    Ok(Screening { file: file.clone(), probabilities, dropped: drops })
 }
 
 /// Profiles a source file: role + review priority.
@@ -359,84 +371,6 @@ pub async fn locate_source_signal(
 
 // ---- Helpers ---------------------------------------------------------
 
-fn basename(path: &str) -> &str {
-    path.rsplit('/').next().unwrap_or(path)
-}
-
-fn dirname(path: &str) -> String {
-    match path.rsplit_once('/') {
-        Some((d, _)) => d.to_string(),
-        None => ".".to_string(),
-    }
-}
-
-fn stem(path: &str) -> String {
-    match basename(path).rsplit_once('.') {
-        Some((s, _)) => s.to_string(),
-        None => basename(path).to_string(),
-    }
-}
-
-fn select_related_tests(file: &SourceFile, test_files: &[SourceFile]) -> Vec<SourceFile> {
-    let stem = stem(&file.path);
-    let directory = dirname(&file.path);
-
-    let mut scored: Vec<(i32, &SourceFile)> = test_files
-        .iter()
-        .map(|test| {
-            let score = usize::from(test.path.contains(&stem)) as i32 * 2
-                + usize::from(test.path.starts_with(&directory)) as i32;
-            (score, test)
-        })
-        .filter(|(score, _)| *score > 0)
-        .collect();
-
-    scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.path.cmp(&b.1.path)));
-    scored
-        .into_iter()
-        .take(MAX_RELATED_TESTS)
-        .map(|(_, test)| compact_test(test, &stem))
-        .collect()
-}
-
-fn compact_test(test: &SourceFile, source_stem: &str) -> SourceFile {
-    let lines: Vec<&str> = test.content.split('\n').collect();
-    let mut selected: BTreeSet<usize> = BTreeSet::new();
-    let stem = source_stem.to_lowercase();
-    // Test bodies are matched on the test file's own language markers
-    // (`#[test]`, `func Test`, `describe(`, …) plus the language-neutral
-    // `assert`, which every ecosystem spells the same way.
-    let markers = Language::from_path(&test.path).map_or(&[][..], |lang| lang.test_markers());
-
-    for (index, line) in lines.iter().enumerate() {
-        let lower = line.to_lowercase();
-        if lower.contains(&stem)
-            || lower.contains("assert")
-            || markers.iter().any(|marker| lower.contains(marker))
-        {
-            for nearby in index.saturating_sub(2)..=(lines.len() - 1).min(index + 2) {
-                selected.insert(nearby);
-            }
-        }
-    }
-
-    let mut content: String = selected
-        .iter()
-        .map(|&i| lines[i])
-        .collect::<Vec<_>>()
-        .join("\n");
-    if content.is_empty() {
-        content = test.content.clone();
-    }
-    if content.len() > MAX_TEST_SNIPPET_CHARS {
-        let side = (MAX_TEST_SNIPPET_CHARS - 7) / 2;
-        let head: String = content.chars().take(side).collect();
-        let tail: String = content.chars().rev().take(side).collect::<String>().chars().rev().collect();
-        content = format!("{head}\n...\n{tail}");
-    }
-
-    SourceFile { path: test.path.clone(), content }
-}
 
 pub(crate) fn compact_neighbor(f: &SourceFile) -> SourceFile {
     let content: String = f
