@@ -31,10 +31,12 @@ requests.
   uploaders.
 - **Many repositories**: `.github/workflows/review.yml` is a reusable
   workflow (`workflow_call`); each repository carries only the caller in
-  `examples/momus.yml`, pinned to the moving `v0` tag, and passes the
-  `TYPESAFE_API_KEY` secret explicitly. `scripts/rollout.sh` sets the secret
-  and opens the pull request that adds the caller, for a list of
-  repositories (dry run by default). Personal accounts have no account-wide
+  `examples/momus.yml`, pinned to a release commit SHA (`version: auto`
+  pins the binary to it too), and passes the `TYPESAFE_API_KEY` secret
+  explicitly. `scripts/rollout.sh` sets the secret and opens the pull
+  request that adds the pinned caller and, where there is none, a
+  github-actions Dependabot config that proposes upgrades, for a list of
+  repositories (dry run by default; `--update` refreshes open rollout PRs). Personal accounts have no account-wide
   Actions secrets, so the script sets one per repository; in an
   organization, an org secret shared with selected repositories replaces
   that step.
