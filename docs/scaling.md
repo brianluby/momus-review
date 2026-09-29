@@ -134,12 +134,43 @@ repos practical.
 
 ## Open questions
 
-- **Input limit.** We only know it is below ~490k tokens; the budget in (1)
-  should be derived from a measured value, with margin.
-- **Rate limits.** They bound useful parallelism and so the shard count.
-- **Answer stability.** Caching assumes identical input gives an equivalent
-  answer. Jev is calibrated, but repeated identical requests should be
-  measured before cached results replace fresh ones.
+- **Input limit — measured 2026-09-29, bisected against `jev-latest`**
+  (resolved to `jev-1.13.0`): the largest screen-shaped request that succeeds
+  carries ~122.5k characters of state (33,827 reported input tokens,
+  state plus the seven screen questions); ~124k characters (~34.2k tokens)
+  fails with `400 max_tokens_exceeded`. This matches the documented budgets
+  (docs.typesafe.ai/models): 64k tokens per request for state plus all
+  questions combined, and 32k tokens for state plus the longest question —
+  the 32k budget is the one that binds a screen. Code runs ~3.8–4.2
+  chars/token, so the context budget in (1) should cap state at ~100k
+  characters (~26k tokens), leaving headroom for questions; the old
+  2 MB (~490k-token) requests were ~7x over even the 64k budget. Latency at
+  the boundary is ~0.3 s — size costs no wall time, only the cap matters.
+- **Rate limits — documented and ramp-tested 2026-09-29.** TypeSafe
+  documents 250k tokens/sec and 1,200 requests/min (429 with `retry-after`;
+  529 overloaded), and warns the numbers adjust dynamically. A bounded ramp
+  (~40 requests: concurrency 4/8/16 with ~2k-char states, plus 8 concurrent
+  ~33k-token requests) saw no 429, no 529, and no rate-limit headers —
+  bursts of ~6.8k requests/min and ~530k tokens/sec passed unthrottled, so
+  short bursts run well above the documented steady-state ceiling.
+  Sustained load was not measured (that needs >1.2k requests/min for
+  minutes); adaptive concurrency (#40) should assume the documented
+  1,200 requests/min and react to the first 429/529 it sees. At the
+  measured 0.1–0.5 s per request, today's fixed concurrency of 3 (~600
+  requests/min worst case) has headroom; sharding (#38) splits the work but
+  every shard draws on the same per-account pool, so N shards still share
+  one 1,200-requests/min ceiling.
+- **Answer stability — measured 2026-09-29: tight enough to cache.** One
+  real screen (a 5.9k-char region of `run_review` at `d8b8fa9^`, the
+  collect-all-then-fail bug) sent 6 times sequentially and, from the ramp,
+  16 times concurrently: every noul probability spread ≤ 0.02 (stdev
+  ≤ 0.009; one question returned exactly 0.02 on all six runs). The
+  follow-up file-role choice picked `domain` 5/5 (confidence 0.52–0.57) and
+  the review-priority score spread 0.09 (1.84–1.93). Nothing crossed the
+  0.7 screen threshold, so no decision flipped. Cached results (#36) can
+  replace fresh ones; only probabilities within ~±0.03 of a threshold could
+  route differently, and the key should pin the versioned model id
+  (`jev-1.13.0`), since `jev-latest` is an alias that silently moves.
 - **One question set or two.** Diff mode asks "does this change introduce…",
   scan mode "does this code have…". Sharing machinery is clear; whether a PR
   review should also use scan questions on changed regions is not.
