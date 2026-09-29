@@ -153,17 +153,26 @@ then `momus github-review`. Inputs:
 **Many repositories.** A reusable workflow keeps the setup in one place:
 each repository only needs the small caller in
 [`examples/momus.yml`](examples/momus.yml), which runs
-`brianluby/momus-review/.github/workflows/review.yml@v0` and passes just the
-`TYPESAFE_API_KEY` secret. `v0` moves to each release, so callers upgrade
-without edits. `scripts/rollout.sh` sets the secret and opens a pull request
-adding the caller in every repository you list; it is a dry run unless you
-pass `--apply`, and needs a `gh` token with the `workflow` scope
-(`gh auth refresh -s workflow`):
+`brianluby/momus-review/.github/workflows/review.yml` pinned to a release
+commit SHA, skips fork pull requests, and passes just the `TYPESAFE_API_KEY`
+secret. The pin covers everything that handles the secret: the workflow, the
+action (loaded from the workflow's own commit), and the binary (`version:
+auto` downloads the release tagged at that commit). Dependabot
+(`package-ecosystem: github-actions`) proposes each upgrade as a pull request.
+
+`scripts/rollout.sh` sets the secret and opens a pull request adding the
+pinned caller, plus [`examples/dependabot.yml`](examples/dependabot.yml) when
+the repository has no Dependabot config, in every repository you list. It is
+a dry run unless you pass `--apply`, asks for the key only when a secret must
+be set, and needs a `gh` token with the `workflow` scope (`gh auth refresh -s
+workflow`):
 
 ```bash
 scripts/rollout.sh repo-a repo-b                 # dry run: what would change
 scripts/rollout.sh --apply --file repos.txt      # set the secret, open the PRs
+scripts/rollout.sh --apply --update ...          # refresh open rollout PRs
 scripts/rollout.sh --apply --rotate-secret ...   # also replace an existing key
+scripts/rollout.sh --float ...                   # float on @v0 instead of a pin
 ```
 
 Fork pull requests are skipped (secrets are not available to them), and
