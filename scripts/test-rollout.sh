@@ -2,6 +2,8 @@
 # Tests for scripts/rollout.sh against a stub `gh`: nothing touches GitHub.
 # The stub answers the calls rollout.sh makes and logs them; repo names
 # choose its behavior (see below). Run: scripts/test-rollout.sh
+# Expected PR text holds literal Markdown backticks in single quotes.
+# shellcheck disable=SC2016
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -97,6 +99,17 @@ uploaded() {
     sed 's/.*-f content=\([^ ]*\).*/\1/' | base64 -d 2>/dev/null
 }
 calls_matching() { grep -cF -- "$1" "$stub/calls" || true; }
+# The body of the PR the last run opened in REPO.
+pr_body() { grep -F "pr create --repo me/$1 " "$stub/calls" | tail -n 1 | sed 's/.*--body //'; }
+# body_has NAME REPO PATTERN [!PATTERN]: the PR body contains PATTERN (and not the ! one).
+body_has() {
+  local body; body=$(pr_body "$2")
+  if grep -qF -- "$3" <<< "$body" && { [ -z "${4:-}" ] || ! grep -qF -- "$4" <<< "$body"; }; then
+    pass "$1"
+  else
+    fail "$1" "$body"
+  fi
+}
 # no_calls NAME PATTERN: passes when the last run made no call matching PATTERN.
 no_calls() {
   if [ "$(calls_matching "$2")" = 0 ]; then pass "$1"; else fail "$1" "$(grep -F -- "$2" "$stub/calls")"; fi
@@ -130,11 +143,15 @@ if uploaded repo .github/dependabot.yml | grep -q "package-ecosystem: github-act
 else
   fail "a repo without Dependabot gets a github-actions config"
 fi
+body_has "the PR body describes the pin and the added Dependabot" repo \
+  'pinned to the v0.1.2 release commit. Dependabot (`.github/dependabot.yml`, github-actions)' "moving"
 
 expect "an existing Dependabot config is left alone" 0 \
   "dependabot: .github/dependabot.yml exists" "PR opened" \
   -- --apply has-dependabot
 no_calls "no Dependabot upload over an existing config" "contents/.github/dependabot.yml -f"
+body_has "the PR body says to extend the existing Dependabot config" has-dependabot \
+  'add a `github-actions` entry to `.github/dependabot.yml`' "proposes each upgrade"
 
 expect "--float keeps the moving tag" 0 "caller: review.yml@v0 (floating)" "PR opened" \
   -- --apply --float repo
@@ -144,6 +161,13 @@ else
   fail "--float uploads review.yml@v0"
 fi
 no_calls "--float skips the release lookup" "releases/latest"
+no_calls "--float adds no Dependabot config" "contents/.github/dependabot.yml -f"
+body_has "the --float PR body describes the moving tag" repo \
+  'follows the moving `@v0` tag' "pinned"
+
+expect "--float dry run plans no Dependabot file" 0 \
+  "would open a PR adding .github/workflows/momus.yml on main" \
+  -- --float repo
 
 expect "--update without --apply only reports" 0 \
   "workflow: would update .github/workflows/momus.yml on momus/enable" \

@@ -81,6 +81,12 @@ else
   echo "caller: review.yml@${pin:0:12} ($tag)"
 fi
 caller_b64=$(printf '%s' "$caller" | base64 | tr -d '\n')
+# What the PR body says about upgrades must match the caller committed.
+if $float; then
+  pin_note="The reusable workflow follows the moving \`@v0\` tag, so each momus release applies without a change here."
+else
+  pin_note="The reusable workflow is pinned to the $tag release commit."
+fi
 dependabot_b64=$(base64 < "$EXAMPLES/dependabot.yml" | tr -d '\n')
 
 key=""
@@ -153,8 +159,18 @@ for repo in "${repos[@]}"; do
     echo "   secret: would set"
   fi
 
-  if [ -n "$own_dependabot" ]; then
-    echo "   dependabot: $own_dependabot exists; add a github-actions entry for momus upgrade PRs"
+  # Dependabot only helps a pinned caller (it bumps the SHA); a floating
+  # @v0 caller upgrades on its own, so float mode adds no config.
+  add_dependabot=false
+  upgrade_note=""
+  if ! $float; then
+    if [ -n "$own_dependabot" ]; then
+      echo "   dependabot: $own_dependabot exists; add a github-actions entry for momus upgrade PRs"
+      upgrade_note=" To get upgrade PRs, add a \`github-actions\` entry to \`$own_dependabot\`."
+    else
+      add_dependabot=true
+      upgrade_note=" Dependabot (\`$DEPENDABOT\`, github-actions) proposes each upgrade as a pull request."
+    fi
   fi
 
   # Workflow (and Dependabot), via a pull request.
@@ -166,7 +182,7 @@ for repo in "${repos[@]}"; do
     elif ! $apply; then
       echo "   workflow: would update $WORKFLOW on $BRANCH"
     elif put_file "$repo" "$BRANCH" "$WORKFLOW" "$caller_b64" "Update momus pull request review" &&
-         { [ -n "$own_dependabot" ] ||
+         { ! $add_dependabot ||
            put_file "$repo" "$BRANCH" "$DEPENDABOT" "$dependabot_b64" "Add Dependabot for GitHub Actions"; }; then
       echo "   workflow: updated $BRANCH"
     else
@@ -177,11 +193,11 @@ for repo in "${repos[@]}"; do
            gh api -X POST "repos/$repo/git/refs" -f ref="refs/heads/$BRANCH" -f sha="$sha" --silent; }; then
       echo "   workflow: FAILED to create branch $BRANCH; rerun to retry"; status=1
     elif put_file "$repo" "$BRANCH" "$WORKFLOW" "$caller_b64" "Add momus pull request review" &&
-         { [ -n "$own_dependabot" ] ||
+         { ! $add_dependabot ||
            put_file "$repo" "$BRANCH" "$DEPENDABOT" "$dependabot_b64" "Add Dependabot for GitHub Actions"; } &&
          url=$(gh pr create --repo "$repo" --base "$default" --head "$BRANCH" \
            --title "Add momus pull request review" \
-           --body "Adds \`$WORKFLOW\`: [momus](https://github.com/$MOMUS_REPO) reviews each pull request and posts inline comments plus one summary comment. It uses the \`TYPESAFE_API_KEY\` repository secret; fork PRs are skipped. The reusable workflow is pinned to a release commit, and Dependabot (github-actions) proposes upgrades. This pull request is its first run."); then
+           --body "Adds \`$WORKFLOW\`: [momus](https://github.com/$MOMUS_REPO) reviews each pull request and posts inline comments plus one summary comment. It uses the \`TYPESAFE_API_KEY\` repository secret; fork PRs are skipped. $pin_note$upgrade_note This pull request is its first run."); then
       echo "   workflow: PR opened $url"
     else
       # Roll back the branch this run created, so a plain rerun retries from
@@ -195,7 +211,7 @@ for repo in "${repos[@]}"; do
     fi
   else
     extra=""
-    if [ -z "$own_dependabot" ]; then extra=" and $DEPENDABOT"; fi
+    if $add_dependabot; then extra=" and $DEPENDABOT"; fi
     echo "   workflow: would open a PR adding $WORKFLOW$extra on $default"
   fi
 done
