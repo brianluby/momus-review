@@ -28,6 +28,15 @@ submission id/status.
 
 Scope notes, kept deliberately distinct:
 
+- **SBOM identity/handoff**: reproducible cargo-cyclonedx output omits its
+  optional serial number, but the pinned attestation action requires one.
+  `scripts/finalize-sbom.py` adds a deterministic UUID derived from the
+  canonical document before schema validation. The validated SBOM travels
+  with build metadata, outside the archive artifact replaced by Apple
+  signing. Attestation checks its target and recorded digest before staging
+  it alongside the final archive. `scripts/test-sbom.py` exercises this
+  handoff for all targets and missing, changed or incompatible SBOMs.
+
 - **SBOM scope** is the Rust dependency graph of the `momus` binary per
   target. A resolved graph does not prove every crate survives linker
   optimization, and native/system libraries linked by the toolchain are not

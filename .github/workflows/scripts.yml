@@ -36,6 +36,9 @@ jobs:
       - name: Test verify-release.sh
         run: scripts/test-verify-release.sh
 
+      - name: Test SBOM finalization and artifact handoff
+        run: python3 scripts/test-sbom.py
+
   actionlint:
     runs-on: ubuntu-latest
     steps:

@@ -82,6 +82,7 @@ jobs:
           # momus-eval is an in-repo evaluation harness that is not shipped;
           # the momus binary SBOM is the release SBOM.
           mv momus_bin.cdx.json "dist/momus-$TARGET.cdx.json"
+          python3 scripts/finalize-sbom.py --sbom "dist/momus-$TARGET.cdx.json"
           lock_after=$(sha256sum Cargo.lock 2>/dev/null | cut -d' ' -f1 || shasum -a 256 Cargo.lock | cut -d' ' -f1)
           if [ "$lock_before" != "$lock_after" ]; then
             echo "::error::Cargo.lock changed during SBOM generation"
@@ -132,6 +133,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/meta"
+          cp "dist/momus-$TARGET.cdx.json" "$RUNNER_TEMP/meta/"
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
           python3 - "$RUNNER_TEMP/meta/metadata.json" <<PY
           import hashlib, json, os, subprocess, sys
@@ -164,11 +166,12 @@ jobs:
           path: |
             dist/momus-${{ matrix.target }}.tar.gz
             dist/momus-${{ matrix.target }}.tar.gz.sha256
-            dist/momus-${{ matrix.target }}.cdx.json
           if-no-files-found: error
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: momus-${{ matrix.target }}-build
-          path: ${{ runner.temp }}/meta/metadata.json
+          path: |
+            ${{ runner.temp }}/meta/metadata.json
+            ${{ runner.temp }}/meta/momus-${{ matrix.target }}.cdx.json
           if-no-files-found: error

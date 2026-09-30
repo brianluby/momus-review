@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import uuid
 from pathlib import Path
 
 try:
@@ -70,6 +71,16 @@ def main() -> int:
 
     if bom.get("specVersion") != "1.5":
         failures.append(f"specVersion is {bom.get('specVersion')!r}, expected '1.5'")
+
+    # Optional in CycloneDX, required by the pinned actions/attest parser.
+    serial = bom.get("serialNumber", "")
+    try:
+        if not isinstance(serial, str) or not serial.startswith("urn:uuid:"):
+            raise ValueError
+        if str(uuid.UUID(serial[9:])) != serial[9:]:
+            raise ValueError
+    except ValueError:
+        failures.append("serialNumber must be a UUID URN for SBOM attestation")
 
     # 2. Top-level component identity.
     component = bom.get("metadata", {}).get("component", {})
