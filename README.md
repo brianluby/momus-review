@@ -153,6 +153,13 @@ then `momus github-review`. Inputs:
 | `version` | `latest` | a release tag, `latest`, or `source` to build the action's own checkout |
 | `github-token` | `github.token` | token for reading the PR and posting |
 
+Every run uploads a `momus-report` artifact (7-day retention): the report
+with secret values replaced by typed placeholders — the same redaction as
+outgoing requests — so per-file findings and the funnel counters are
+inspectable without runner access. The raw report, with verbatim evidence,
+never leaves the runner (`docs/security.md`). The summary comment states how
+many of the screened files carry findings.
+
 **Many repositories.** A reusable workflow keeps the setup in one place:
 each repository only needs the small caller in
 [`examples/momus.yml`](examples/momus.yml), which runs

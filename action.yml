@@ -199,6 +199,20 @@ runs:
         MAX_COMMENTS: ${{ inputs.max-comments }}
         FAIL_ON_BLOCKING: ${{ inputs.fail-on-blocking }}
       run: |
-        args=(github-review --report "$RUNNER_TEMP/momus/report.json" --max-comments "$MAX_COMMENTS")
+        args=(github-review --report "$RUNNER_TEMP/momus/report.json" --sanitized-report "$RUNNER_TEMP/momus/report.sanitized.json" --max-comments "$MAX_COMMENTS")
         if [ "$FAIL_ON_BLOCKING" = true ]; then args+=(--fail-on-blocking); fi
         momus "${args[@]}"
+
+    # The raw report keeps verbatim evidence and can contain hardcoded
+    # secrets (docs/security.md), so the artifact is the sanitized copy:
+    # secret values become typed placeholders, the same rules as outgoing
+    # requests. Short retention — it is a debugging aid, not a record.
+    # `always()` because fail-on-blocking exits non-zero above.
+    - name: Upload the sanitized report
+      if: always() && steps.gate.outputs.skip != 'true'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: momus-report
+        path: ${{ runner.temp }}/momus/report.sanitized.json
+        if-no-files-found: ignore
+        retention-days: 7

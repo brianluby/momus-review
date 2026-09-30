@@ -114,7 +114,11 @@ request content with a write token, so:
   world-readable by default. Redaction applies only to what is sent, so
   `evidence` excerpts are verbatim and **can contain a hardcoded secret**
   (keeping them local keeps fingerprints stable). Treat the report as
-  sensitive.
+  sensitive. The one thing that leaves the machine is the GitHub Action's
+  `momus-report` artifact (`github-review --sanitized-report`): the same
+  report with every secret value replaced by a typed placeholder through the
+  same rules as the egress point, verbatim evidence otherwise, 7-day
+  retention.
 - Per-run audit: each report's `redactions` field counts distinct values
   redacted per rule (hashed, never stored). There is still no log of the
   full request bodies.
