@@ -90,8 +90,8 @@ for target in ${TARGETS//,/ }; do
   archive="momus-$target.tar.gz"
   checksum="$archive.sha256"
   sbom="momus-$target.cdx.json"
-  provenance="momus-$target.provenance.bundle"
-  sbom_att="momus-$target.sbom-attestation.bundle"
+  provenance="momus-$target.provenance.bundle.json"
+  sbom_att="momus-$target.sbom-attestation.bundle.json"
   for f in "$archive" "$checksum" "$sbom" "$provenance" "$sbom_att"; do
     [ -f "$f" ] || { fail "$f: missing (target $target)"; continue; }
   done
