@@ -335,6 +335,12 @@ pub fn summary_body(report: &ReviewReport, plan: &Plan, head_sha: &str) -> Strin
             plan.inline.len() + plan.already_posted,
             plan.summary_only.len()
         ));
+        out.push(format!(
+            "findings on {} of {} screened file{}",
+            report.findings.iter().map(|f| f.file.as_str()).collect::<BTreeSet<_>>().len(),
+            report.screened_files,
+            if report.screened_files == 1 { "" } else { "s" }
+        ));
     }
 
     if !plan.summary_only.is_empty() {
@@ -597,6 +603,7 @@ mod tests {
         let report = ReviewReport {
             findings: vec![blocking, finding("src/b.rs", 7, 1.0, "bbbb")],
             p_revert: 0.123,
+            screened_files: 5,
             usage: crate::domain::report::UsageSummary { calls: 12, input_tokens: 0, output_tokens: 0 },
             redactions: [("aws-access-key".to_string(), 1)].into(),
             ..Default::default()
@@ -608,6 +615,7 @@ mod tests {
         assert!(summary.starts_with(SUMMARY_MARKER), "{summary}");
         assert!(summary.contains("**2 findings** · 1 blocking · P(revert) 0.12"), "{summary}");
         assert!(summary.contains("1 posted inline · 1 in this summary"), "{summary}");
+        assert!(summary.contains("findings on 2 of 5 screened files"), "{summary}");
         assert!(summary.contains("- **Issue at 7** (Security, severity 1.0) `src/b.rs:7` · outside the diff"));
         assert!(summary.contains("Jev calls: 12 · redacted before sending: aws-access-key ×1 · head 0123456"));
         assert!(!summary.contains("tokens:"), "no token totals when the server reports none");

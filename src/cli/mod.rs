@@ -3,7 +3,7 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::adapters::exclude::Exclude;
 use crate::adapters::feedback_store::{feedback_path, read_feedback};
@@ -11,7 +11,8 @@ use crate::adapters::git;
 use crate::adapters::github::{GitHubClient, PullRequest};
 use crate::adapters::report_store::{StoredReport, read_report, report_path, save_history, save_json, save_report};
 use crate::adapters::sarif;
-use crate::domain::report::Action;
+use crate::domain::redact::{Redactions, redact_value};
+use crate::domain::report::{Action, ReviewReport};
 use crate::review::changes::ChangesStrategy;
 use crate::review::codebase::CodebaseStrategy;
 use crate::review::publish::{PublishOptions, ReviewEvent, publish};
@@ -131,6 +132,12 @@ pub enum Command {
         /// Read the pull request but post nothing; print what would be posted
         #[arg(long)]
         dry_run: bool,
+
+        /// Write the report with secret values replaced by typed
+        /// placeholders to PATH (the same rules as outgoing requests); the
+        /// raw report keeps verbatim evidence and stays local
+        #[arg(long = "sanitized-report", value_name = "PATH")]
+        sanitized_report: Option<String>,
     },
 
     /// Serve the loopback dashboard
@@ -153,9 +160,9 @@ pub async fn run(cli: Cli) -> Result<()> {
             let sarif = sarif.map(PathBuf::from);
             run_mode(paths, fail_on_blocking, options(follow_ups, no_refine, false), sarif, strategy).await
         }
-        Command::GithubReview { report, max_comments, event, fail_on_blocking, dry_run } => {
+        Command::GithubReview { report, max_comments, event, fail_on_blocking, dry_run, sanitized_report } => {
             let options = PublishOptions { max_comments, event: event.into(), dry_run };
-            github_review(report.map(PathBuf::from), options, fail_on_blocking).await
+            github_review(report.map(PathBuf::from), sanitized_report.map(PathBuf::from), options, fail_on_blocking).await
         }
         Command::Dashboard { port } => crate::dashboard::serve(port).await,
     }
@@ -179,13 +186,22 @@ impl From<EventArg> for ReviewEvent {
 
 /// Publishes the saved report to the pull request named by the Actions
 /// environment, then applies the CI exit contract.
-async fn github_review(report: Option<PathBuf>, options: PublishOptions, fail_on_blocking: bool) -> Result<()> {
+async fn github_review(
+    report: Option<PathBuf>,
+    sanitized_report: Option<PathBuf>,
+    options: PublishOptions,
+    fail_on_blocking: bool,
+) -> Result<()> {
     let path = report.unwrap_or_else(report_path);
     let report = match read_report(&path) {
         StoredReport::Ok { report, .. } => report,
         StoredReport::Empty => anyhow::bail!("no report at {} (run `momus review` first)", path.display()),
         StoredReport::Error(e) => anyhow::bail!("{}: {e}", path.display()),
     };
+    // Before publishing, so a posting failure still leaves the artifact.
+    if let Some(path) = &sanitized_report {
+        write_sanitized_report(&report, path)?;
+    }
     let pr = PullRequest::from_env()?;
     let client = GitHubClient::from_env()?;
 
@@ -208,6 +224,17 @@ async fn github_review(report: Option<PathBuf>, options: PublishOptions, fail_on
     if fail_on_blocking && report.findings.iter().any(|f| f.action == Action::RequestChanges) {
         std::process::exit(1);
     }
+    Ok(())
+}
+
+/// The report with secret values replaced by typed placeholders — the same
+/// rules as outgoing requests (`domain::redact`) — for CI artifact upload.
+/// The report at `--report` keeps verbatim evidence and stays local
+/// (docs/security.md).
+fn write_sanitized_report(report: &ReviewReport, path: &Path) -> Result<()> {
+    let mut value = serde_json::to_value(report)?;
+    redact_value(&mut value, &mut Redactions::default());
+    std::fs::write(path, serde_json::to_string_pretty(&value)?)?;
     Ok(())
 }
 
@@ -281,4 +308,32 @@ async fn run_mode<S: ReviewStrategy>(
         std::process::exit(1);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::report::Finding;
+
+    #[test]
+    fn sanitized_report_replaces_secret_values_not_evidence() {
+        let report = ReviewReport {
+            screened_files: 2,
+            findings: vec![Finding {
+                file: "src/config.rs".into(),
+                evidence: "let key = \"AKIAIOSFODNN7EXAMPLE\";".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let dir = std::env::temp_dir().join("momus-sanitized-report-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("report.sanitized.json");
+        write_sanitized_report(&report, &path).unwrap();
+
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert!(!body.contains("AKIAIOSFODNN7EXAMPLE"), "{body}");
+        assert!(body.contains("<redacted:aws-access-key>"), "{body}");
+        assert!(body.contains("src/config.rs"), "{body}");
+    }
 }
