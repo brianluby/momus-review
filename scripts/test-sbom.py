@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -43,10 +44,63 @@ class SbomTests(unittest.TestCase):
 
     def test_invalid_identity_and_format_rejected(self):
         for bom in [[], {"bomFormat": "SPDX"},
+                    {**self.bom(), "specVersion": "1.4"},
                     {**self.bom(), "serialNumber": "not-a-uuid"},
                     {**self.bom(), "serialNumber": "urn:uuid:invalid"}]:
             with self.subTest(bom=bom), self.assertRaises(ValueError):
                 module.finalize(bom)
+
+    def test_finalizer_cli_preserves_existing_identity_and_is_repeatable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "bom.json"
+            bom = module.finalize(self.bom())
+            path.write_text(json.dumps(bom))
+            command = [sys.executable, str(ROOT / "scripts/finalize-sbom.py"), "--sbom", str(path)]
+            subprocess.run(command, check=True)
+            first = path.read_bytes()
+            subprocess.run(command, check=True)
+            self.assertEqual(first, path.read_bytes())
+            self.assertEqual(bom, json.loads(first))
+
+    def test_finalizer_cli_rejects_bad_input_without_rewriting_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "bom.json"
+            for data in ["not JSON", json.dumps({**self.bom(), "specVersion": "1.4"})]:
+                path.write_text(data)
+                run = subprocess.run([sys.executable, str(ROOT / "scripts/finalize-sbom.py"),
+                                      "--sbom", str(path)], capture_output=True, text=True)
+                self.assertNotEqual(run.returncode, 0)
+                self.assertEqual(path.read_text(), data)
+                self.assertIn("error:", run.stderr)
+            path.unlink()
+            run = subprocess.run([sys.executable, str(ROOT / "scripts/finalize-sbom.py"),
+                                  "--sbom", str(path)], capture_output=True, text=True)
+            self.assertNotEqual(run.returncode, 0)
+            self.assertFalse(path.exists())
+
+    def test_validator_requires_attestation_compatible_serial(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            # Isolate the release content policy from schema validation;
+            # builder.yml validates the full pinned CycloneDX schema.
+            (root / "schema.json").write_text('{"type":"object"}')
+            bom = {**self.bom(), "metadata": {"component": {
+                "name": "momus", "version": "0.2.0", "type": "application", "bom-ref": "root"}},
+                "components": [{"name": "serde", "bom-ref": "serde", "licenses": [{"expression": "MIT"}]}],
+                "dependencies": [{"ref": "root", "dependsOn": ["serde"]}]}
+            valid = module.finalize(bom)["serialNumber"]
+            for serial in [None, 123, "not-a-uuid", "urn:uuid:invalid", valid]:
+                with self.subTest(serial=serial):
+                    candidate = dict(bom)
+                    if serial is not None:
+                        candidate["serialNumber"] = serial
+                    (root / "bom.json").write_text(json.dumps(candidate))
+                    run = subprocess.run([sys.executable, str(ROOT / "scripts/validate-sbom.py"),
+                        "--sbom", str(root / "bom.json"), "--schema", str(root / "schema.json"),
+                        "--version", "0.2.0"], capture_output=True, text=True)
+                    self.assertEqual(run.returncode, 0 if serial == valid else 1, run.stdout + run.stderr)
+                    if serial != valid:
+                        self.assertIn("serialNumber must be a UUID URN", run.stdout)
 
     def handoff(self, target, mutation=None):
         with tempfile.TemporaryDirectory() as directory:
