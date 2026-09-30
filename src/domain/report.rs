@@ -194,6 +194,16 @@ pub struct MatrixRow {
 /// `max_follow_ups: None` means unlimited (follow up every threshold signal).
 /// `screen_thresholds` holds the per-dimension thresholds actually applied
 /// (feedback-tuned; `screen_threshold` stays the policy default).
+///
+/// The 0.2 Rust API adds `follow_up_strategy`; construct unspecified fields
+/// through `Default` when migrating an exhaustive 0.1 struct literal:
+///
+/// ```
+/// use momus_review::domain::report::ConfigSnapshot;
+/// use momus_review::review::voi::FollowUpStrategy;
+/// let config = ConfigSnapshot { screen_threshold: 0.7, ..Default::default() };
+/// assert_eq!(config.follow_up_strategy, FollowUpStrategy::Probability);
+/// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ConfigSnapshot {
@@ -427,5 +437,37 @@ mod tests {
         assert_eq!(report.screened_files, 3);
         assert_eq!(report.usage.calls, 0);
         assert_eq!(report.findings.len(), 0);
+    }
+
+    /// Legacy report/config fields retain their values without any new artifacts.
+    #[test]
+    fn legacy_report_keeps_probability_policy_and_optional_artifacts_absent() {
+        let mut legacy_finding = serde_json::to_value(Finding {
+            file: "src/lib.rs".into(),
+            line: 7,
+            dimension: Dimension::Security,
+            mechanism: "sqlInjection".into(),
+            evidence: "query(input)".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        legacy_finding.as_object_mut().unwrap().remove("testPlan");
+        let report: ReviewReport = serde_json::from_value(serde_json::json!({
+            "scope":"src", "screenedFiles":1, "findings":[legacy_finding],
+            "config": { "screenThreshold":0.7, "screenThresholds":{"security":0.8},
+                "severityMax":3.0, "maxFollowUps":4, "maxProfiles":8 }
+        }))
+        .unwrap();
+        assert_eq!(
+            report.config.follow_up_strategy,
+            crate::review::voi::FollowUpStrategy::Probability
+        );
+        assert_eq!(report.config.screen_thresholds[&Dimension::Security], 0.8);
+        assert_eq!(report.config.max_follow_ups, Some(4));
+        assert_eq!(report.findings[0].file, "src/lib.rs");
+        assert_eq!(report.findings[0].line, 7);
+        assert_eq!(report.findings[0].mechanism, "sqlInjection");
+        assert!(report.findings[0].test_plan.is_none());
+        assert!(report.follow_up_plan.is_none() && report.spec_drift.is_none());
     }
 }

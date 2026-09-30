@@ -325,12 +325,30 @@ async fn defaults_and_invalid_inputs_have_no_extra_judgments() {
     assert!(result["specDrift"].is_null() && result["followUpPlan"].is_null());
     assert!(result["findings"][0]["testPlan"].is_null());
     let before = seen.lock().unwrap().len();
-    for flags in [
-        vec!["--spec", "missing.md"],
-        vec!["--threshold", "security=NaN"],
-        vec!["--threshold", "security=0.2", "--threshold", "security=0.3"],
-        vec!["--shard", "1/2", "--test-plans"],
-        vec!["--shard", "1/2", "--follow-up-strategy", "voi"],
+    std::fs::write(dir.path().join("contract.md"), "Return seven.\n").unwrap();
+    for (flags, expected_reason) in [
+        (vec!["--spec", "missing.md"], "missing.md"),
+        (vec!["--threshold", "security=NaN"], "must be finite"),
+        (
+            vec!["--threshold", "security=0.2", "--threshold", "security=0.3"],
+            "duplicate threshold override for security",
+        ),
+        (
+            vec!["--shard", "1/2", "--test-plans"],
+            "--shard cannot use --test-plans, --spec or VOI",
+        ),
+        (
+            vec!["--shard", "1/2", "--follow-up-strategy", "voi"],
+            "--shard cannot use --test-plans, --spec or VOI",
+        ),
+        (
+            vec!["--shard", "1/2", "--spec", "contract.md"],
+            "--shard cannot use --test-plans, --spec or VOI",
+        ),
+        (
+            vec!["--tiered", "--spec", "contract.md"],
+            "--spec cannot use --tiered",
+        ),
     ] {
         let repo = dir.path().to_path_buf();
         let endpoint = url.clone();
@@ -338,6 +356,11 @@ async fn defaults_and_invalid_inputs_have_no_extra_judgments() {
             .await
             .unwrap();
         assert!(!out.status.success());
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains(expected_reason),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
     assert_eq!(seen.lock().unwrap().len(), before);
 }

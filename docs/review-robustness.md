@@ -1,5 +1,9 @@
 # Optional review robustness features
 
+These options ship on the 0.2 line because the public Rust struct contracts have
+new fields. See [Rust API migration](migration-0.2.md). CLI defaults and older
+stored JSON reports remain compatible.
+
 Review and unsharded scan support three independent options:
 
 ```bash

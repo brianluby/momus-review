@@ -1,5 +1,9 @@
 # Rust Types & Traits (`domain/`, `review/`)
 
+The optional robustness artifacts introduce new public fields on the 0.2 line.
+Older JSON reports still load, while exhaustive Rust literals/matches need the
+changes described in [Migrating the Rust API to 0.2](migration-0.2.md).
+
 The concrete `serde` structs, policy data, and the `ReviewStrategy` trait as
 they ship, plus the `github-review` types.
 
