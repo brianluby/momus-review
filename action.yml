@@ -134,9 +134,15 @@ runs:
         mkdir -p "$root/bin"
         from_source() {
           echo "building momus from $ACTION_PATH"
-          # rust-toolchain.toml pins the exact channel for source installs.
-          rustup toolchain install --profile minimal
-          cargo install --locked --path "$ACTION_PATH" --bin momus --root "$root"
+          # Run from the action's own directory: rustup and cargo resolve
+          # rust-toolchain.toml from the working directory, not from --path,
+          # so building in the caller's workspace would use the caller's
+          # toolchain pin instead of momus's.
+          (
+            cd "$ACTION_PATH"
+            rustup toolchain install --profile minimal
+            cargo install --locked --path . --bin momus --root "$root"
+          )
         }
         case "$RUNNER_OS-$RUNNER_ARCH" in
           Linux-X64) target=x86_64-unknown-linux-gnu ;;

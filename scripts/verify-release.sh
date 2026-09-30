@@ -172,8 +172,13 @@ if [ -f release-manifest.json ]; then
     actual_manifest=$(sha256_file release-manifest.json)
     [ "$actual_manifest" = "$expected_manifest" ] \
       || fail "release-manifest.json: checksum mismatch"
+  else
+    fail "release-manifest.json.sha256: missing"
   fi
-  python3 - "$PWD" "${TARGETS//,/ }" <<'PYTHON' || fail "release-manifest.json: recorded digests do not match files"
+  # One argument per target: a quoted "${TARGETS//,/ }" would pass a single
+  # space-joined string and no manifest key would ever match it.
+  IFS=, read -r -a wanted_targets <<< "$TARGETS"
+  python3 - "$PWD" "${wanted_targets[@]}" <<'PYTHON' || fail "release-manifest.json: recorded digests do not match files"
 import hashlib, json, sys
 root, wanted = sys.argv[1], set(sys.argv[2:])
 manifest = json.load(open(f"{root}/release-manifest.json"))

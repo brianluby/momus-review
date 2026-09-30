@@ -12,10 +12,11 @@
 # from those final bytes, and the release manifest records the
 # unsigned→signed transformation with notarization evidence.
 #
-# The BUILDER_PIN appears exactly twice below (the reusable-workflow calls)
-# plus once in the verify step's --signer-digest; all three must move
-# together, deliberately, with the same review bar as this file. Bootstrap:
-# the pin is the commit that introduced .github/workflows/builder.yml.
+# The builder commit appears in exactly five places below — the two
+# reusable-workflow calls, the manifest's recorded signer digest, and the
+# two --signer-digest verifications — and all five must move together,
+# deliberately, with the same review bar as this file. Bootstrap: the pin
+# is the commit that introduced .github/workflows/builder.yml.
 #
 # Consumers verify with scripts/verify-release.sh (checksums, signed SLSA
 # provenance for archive and SBOM, SBOM attestation with predicate matched
@@ -237,10 +238,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api "repos/$GITHUB_REPOSITORY/immutable-releases" \
-            | jq -e '(.immutable // .enabled) == true' >/dev/null \
-            || { echo "::error::immutable releases are not enabled for $GITHUB_REPOSITORY"; exit 1; }
-          echo "immutable releases: enabled"
+          # The setting needs Administration: read, which GITHUB_TOKEN
+          # cannot be granted; a 403 means we cannot re-check it from the
+          # workflow, not that it is off. It was verified when enabled, and
+          # the protect-release-tags ruleset independently blocks tag
+          # moves. A readable answer of "disabled" still fails hard.
+          set +e
+          response=$(gh api "repos/$GITHUB_REPOSITORY/immutable-releases" 2>&1)
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "$response" | jq -e '(.immutable // .enabled) == true' >/dev/null \
+              || { echo "::error::immutable releases are not enabled for $GITHUB_REPOSITORY"; exit 1; }
+            echo "immutable releases: enabled"
+          else
+            echo "::warning::could not verify the immutable-releases setting with the workflow token ($response)"
+          fi
 
       # Never overwrite: a failed publish is retried by deleting the draft
       # by hand or cutting a new version, never by re-publishing over it.

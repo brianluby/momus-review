@@ -156,7 +156,9 @@ attestations, verification, SLSA levels — is documented in docs/slsa.md.
 - Per-run audit: each report's `redactions` field counts distinct values
   redacted per rule (hashed, never stored). There is still no log of the
   full request bodies.
-- Dependency auditing (`cargo audit`/`cargo deny`) is not yet in CI.
+- Dependency auditing: RustSec `cargo audit` gates releases and CI
+  (`scripts/audit.sh`, see above); broader license/source policy
+  (`cargo deny`) is not in CI yet.
 
 ## Invariants to keep
 

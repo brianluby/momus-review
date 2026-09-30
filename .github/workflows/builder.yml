@@ -92,7 +92,11 @@ jobs:
           # momus-eval is an in-repo evaluation harness that is not shipped;
           # the momus binary SBOM is the release SBOM.
           mv momus_bin.cdx.json "dist/momus-$TARGET.cdx.json"
-          rm -f momus-eval_bin.cdx.json
+          lock_after=$(sha256sum Cargo.lock 2>/dev/null | cut -d' ' -f1 || shasum -a 256 Cargo.lock | cut -d' ' -f1)
+          if [ "$lock_before" != "$lock_after" ]; then
+            echo "::error::Cargo.lock changed during SBOM generation"
+            exit 1
+          fi
 
       - name: Validate the SBOM
         shell: bash

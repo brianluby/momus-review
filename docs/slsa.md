@@ -86,7 +86,11 @@ verify (consumer stance, on macOS) → publish. Publication uses an explicit
 asset inventory (no globs; duplicates/unexpected/missing files block), a
 draft release that is re-verified as a consumer before `--draft=false`, a
 repository-serialized publish job, a never-overwrite rule for existing
-releases, and immutable releases (checked before creating any release).
+releases, and immutable releases (re-checked when the workflow token can
+read the setting — the endpoint needs Administration: read, which
+GITHUB_TOKEN cannot be granted, so the workflow warns rather than guesses
+when it gets a 403; the setting itself and the `protect-release-tags`
+ruleset were verified with admin access when enabled).
 The moving `v0` tag is excluded from tag protection and only advances
 after verified publication of the newest stable release.
 
@@ -168,8 +172,9 @@ Requirement/evidence/gap matrix (SLSA v1.2 Build requirements):
   mismatches, existing releases, non- immutable publication, and any
   verification failure.
 - **Bump the builder**: change `builder.yml`, land it, then update the
-  three `BUILDER_PIN` occurrences in `release.yml` in the next commit of
-  the same PR.
+  builder commit in all five of its `release.yml` sites (the two
+  reusable-workflow calls, the manifest's `signer_digest`, and the two
+  `--signer-digest` verifications) in the next commit of the same PR.
 - **Toolchain/generators**: `rust-toolchain.toml` pins the channel; the
   workflow env pins `cargo-cyclonedx`, `cargo-audit`, the CycloneDX schema
   commit, `jsonschema` and `actionlint`. Bumps are deliberate and recorded

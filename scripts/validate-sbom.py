@@ -87,11 +87,21 @@ def main() -> int:
     components = bom.get("components") or []
     if not components:
         failures.append("components is empty: the resolved dependency graph is missing")
-    bom_refs = [c.get("bom-ref") for c in components]
+
+    def walk(items):
+        for c in items:
+            yield c
+            yield from walk(c.get("components") or [])
+
+    # bom-ref uniqueness is required across the whole BOM, including the
+    # root metadata.component and any nested component lists.
+    bom_refs = [c.get("bom-ref") for c in walk(components)]
+    if component.get("bom-ref"):
+        bom_refs.append(component["bom-ref"])
     if any(not ref for ref in bom_refs):
         failures.append("a component has no bom-ref identifier")
     if len(set(bom_refs)) != len(bom_refs):
-        failures.append("duplicate bom-ref identifiers in components")
+        failures.append("duplicate bom-ref identifiers in the BOM")
     dependencies = bom.get("dependencies") or []
     if not dependencies:
         failures.append("dependencies is empty: dependency relationships are missing")

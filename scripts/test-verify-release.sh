@@ -75,6 +75,11 @@ PY
   # The stub's verification result embeds the SBOM as its predicate, the
   # same canonicalization verify-release.sh applies to the published file.
   jq -Sjc '[{verificationResult:{statement:{predicate:.}}}]' "$dir/momus-$TARGET.cdx.json" > "$GH_STUB_OUT"
+  (cd "$dir" && if command -v sha256sum >/dev/null 2>&1; then
+      sha256sum release-manifest.json > release-manifest.json.sha256
+    else
+      shasum -a 256 release-manifest.json > release-manifest.json.sha256
+    fi)
 }
 
 run_verify() { # dir [extra args...]
@@ -165,6 +170,15 @@ for t in d["targets"].values():
     t["archive"]["sha256"] = "0" * 64
 open(p, "w").write(json.dumps(d))
 PY
+# Re-checksum so the failure isolates the digest-mismatch path (a stale
+# checksum would fail earlier with "checksum mismatch" — covered by
+# "tampered archive" style checks on the manifest's own chain).
+python3 - "$work/bad-manifest" <<'PY'
+import hashlib, sys
+p = f"{sys.argv[1]}/release-manifest.json"
+d = hashlib.sha256(open(p, "rb").read()).hexdigest()
+open(f"{sys.argv[1]}/release-manifest.json.sha256", "w").write(f"{d}  release-manifest.json\n")
+PY
 expect_fail "manifest digest mismatch" "$work/bad-manifest" "manifest says"
 
 # 8. A wrong expectation must be forwarded, not ignored: the caller's
@@ -177,8 +191,30 @@ else
   echo "FAIL explicit signer digest was not forwarded"; FAILED=1
 fi
 
-# 9. Without --signer-digest it defaults to the source sha (in-repo
-# signer at a tag): already asserted in test 2 via the same value.
+# 9. Multi-target manifest checking: the manifest walk must receive one
+# argument per target. A single space-joined argument would make every
+# target "not recorded in the release manifest" and block all releases.
+make_fixture "$work/multi"
+python3 - "$work/multi" "$TARGET" <<'PY'
+import json, sys
+root = sys.argv[1]
+m = json.load(open(f"{root}/release-manifest.json"))
+other = "aarch64-apple-darwin"
+m["targets"][other] = {
+    "archive": {"name": f"momus-{other}.tar.gz", "sha256": "0" * 64},
+    "sbom": {"name": f"momus-{other}.cdx.json", "sha256": "0" * 64},
+}
+import hashlib
+blob = json.dumps(m).encode()
+open(f"{root}/release-manifest.json", "wb").write(blob)
+open(f"{root}/release-manifest.json.sha256", "w").write(
+    f"{hashlib.sha256(blob).hexdigest()}  release-manifest.json\n")
+PY
+if run_verify "$work/multi" && grep -q "recorded digests match" "$work/out.txt"; then
+  echo "ok   multi-target manifest lookup"
+else
+  echo "FAIL multi-target manifest lookup"; sed 's/^/     /' "$work/out.txt"; FAILED=1
+fi
 
 # 10. A requested target with no files blocks.
 if "$verify" --dir "$work/good" --source-sha "$SHA" --signer-workflow "$SIGNER" \

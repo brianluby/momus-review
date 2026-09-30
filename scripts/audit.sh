@@ -56,7 +56,8 @@ while IFS='|' read -r advisory expires reason; do
     echo "audit.sh: exception $advisory needs a reason" >&2
     exit 2
   fi
-  if [[ "$expires" < "$today" ]]; then
+  # Hard expiry: the run fails ON the expiry date, not after it.
+  if [[ ! "$expires" > "$today" ]]; then
     echo "audit.sh: exception $advisory expired on $expires: $reason" >&2
     echo "  renew it in scripts/audit-exceptions.txt or fix the dependency." >&2
     outdated=1
@@ -81,7 +82,12 @@ for attempt in 1 2 3; do
     echo "audit: no unexcepted RustSec advisories"
     exit 0
   fi
-  if echo "$audit_output" | grep -qiE 'advisory.?database|failed to fetch|error.*network|could not (fetch|download)|connection'; then
+  # An outage is an *error* about fetching/reaching the advisory database.
+  # Ordinary runs always print "Fetching advisory database from ..." as
+  # progress, and real findings mention crates and connections in their
+  # titles — matching those would let vulnerabilities through in warn mode.
+  if echo "$audit_output" | grep -i '^error' \
+      | grep -qiE 'fetch|download|network|advisory|timeout|refused|reset|resolve|os error [0-9]+'; then
     echo "audit: advisory-database fetch failed (attempt $attempt):"
     echo "$audit_output" | tail -n 5 >&2
     sleep $((attempt * 10))
