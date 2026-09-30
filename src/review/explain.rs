@@ -56,8 +56,12 @@ pub fn mechanism_title(dimension: Dimension, key: &str) -> Option<&'static str> 
         (Dimension::Correctness, "truthinessCoercion") => Some("Coercion picks the wrong branch"),
         (Dimension::Correctness, "thisBinding") => Some("Wrong `this` binding"),
         // Python / Lua.
-        (Dimension::Correctness, "mutableDefaultArgument") => Some("Shared mutable default argument"),
-        (Dimension::Correctness, "lateBindingClosure") => Some("Closure captures the loop variable"),
+        (Dimension::Correctness, "mutableDefaultArgument") => {
+            Some("Shared mutable default argument")
+        }
+        (Dimension::Correctness, "lateBindingClosure") => {
+            Some("Closure captures the loop variable")
+        }
         (Dimension::Correctness, "implicitGlobal") => Some("Accidental global"),
         (Dimension::Correctness, "nilArithmetic") => Some("Nil used in arithmetic or indexing"),
         // Java / C# / Ruby.
@@ -99,7 +103,9 @@ pub fn mechanism_title(dimension: Dimension, key: &str) -> Option<&'static str> 
         (Dimension::Security, "dynamicCodeExecution") => Some("Dynamic code execution"),
         (Dimension::Security, "prototypePollution") => Some("Prototype pollution"),
         (Dimension::Security, "massAssignment") => Some("Mass assignment"),
-        (Dimension::Security, "unquotedExpansion") => Some("Unquoted expansion (argument injection)"),
+        (Dimension::Security, "unquotedExpansion") => {
+            Some("Unquoted expansion (argument injection)")
+        }
         // Python / Java.
         (Dimension::Security, "assertForValidation") => Some("Validation enforced by `assert`"),
         (Dimension::Security, "unsafeReflection") => Some("Untrusted reflection"),
@@ -125,16 +131,22 @@ pub fn mechanism_title(dimension: Dimension, key: &str) -> Option<&'static str> 
         (Dimension::Reliability, "asyncVoid") => Some("`async void` hides failures"),
         (Dimension::Reliability, "uncheckedAllocation") => Some("Unchecked allocation"),
         (Dimension::Reliability, "danglingReference") => Some("Dangling reference or iterator"),
-        (Dimension::Reliability, "exceptionEscapeDestructor") => Some("Exception escapes a noexcept boundary"),
+        (Dimension::Reliability, "exceptionEscapeDestructor") => {
+            Some("Exception escapes a noexcept boundary")
+        }
         (Dimension::Reliability, "goroutineLeak") => Some("Goroutine leak"),
         (Dimension::Reliability, "deferInLoop") => Some("Deferred cleanup runs too late"),
         (Dimension::Reliability, "errorSuppression") => Some("Suppressed error"),
-        (Dimension::Reliability, "blockingInAsyncContext") => Some("Blocking call in async context"),
+        (Dimension::Reliability, "blockingInAsyncContext") => {
+            Some("Blocking call in async context")
+        }
         (Dimension::Reliability, "retainCycle") => Some("Retain cycle"),
         (Dimension::Reliability, "forcedTry") => Some("Forced `try!`"),
         (Dimension::Reliability, "ignoredExitStatus") => Some("Ignored exit status"),
         (Dimension::Reliability, "partialPipelineFailure") => Some("Pipeline failure masked"),
-        (Dimension::Reliability, "silentErrorContinuation") => Some("Suppressed non-terminating error"),
+        (Dimension::Reliability, "silentErrorContinuation") => {
+            Some("Suppressed non-terminating error")
+        }
         (Dimension::Compatibility, "api") => Some("Incompatible public API change"),
         (Dimension::Compatibility, "behavior") => Some("Changed caller-visible behavior"),
         (Dimension::Compatibility, "dataFormat") => Some("Incompatible format change"),
@@ -160,12 +172,16 @@ pub fn mechanism_title(dimension: Dimension, key: &str) -> Option<&'static str> 
 /// performs no IO.
 pub fn apply_context(finding: &mut Finding) {
     finding.title = mechanism_title(finding.dimension, &finding.mechanism).map(String::from);
-    finding.why = mechanism_description(
-        finding.dimension,
-        Language::from_path(&finding.file),
-        &finding.mechanism,
-    )
-    .map(String::from);
+    finding.why = if finding.mechanism == "other" {
+        Some(finding.dimension.definition().to_string())
+    } else {
+        mechanism_description(
+            finding.dimension,
+            Language::from_path(&finding.file),
+            &finding.mechanism,
+        )
+        .map(String::from)
+    };
 }
 
 /// The fix-strategy vocabulary (label → human actionable description). The
@@ -233,7 +249,10 @@ const FIX_STRATEGIES: [(&str, &str); 15] = [
 /// The test-strategy vocabulary (label → human actionable description). The
 /// `noSuggestion` sentinel must remain last: the model sorts on this order.
 const TEST_STRATEGIES: [(&str, &str); 8] = [
-    ("denialTest", "Assert the unauthorized or blocked case is rejected"),
+    (
+        "denialTest",
+        "Assert the unauthorized or blocked case is rejected",
+    ),
     (
         "boundaryValue",
         "Exercise the boundary value: empty, overflow, or worst-case input",
@@ -250,13 +269,56 @@ const TEST_STRATEGIES: [(&str, &str); 8] = [
         "concurrency",
         "Assert safe shared-state or ordering behavior under concurrency",
     ),
-    ("contract", "Assert the persisted format, protocol, or public API shape"),
+    (
+        "contract",
+        "Assert the persisted format, protocol, or public API shape",
+    ),
     (
         "injectionVector",
         "Feed the known injection or taint vector and assert it is neutralized",
     ),
     ("noSuggestion", "No specific test is suggested"),
 ];
+
+/// Restrict the fix vocabulary to the finding's own kind of concern.
+fn fix_strategies(dimension: Dimension) -> Vec<(&'static str, &'static str)> {
+    FIX_STRATEGIES
+        .iter()
+        .copied()
+        .filter(|(label, _)| {
+            *label == "noSuggestion"
+                || match dimension {
+                    Dimension::Security => {
+                        matches!(
+                            *label,
+                            "validateInput"
+                                | "authorize"
+                                | "parameterize"
+                                | "encodeOutput"
+                                | "confinePath"
+                                | "restrictTarget"
+                                | "secureSecrets"
+                                | "strengthenCrypto"
+                                | "disableEntities"
+                                | "validateDeserialization"
+                        )
+                    }
+                    Dimension::Correctness => matches!(
+                        *label,
+                        "validateInput"
+                            | "handleErrorPath"
+                            | "synchronizeAccess"
+                            | "restoreContract"
+                    ),
+                    Dimension::Reliability => {
+                        matches!(*label, "handleErrorPath" | "synchronizeAccess")
+                    }
+                    Dimension::Compatibility => *label == "restoreContract",
+                    Dimension::TestGap => *label == "addCoverage",
+                }
+        })
+        .collect()
+}
 
 /// Suggests a fix and a test strategy for one finding, in a single
 /// `system_one` call: two `choice` questions over the strategy vocabularies.
@@ -265,6 +327,11 @@ pub async fn enrich_suggestions(
     client: &TypeSafeClient,
     finding: &Finding,
 ) -> Result<(Option<String>, Option<String>)> {
+    // A catch-all/uncertain mechanism cannot support a specific fix.
+    if finding.mechanism == "other" || finding.mechanism_confidence < 0.7 {
+        return Ok((None, None));
+    }
+    let fixes = fix_strategies(finding.dimension);
     let state = json!({
         "dimension": finding.dimension.key(),
         "mechanism": finding.mechanism,
@@ -276,7 +343,7 @@ pub async fn enrich_suggestions(
             Value::String(
                 "Given this located concern and its evidence, which fix strategy best addresses its root cause?".into(),
             ),
-            choice_criteria(&FIX_STRATEGIES),
+            choice_criteria(&fixes),
         ),
         "suggestedTest": choice(
             Value::String(
@@ -290,7 +357,7 @@ pub async fn enrich_suggestions(
     let (fix_label, _) = response.choice("suggestedFix")?;
     let (test_label, _) = response.choice("suggestedTest")?;
 
-    let fix = FIX_STRATEGIES
+    let fix = fixes
         .iter()
         .find(|(l, _)| *l == fix_label)
         .filter(|(l, _)| *l != "noSuggestion")
@@ -308,6 +375,37 @@ pub async fn enrich_suggestions(
 mod tests {
     use super::*;
     use crate::domain::policy::mechanisms_for;
+
+    #[test]
+    fn fixes_match_the_dimension_and_other_has_no_placeholder_explanation() {
+        assert_eq!(
+            fix_strategies(Dimension::TestGap)
+                .iter()
+                .map(|(l, _)| *l)
+                .collect::<Vec<_>>(),
+            ["addCoverage", "noSuggestion"]
+        );
+        assert!(
+            !fix_strategies(Dimension::Reliability)
+                .iter()
+                .any(|(l, _)| *l == "authorize")
+        );
+        assert!(
+            !fix_strategies(Dimension::Security)
+                .iter()
+                .any(|(l, _)| *l == "addCoverage")
+        );
+        for dimension in crate::domain::policy::DIMENSIONS {
+            let mut f = Finding {
+                dimension,
+                mechanism: "other".into(),
+                ..Default::default()
+            };
+            apply_context(&mut f);
+            assert_eq!(f.why.as_deref(), Some(dimension.definition()));
+            assert_eq!(fix_strategies(dimension).last().unwrap().0, "noSuggestion");
+        }
+    }
 
     #[test]
     fn mechanism_title_covers_every_mechanism_key() {
