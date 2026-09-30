@@ -812,3 +812,187 @@ async fn tier_uncertainty_and_oversized_sources_are_retained() {
                 && b["state"]["file"]["path"] == "oversized.rs")
     );
 }
+
+#[test]
+fn tour_is_offline_redacted_bounded_and_excludes_paths() {
+    let dir = config_only_branch();
+    let repo = dir.path();
+    fs::write(
+        repo.join("main.rs"),
+        "mod lib;\nfn main() {}\n// api_key = 'sk-proj-abcdefghijklmnopqrstuvwxyz1234567890'\n",
+    )
+    .unwrap();
+    fs::write(repo.join("excluded.rs"), "fn secret() {}\n").unwrap();
+    let out = momus(repo, &["tour", "--exclude", "excluded.rs"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(!text.contains("abcdefghijklmnopqrstuvwxyz1234567890"));
+    assert!(!text.contains("excluded.rs"));
+    let tour: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert!(
+        tour["stops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["role"] == "entrypoint")
+    );
+    assert!(!tour["relationships"].as_array().unwrap().is_empty());
+    let limited = momus(repo, &["tour", "--max-files", "1", "--markdown"]);
+    assert!(limited.status.success());
+    assert!(String::from_utf8_lossy(&limited.stdout).contains("file count limit"));
+}
+
+#[test]
+fn dependency_only_review_runs_local_triage_without_api() {
+    let dir = config_only_branch();
+    let repo = dir.path();
+    fs::write(repo.join("Cargo.toml"), "[dependencies]\na=\"1.0.0\"\n").unwrap();
+    git(repo, &["add", "Cargo.toml"]);
+    git(repo, &["commit", "-qm", "manifest"]);
+    fs::write(repo.join("Cargo.toml"), "[dependencies]\na=\"2.0.0\"\n").unwrap();
+    let out = momus(repo, &["review", "--upgrade-triage"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["usage"]["calls"], 0);
+    assert!(!report["upgrades"]["changes"].as_array().unwrap().is_empty());
+    assert!(report["partial"].as_bool().unwrap());
+    assert_eq!(
+        report["mergeConfidence"]["outcomes"][0]["probability"],
+        serde_json::Value::Null
+    );
+    assert!(!report["findings"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn docs_only_review_finding_uses_existing_suppression_flow() {
+    let dir = config_only_branch();
+    let repo = dir.path();
+    fs::write(repo.join("lib.rs"), "pub fn f(x: i32) {}\n").unwrap();
+    fs::write(
+        repo.join("README.md"),
+        "See `lib.rs`.\n```rust\nf();\n```\n",
+    )
+    .unwrap();
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-qm", "documented"]);
+    fs::write(
+        repo.join("README.md"),
+        "See `lib.rs`.\n```rust\nf(); // example\n```\n",
+    )
+    .unwrap();
+    let out = momus(repo, &["review", "--docs-drift"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let findings = report["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 1, "{report}");
+    let finding = &findings[0];
+    fs::create_dir_all(repo.join("reviews")).unwrap();
+    let feedback = serde_json::json!({"entries":[{"fingerprint":finding["fingerprint"],"file":"README.md","dimension":"correctness","probability":1.0,"vote":"down","suppress":true}]});
+    fs::write(
+        repo.join("reviews/feedback.json"),
+        serde_json::to_vec(&feedback).unwrap(),
+    )
+    .unwrap();
+    let out = momus(repo, &["review", "--docs-drift"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(report["findings"].as_array().unwrap().is_empty());
+    assert_eq!(report["workflow"]["suppressedFindings"], 1);
+}
+
+#[test]
+fn committed_review_requires_base_and_rejects_worktree_auxiliary_inputs() {
+    let dir = config_only_branch();
+    fs::write(dir.path().join(".gitignore"), "reviews/\nreport.json\n").unwrap();
+    git(dir.path(), &["add", ".gitignore"]);
+    git(dir.path(), &["commit", "-qm", "ignore review artifacts"]);
+    for args in [
+        vec!["review", "--committed-only"],
+        vec![
+            "review",
+            "--committed-only",
+            "--base",
+            "base",
+            "--docs-drift",
+        ],
+    ] {
+        assert!(!momus(dir.path(), &args).status.success());
+    }
+    let out = momus(
+        dir.path(),
+        &[
+            "review",
+            "--base",
+            "base",
+            "--committed-only",
+            "--allow-empty",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["reviewedCommitted"], true);
+    assert_eq!(report["reviewedClean"], true);
+    assert!(
+        !report["mergeConfidence"]["approval"]["eligible"]
+            .as_bool()
+            .unwrap()
+    );
+}
+
+#[test]
+fn confidence_fixture_reports_synthetic_limits_and_rejects_approval() {
+    let dir = config_only_branch();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/merge-confidence");
+    let paths: Vec<_> = [
+        "routine-report.json",
+        "synthetic-history.json",
+        "opt-in-policy.json",
+        "synthetic-checks.json",
+    ]
+    .iter()
+    .map(|p| root.join(p).to_str().unwrap().to_string())
+    .collect();
+    let out = momus(
+        dir.path(),
+        &[
+            "confidence",
+            "--report",
+            &paths[0],
+            "--history",
+            &paths[1],
+            "--policy",
+            &paths[2],
+            "--checks",
+            &paths[3],
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let summary: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(summary["synthetic"], true);
+    assert_eq!(summary["approval"]["eligible"], false);
+    assert_eq!(summary["outcomes"][0]["status"], "syntheticDemonstration");
+}

@@ -125,6 +125,9 @@ impl RepoIndex {
     pub fn neighbors(&self, path: &str) -> Vec<&str> {
         self.graph.neighbors(path)
     }
+    pub fn evidenced_edges(&self) -> &[(String, String, usize)] {
+        self.graph.evidenced_edges()
+    }
     /// Return persisted declaration signatures, or an empty string when no entry exists.
     pub fn signatures(&self, path: &str) -> &str {
         self.entries.get(path).map_or("", |e| e.signatures.as_str())

@@ -1,6 +1,7 @@
 //! Adapters: git discovery with guarded reads, exclusion globs, the atomic
 //! report store, and the content-addressed result cache.
 
+pub mod approval;
 pub mod cache;
 pub mod exclude;
 pub mod feedback_store;

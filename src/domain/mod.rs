@@ -8,3 +8,4 @@ pub mod patch;
 pub mod policy;
 pub mod redact;
 pub mod report;
+pub mod repository;

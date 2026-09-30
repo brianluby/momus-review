@@ -372,7 +372,7 @@ pub fn summary_body(report: &ReviewReport, plan: &Plan, head_sha: &str) -> Strin
         out.push("No findings.".to_string());
     } else {
         out.push(format!(
-            "**{total} finding{}** · {blocking} blocking · P(revert) {:.2} (uncalibrated)",
+            "**{total} finding{}** · {blocking} blocking · heuristic risk score {:.2} (uncalibrated; not a probability)",
             if total == 1 { "" } else { "s" },
             report.p_revert
         ));
@@ -474,6 +474,57 @@ pub fn summary_body(report: &ReviewReport, plan: &Plan, head_sha: &str) -> Strin
         }
         out.push(String::new());
         out.push("</details>".into());
+    }
+    if let Some(upgrades) = &report.upgrades {
+        out.push(String::new());
+        out.push(format!("**Dependency triage (advisory)**: {} dependency changes, {} unknown evidence requirements.",upgrades.changes.len(),upgrades.unknowns.len()));
+        for change in upgrades.changes.iter().take(SUMMARY_LIST_MAX) {
+            out.push(format!(
+                "- `{}`: {:?} → {:?}; {} signal. Scope: `{}`.",
+                change.dependency,
+                change.old_version,
+                change.new_version,
+                change.risk,
+                change.scope
+            ));
+        }
+        for unknown in upgrades.unknowns.iter().take(SUMMARY_LIST_MAX) {
+            out.push(format!("- Unknown: {unknown}"));
+        }
+    }
+    if let Some(docs) = &report.docs_drift {
+        out.push(String::new());
+        out.push(format!("**Docs comparison (advisory)**: {} checks, {} unknown evidence requirements. Supported interface checks only.",docs.checks.len(),docs.unknowns.len()));
+        for unknown in docs.unknowns.iter().take(SUMMARY_LIST_MAX) {
+            out.push(format!("- Unknown: {unknown}"));
+        }
+    }
+    if let Some(confidence) = &report.merge_confidence {
+        out.push(String::new());
+        out.push(
+            "**Merge outcomes**: the legacy risk score is a heuristic, not a probability.".into(),
+        );
+        for outcome in &confidence.outcomes {
+            let probability = outcome
+                .probability
+                .map_or("unknown".into(), |p| format!("{p:.3}"));
+            out.push(format!(
+                "- {:?}: {probability} ({}) · {} training / {} held-out labels.",
+                outcome.outcome,
+                outcome.status,
+                outcome.evaluation.training_samples,
+                outcome.evaluation.held_out_samples
+            ));
+        }
+        out.push(format!(
+            "Automatic approval: {}. {}",
+            if confidence.approval.eligible {
+                "eligible under explicit policy"
+            } else {
+                "disabled or rejected"
+            },
+            confidence.approval.reasons.join("; ")
+        ));
     }
     if let Some(specs) = &report.spec_drift {
         let drift = specs
@@ -903,7 +954,7 @@ mod tests {
 
         assert!(summary.starts_with(SUMMARY_MARKER), "{summary}");
         assert!(
-            summary.contains("**2 findings** · 1 blocking · P(revert) 0.12"),
+            summary.contains("**2 findings** · 1 blocking · heuristic risk score 0.12"),
             "{summary}"
         );
         assert!(

@@ -7,7 +7,7 @@ and findings now reach reviewers where they work: inline PR comments from a
 GitHub Action. Biggest ROI is not more dimensions — it's precision,
 calibration, and staying in the reviewer's workflow.
 
-## Progress (2026-09-25)
+## Progress (2026-09-30)
 
 Completed ahead of / from this plan:
 
@@ -101,15 +101,14 @@ The five refinement judgments run as one post-locate stage
 
 ## Beyond Review (Jev as judgment fabric)
 
-- Merge-confidence engine: `P(revert)`/`P(incident)`/`P(flake)` per PR from
-  signals + history; auto-approve routine + low-risk.
+- Merge-confidence engine (#17): implemented separate outcome history, chronological held-out evaluation, explicit unknowns and opt-in fail-closed approval. Implementation child #52; real repository outcome/calibration acceptance remains open in #51. Synthetic fixtures establish machinery only. See [merge confidence](merge-confidence.md).
 - Test planner (#18): opt-in `choice` over strategies per gap → unfinished test
   scaffold and observable assertion guidance; no source writes or execution.
 - Spec drift (#19): opt-in comparison with supplied local requirements, exact
   evidence and skeptical confirmation; advisory, not full requirement coverage.
-- Upgrade/changelog triage: screen dependency diffs for breaking-risk.
-- Onboarding tours: extend file-role classification to repo tours + arch maps.
-- Docs drift: code-vs-docs `noul` on doc-touched PRs.
+- ✅ Upgrade/changelog triage (#20): opt-in Cargo/npm manifest/lock comparisons with matched local changelogs, evidence advisories and explicit unsupported/missing-evidence unknowns. See [upgrade triage](upgrades.md).
+- ✅ Onboarding tours (#21): local bounded/redacted index-backed tours, role/path components and corroborated unique static import maps. Unsupported relationships remain unknown. See [tours](tours.md).
+- ✅ Docs drift (#22): opt-in deterministic supported Rust public-interface/example comparisons, current/base source and documentation references, standard finding/suppression flow. Broader semantic and other-ecosystem checks remain explicit unknowns. See [docs drift](docs-drift.md).
 
 ## Metrics
 
@@ -122,3 +121,5 @@ The five refinement judgments run as one post-locate stage
 Showcase (optimize for Jev-pattern novelty) or reviewer-replacement product
 (optimize for precision + workflow)? The Now list serves both; Next/Later
 diverges.
+
+Epic #48 release verification is complete. SLSA L3 remains deferred.

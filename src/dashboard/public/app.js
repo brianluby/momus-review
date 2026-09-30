@@ -131,7 +131,7 @@ function summary(report) {
     { value: report.followedSignals, label: "selected", title: "eligible concerns selected for evidence review; failures and deferrals are disclosed separately" },
     { value: findings.length, label: "findings", cls: "lead" },
     { value: blocking, label: "request changes", cls: blocking > 0 ? "alert" : "" },
-    { display: prDisplay, label: "P(revert)", title: "uncalibrated heuristic spike (see roadmap #17)" },
+    { display: prDisplay, label: "risk score", title: "hand-weighted heuristic; not a probability" },
   ];
   return h(
     "dl",
@@ -1093,6 +1093,7 @@ function render(state) {
           matrix(state.report),
           findings(state.report),
           specDrift(state.report),
+          localAnalyses(state.report),
           followUpPlan(state.report),
           h("div", { id: "history" }),
         ].filter(Boolean),
@@ -1140,3 +1141,24 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("focus", load);
 load();
+
+
+function localAnalyses(report) {
+  const children = [];
+  for (const [key,label] of [["upgrades","Dependency triage"],["docsDrift","Docs comparison"]]) {
+    const result=report[key]; if (!result) continue;
+    children.push(h("h3",{},label + " (advisory)"));
+    if (key === "upgrades") for (const c of result.changes ?? []) {
+      children.push(h("p",{},`${c.dependency}: ${c.oldVersion ?? "absent"} → ${c.newVersion ?? "absent"} · ${c.risk}`));
+      for (const e of [...(c.evidence ?? []),...(c.changelog ?? [])]) children.push(h("pre",{},`${e.path}:${e.line} (${e.snapshot})\n${e.text}`));
+    }
+    for (const check of result.checks ?? []) children.push(h("pre",{},JSON.stringify(check,null,2)));
+    for (const unknown of result.unknowns ?? []) children.push(h("p",{},"Unknown: " + unknown));
+  }
+  if (report.mergeConfidence) {
+    children.push(h("h3",{},"Merge outcome estimates"));
+    for (const e of report.mergeConfidence.outcomes ?? []) children.push(h("p",{},`${e.outcome}: ${isNum(e.probability) ? fixed(e.probability * 100) + "%" : "unknown"} · ${e.status} · ${e.evaluation?.trainingSamples ?? 0} training / ${e.evaluation?.heldOutSamples ?? 0} held out`));
+    for (const reason of report.mergeConfidence.approval?.reasons ?? []) children.push(h("p",{},reason));
+  }
+  return children.length ? section("Local evidence and merge outcomes","Advisory; unknown evidence stays visible",...children) : null;
+}

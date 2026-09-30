@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "maxCalibrationError": 0.1,
+  "maxCheckAgeSeconds": 3600,
+  "maxFindingSeverity": 1.0,
+  "maxFlakeProbability": 0.1,
+  "maxHistoryAgeSeconds": 2592000,
+  "maxIncidentProbability": 0.1,
+  "maxRevertProbability": 0.1,
+  "requiredChecks": [
+    "test"
+  ]
+}

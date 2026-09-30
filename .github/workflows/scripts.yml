@@ -40,6 +40,7 @@ jobs:
         run: |
           python3 -B scripts/test-install-release.py
           python3 -B scripts/test-release-workflow.py
+          python3 -B scripts/test-action-evidence.py
 
       - name: Test SBOM finalization and artifact handoff
         run: |

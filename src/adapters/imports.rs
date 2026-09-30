@@ -249,11 +249,139 @@ impl Resolver {
     }
 }
 
+/// Architecture maps use exact, unique local module paths, independently of
+/// the suffix heuristic used for review context. Opaque syntax abstains.
+fn strict_edges(file: &SourceFile, files: &[SourceFile]) -> Vec<(String, String, usize)> {
+    use std::path::{Component, Path, PathBuf};
+    let language = Language::from_path(&file.path);
+    if !matches!(
+        language,
+        Some(Language::Rust | Language::JavaScript | Language::TypeScript)
+    ) || file.content.contains("/*")
+        || file.content.contains('`')
+        || file.content.contains("r#\"")
+        || file.content.contains("#[path")
+        || file.content.contains("#[cfg")
+    {
+        return Vec::new();
+    }
+    let path = Path::new(&file.path);
+    let parent = path.parent().unwrap_or(Path::new(""));
+    let module_parent = if matches!(
+        path.file_name().and_then(|s| s.to_str()),
+        Some("main.rs" | "lib.rs" | "mod.rs")
+    ) {
+        parent.to_path_buf()
+    } else {
+        parent.join(path.file_stem().unwrap_or_default())
+    };
+    let mut depth = 0isize;
+    let mut out = Vec::new();
+    for (line, text) in file.content.lines().enumerate() {
+        let text = text.trim();
+        if text.starts_with("//") {
+            continue;
+        }
+        let active = depth == 0
+            && (text.starts_with("use ")
+                || text.starts_with("mod ")
+                || text.starts_with("pub mod ")
+                || text.starts_with("import ")
+                || text.starts_with("export "));
+        if active {
+            for candidate in extract_imports(&file.path, text) {
+                let mut stem = if language == Some(Language::Rust) {
+                    if text.starts_with("use crate::") {
+                        let segments: Vec<_> = parent.components().collect();
+                        let Some(i) = segments.iter().rposition(|s| s.as_os_str() == "src") else {
+                            continue;
+                        };
+                        let root: PathBuf = segments[..=i].iter().map(|s| s.as_os_str()).collect();
+                        root.join(&candidate)
+                    } else if text.starts_with("use super::") {
+                        // Repeated parent anchors and inline module scopes are unknown.
+                        if text.contains("super::super::") {
+                            continue;
+                        }
+                        module_parent
+                            .parent()
+                            .unwrap_or(Path::new(""))
+                            .join(&candidate)
+                    } else {
+                        module_parent.join(&candidate)
+                    }
+                } else {
+                    parent.join(&candidate)
+                };
+                let mut parts = Vec::new();
+                let mut valid = true;
+                for part in stem.components() {
+                    match part {
+                        Component::Normal(s) => parts.push(s.to_string_lossy().into_owned()),
+                        Component::CurDir => {}
+                        Component::ParentDir => {
+                            if parts.pop().is_none() {
+                                valid = false;
+                            }
+                        }
+                        _ => valid = false,
+                    }
+                }
+                if !valid {
+                    continue;
+                }
+                stem = PathBuf::from(parts.join("/"));
+                if language != Some(Language::Rust) {
+                    stem.set_extension("");
+                }
+                let match_paths = |stem: &Path| -> Vec<&SourceFile> {
+                    files
+                        .iter()
+                        .filter(|target| {
+                            if language == Some(Language::Rust) {
+                                target.path == format!("{}.rs", stem.display())
+                                    || target.path == format!("{}/mod.rs", stem.display())
+                            } else {
+                                let ext = Path::new(&target.path)
+                                    .extension()
+                                    .and_then(|e| e.to_str())
+                                    .unwrap_or("");
+                                matches!(
+                                    ext,
+                                    "js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs" | "mts" | "cts"
+                                ) && (Path::new(&target.path).with_extension("") == stem
+                                    || Path::new(&target.path).with_extension("")
+                                        == stem.join("index"))
+                            }
+                        })
+                        .collect()
+                };
+                let mut matches = match_paths(&stem);
+                if matches.is_empty()
+                    && language == Some(Language::Rust)
+                    && text.starts_with("use ")
+                    && let Some(parent) = stem.parent()
+                {
+                    matches = match_paths(parent);
+                }
+                if matches.len() == 1 && matches[0].path != file.path {
+                    out.push((file.path.clone(), matches[0].path.clone(), line + 1));
+                }
+            }
+        }
+        // Conservative top-level declarations only. Dynamic/nested imports
+        // and multiline strings are outside the evidence map contract.
+        depth += text.matches('{').count() as isize - text.matches('}').count() as isize;
+    }
+    out
+}
+
 /// Undirected import adjacency: an edge between `a` and `b` exists when `b`
 /// resolves to a scanned file imported by `a` (so neighbors include both
 /// files `a` imports and files that import `a`).
 pub struct ImportGraph {
     adjacency: HashMap<String, Vec<String>>,
+    edges: Vec<(String, String, usize)>,
 }
 
 impl ImportGraph {
@@ -271,7 +399,9 @@ impl ImportGraph {
             files.iter().map(|f| (f.path.clone(), Vec::new())).collect();
 
         let resolver = Resolver::new(files);
+        let mut edges = Vec::new();
         for f in files {
+            edges.extend(strict_edges(f, files));
             let importer = normalize_path(&f.path);
             let is_rust = Language::from_path(&f.path) == Some(Language::Rust);
             for target in candidates(f) {
@@ -285,7 +415,15 @@ impl ImportGraph {
             }
         }
 
-        ImportGraph { adjacency }
+        edges.sort();
+        edges.dedup();
+        ImportGraph { adjacency, edges }
+    }
+
+    /// Directed imports with a corroborated declaration line. Multiline
+    /// imports lacking exact line evidence are omitted from architecture maps.
+    pub fn evidenced_edges(&self) -> &[(String, String, usize)] {
+        &self.edges
     }
 
     /// The 1-hop adjacency of `file` (deduped, sorted, excluding self).
@@ -315,6 +453,37 @@ mod tests {
         }
     }
 
+    #[test]
+    fn tour_edges_require_exact_unambiguous_active_imports() {
+        let files = vec![
+            file("src/nested/a.ts", "import {x} from '../shared';"),
+            file("src/nested/shared.ts", "export const x=1;"),
+            file("src/shared.ts", "export const x=2;"),
+        ];
+        assert_eq!(
+            ImportGraph::build(&files).evidenced_edges(),
+            &[("src/nested/a.ts".into(), "src/shared.ts".into(), 1)]
+        );
+        let files = vec![
+            file("src/index.ts", "import {x} from './foo';"),
+            file("other/foo.ts", "export const x=1;"),
+        ];
+        assert!(ImportGraph::build(&files).evidenced_edges().is_empty());
+        let files = vec![
+            file(
+                "src/a.ts",
+                "// import {x} from './foo';\nconst s = \"import {x} from './foo'\";",
+            ),
+            file("src/foo.ts", "export const x=1;"),
+        ];
+        assert!(ImportGraph::build(&files).evidenced_edges().is_empty());
+        let files = vec![
+            file("src/a.ts", "import {x} from './foo';"),
+            file("src/foo.ts", "export const x=1;"),
+            file("src/foo.js", "export const x=2;"),
+        ];
+        assert!(ImportGraph::build(&files).evidenced_edges().is_empty());
+    }
     #[test]
     fn extracts_rust_imports() {
         let content = "//! preamble\nuse crate::a::b;\n  use super::x;\nuse self::y;\nmod foo;\nmod bar { fn inline() {} }\nuse serde::Serialize;\n";

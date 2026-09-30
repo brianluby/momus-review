@@ -18,6 +18,14 @@ on:
         description: Gitignore-style globs to skip, one per line
         type: string
         default: ""
+      upgrade-triage:
+        description: Enable local dependency upgrade evidence checks
+        type: boolean
+        default: false
+      docs-drift:
+        description: Enable supported documentation/interface checks
+        type: boolean
+        default: false
       fail-on-blocking:
         description: Fail the check when a finding requests changes
         type: boolean
@@ -91,6 +99,8 @@ jobs:
           api-key: ${{ secrets.TYPESAFE_API_KEY }}
           paths: ${{ inputs.paths }}
           exclude: ${{ inputs.exclude }}
+          upgrade-triage: ${{ inputs.upgrade-triage }}
+          docs-drift: ${{ inputs.docs-drift }}
           fail-on-blocking: ${{ inputs.fail-on-blocking }}
           max-comments: ${{ inputs.max-comments }}
           version: ${{ steps.version.outputs.version }}

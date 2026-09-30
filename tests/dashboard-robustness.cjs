@@ -52,3 +52,12 @@ test("matrix highlights using each applied threshold and renders evidence as tex
   assert.match(spec.textContent, /<script>/);
   assert.equal(elements(spec).some((e) => e.tag === "script"), false);
 });
+
+
+test("local analyses disclose unknowns and render dependency/docs evidence as text",()=>{
+  const ctx=dashboard();
+  ctx.report={upgrades:{changes:[{dependency:"x",newVersion:"2",risk:"major",evidence:[{path:"Cargo.toml",line:1,snapshot:"current",text:"<script>unsafe()</script>"}]}],unknowns:["missing changelog"]},docsDrift:{checks:[{status:"drift",text:"<img src=x onerror=unsafe()>"}],unknowns:["ambiguous interface"]},mergeConfidence:{outcomes:[{outcome:"revert",probability:null,status:"unknown",evaluation:{trainingSamples:0,heldOutSamples:0}}],approval:{reasons:["history missing"]}}};
+  const rendered=vm.runInContext("localAnalyses(report)",ctx);
+  assert.match(rendered.textContent,/missing changelog/);assert.match(rendered.textContent,/revert: unknown/);assert.match(rendered.textContent,/<script>/);
+  assert.equal(elements(rendered).some(e=>e.tag==="script"||e.tag==="img"),false);
+});

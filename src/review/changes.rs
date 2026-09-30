@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::adapters::exclude::Exclude;
 use crate::adapters::git;
@@ -20,6 +20,7 @@ pub struct ChangesStrategy {
     exclude: Exclude,
     /// `--base`: diff against the merge base with this revision, not `HEAD`.
     base: Option<String>,
+    committed_head: Option<String>,
     index: OnceLock<crate::review::index::RepoIndex>,
     neighbors: OnceLock<HashMap<String, SourceFile>>,
 }
@@ -31,9 +32,17 @@ impl ChangesStrategy {
             client,
             exclude,
             base,
+            committed_head: None,
             index: OnceLock::new(),
             neighbors: OnceLock::new(),
         }
+    }
+}
+
+impl ChangesStrategy {
+    pub fn with_committed_head(mut self, head: String) -> Self {
+        self.committed_head = Some(head);
+        self
     }
 }
 
@@ -62,9 +71,20 @@ impl ReviewStrategy for ChangesStrategy {
 
     /// Discover review subjects and test-context files after exclusions.
     fn discover(&self, scopes: &[PathBuf]) -> Result<Discovery<ChangedFile>> {
-        let changed = match &self.base {
-            Some(base) => git::changed_files_since(scopes, &self.exclude, base)?,
-            None => git::changed_files(scopes, &self.exclude)?,
+        let changed = if let Some(head) = &self.committed_head {
+            git::changed_files_at(
+                scopes,
+                &self.exclude,
+                self.base
+                    .as_deref()
+                    .context("committed-only requires a base")?,
+                head,
+            )?
+        } else {
+            match &self.base {
+                Some(base) => git::changed_files_since(scopes, &self.exclude, base)?,
+                None => git::changed_files(scopes, &self.exclude)?,
+            }
         };
         let mut files = Vec::new();
         let mut context_files = Vec::new();
@@ -85,7 +105,11 @@ impl ReviewStrategy for ChangesStrategy {
     fn prepass(&self, scopes: &[PathBuf], discovery: &Discovery<ChangedFile>) -> Result<()> {
         // Best-effort index discovery: changed-file review remains available
         // even when a full-tree pre-pass cannot read the repository inventory.
-        let repository = git::repository_files(scopes, &self.exclude).unwrap_or_default();
+        let repository = if let Some(head) = &self.committed_head {
+            git::repository_files_at(scopes, &self.exclude, head)?
+        } else {
+            git::repository_files(scopes, &self.exclude).unwrap_or_default()
+        };
         let (tests, files): (Vec<_>, Vec<_>) =
             repository.into_iter().partition(|f| is_test_path(&f.path));
         let mut index = crate::review::index::RepoIndex::build(

@@ -60,7 +60,10 @@ fn repository_files_discovers_only_source_files() {
 
     // Test files are returned too (they become test-gap context); non-source
     // files are silently skipped, and every supported language is discovered.
-    assert_eq!(paths, vec!["src/lib.rs", "src/worker.go", "tests/lib_test.rs"]);
+    assert_eq!(
+        paths,
+        vec!["src/lib.rs", "src/worker.go", "tests/lib_test.rs"]
+    );
 }
 
 #[test]
@@ -129,18 +132,30 @@ fn multi_scope_unions_and_dedupes() {
 #[test]
 fn renamed_file_diffs_against_its_old_path() {
     let (_dir, repo) = fixture_repo();
-    write(&repo, "src/old.rs", "fn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\n");
+    write(
+        &repo,
+        "src/old.rs",
+        "fn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\n",
+    );
     run_git(&repo, &["add", "-A"]);
     run_git(&repo, &["commit", "-q", "-m", "seed"]);
 
     run_git(&repo, &["mv", "src/old.rs", "src/new.rs"]);
-    write(&repo, "src/new.rs", "fn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\nfn z() {}\n");
+    write(
+        &repo,
+        "src/new.rs",
+        "fn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\nfn z() {}\n",
+    );
 
     let files = git::changed_files(std::slice::from_ref(&repo), &Exclude::default()).unwrap();
     let renamed = files.iter().find(|f| f.path == "src/new.rs").unwrap();
     // Only the added line is a change; the carried-over lines are context,
     // not a whole-file `@@ -0,0` addition.
-    assert!(!renamed.patch.contains("@@ -0,0"), "patch: {}", renamed.patch);
+    assert!(
+        !renamed.patch.contains("@@ -0,0"),
+        "patch: {}",
+        renamed.patch
+    );
     assert!(renamed.patch.contains("+fn z() {}"));
     assert!(renamed.patch.contains("\n fn d() {}"));
     assert!(renamed.base.starts_with("fn a() {}"));
@@ -181,7 +196,11 @@ fn base_content_keeps_leading_whitespace() {
     run_git(&repo, &["add", "-A"]);
     run_git(&repo, &["commit", "-q", "-m", "seed"]);
 
-    write(&repo, "src/lib.rs", "\n\n    // indented header\npub fn f() -> i32 { 2 }\n");
+    write(
+        &repo,
+        "src/lib.rs",
+        "\n\n    // indented header\npub fn f() -> i32 { 2 }\n",
+    );
     let files = git::changed_files(std::slice::from_ref(&repo), &Exclude::default()).unwrap();
     assert_eq!(files[0].base, original);
 }
@@ -205,7 +224,11 @@ fn unresolvable_detached_head_is_an_error_not_unborn() {
     run_git(&repo, &["add", "-A"]);
     run_git(&repo, &["commit", "-q", "-m", "seed"]);
     // Point a detached HEAD at a commit id that does not exist.
-    fs::write(repo.join(".git/HEAD"), "0123456789abcdef0123456789abcdef01234567\n").unwrap();
+    fs::write(
+        repo.join(".git/HEAD"),
+        "0123456789abcdef0123456789abcdef01234567\n",
+    )
+    .unwrap();
 
     assert!(git::changed_files(std::slice::from_ref(&repo), &Exclude::default()).is_err());
 }
@@ -228,7 +251,11 @@ fn base_reviews_a_clean_feature_branch() {
     run_git(&repo, &["branch", "base"]);
 
     run_git(&repo, &["checkout", "-q", "-b", "feature"]);
-    write(&repo, "src/lib.rs", "pub fn f() -> i32 { 1 }\npub fn g() -> i32 { 2 }\n");
+    write(
+        &repo,
+        "src/lib.rs",
+        "pub fn f() -> i32 { 1 }\npub fn g() -> i32 { 2 }\n",
+    );
     write(&repo, "src/new.rs", "pub fn n() {}\n");
     run_git(&repo, &["add", "-A"]);
     run_git(&repo, &["commit", "-q", "-m", "feature work"]);
@@ -243,7 +270,11 @@ fn base_reviews_a_clean_feature_branch() {
     assert_eq!(sorted_paths(&files), vec!["src/lib.rs", "src/new.rs"]);
 
     let lib = files.iter().find(|f| f.path == "src/lib.rs").unwrap();
-    assert!(lib.patch.contains("+pub fn g() -> i32 { 2 }"), "patch: {}", lib.patch);
+    assert!(
+        lib.patch.contains("+pub fn g() -> i32 { 2 }"),
+        "patch: {}",
+        lib.patch
+    );
     assert_eq!(lib.base, v1, "base content comes from the merge base");
 
     let new = files.iter().find(|f| f.path == "src/new.rs").unwrap();
@@ -256,7 +287,10 @@ fn base_reviews_a_clean_feature_branch() {
     write(&repo, "src/stray.rs", "pub fn s() {}\n");
     let files =
         git::changed_files_since(std::slice::from_ref(&repo), &Exclude::default(), "base").unwrap();
-    assert_eq!(sorted_paths(&files), vec!["src/keep.rs", "src/lib.rs", "src/new.rs"]);
+    assert_eq!(
+        sorted_paths(&files),
+        vec!["src/keep.rs", "src/lib.rs", "src/new.rs"]
+    );
 
     // Without --base the untracked file is still reviewed.
     let head = git::changed_files(std::slice::from_ref(&repo), &Exclude::default()).unwrap();
@@ -349,4 +383,174 @@ fn repo_path_with_trailing_space_is_preserved() {
 
     let files = git::repository_files(std::slice::from_ref(&repo), &Exclude::default()).unwrap();
     assert_eq!(files.len(), 1);
+}
+
+#[test]
+fn auxiliary_evidence_includes_docs_manifests_renames_and_removals() {
+    let (_dir, repo) = fixture_repo();
+    write(&repo, "src/old.rs", "pub fn old() {}\n");
+    write(&repo, "src/deleted.rs", "pub fn deleted() {}\n");
+    write(&repo, "Cargo.toml", "[dependencies]\na=\"1\"\n");
+    write(&repo, "README.md", "old()\n");
+    run_git(&repo, &["add", "-A"]);
+    run_git(&repo, &["commit", "-qm", "base"]);
+    run_git(&repo, &["mv", "src/old.rs", "src/new.rs"]);
+    fs::remove_file(repo.join("src/deleted.rs")).unwrap();
+    write(&repo, "README.md", "new()\n");
+    write(&repo, "Cargo.toml", "[dependencies]\na=\"2\"\n");
+    let evidence = git::repository_evidence(
+        std::slice::from_ref(&repo),
+        &Exclude::default(),
+        None,
+        100,
+        1000,
+        10000,
+    )
+    .unwrap();
+    assert_eq!(evidence.changes.len(), 4);
+    let rename = evidence
+        .changes
+        .iter()
+        .find(|c| c.path == "src/new.rs")
+        .unwrap();
+    assert_eq!(rename.old_path.as_deref(), Some("src/old.rs"));
+    assert!(rename.base.contains("pub fn old"));
+    let removed = evidence
+        .changes
+        .iter()
+        .find(|c| c.path == "src/deleted.rs")
+        .unwrap();
+    assert!(removed.content.is_none());
+    assert!(removed.base.contains("deleted"));
+    assert!(evidence.unknowns.is_empty(), "{:?}", evidence.unknowns);
+}
+
+#[test]
+fn auxiliary_limits_exclusions_binary_and_unsafe_paths_remain_explicit() {
+    use std::os::unix::fs::symlink;
+    let (_dir, repo) = fixture_repo();
+    write(&repo, "base.rs", "fn base() {}\n");
+    write(&repo, ".gitignore", "ignored.rs\n");
+    run_git(&repo, &["add", "-A"]);
+    run_git(&repo, &["commit", "-qm", "base"]);
+    write(&repo, "ignored.rs", "secret ignored\n");
+    write(&repo, "excluded.rs", "secret excluded\n");
+    write(&repo, "huge.rs", &"x".repeat(200));
+    write(&repo, "binary.rs", "x\0y");
+    symlink("/etc/passwd", repo.join("escape.rs")).unwrap();
+    let exclude = Exclude::new(&["excluded.rs".into()]).unwrap();
+    let evidence =
+        git::repository_evidence(std::slice::from_ref(&repo), &exclude, None, 100, 100, 1000)
+            .unwrap();
+    assert!(
+        evidence
+            .files
+            .iter()
+            .all(|f| !f.path.contains("ignored") && !f.path.contains("excluded"))
+    );
+    for path in ["huge.rs", "binary.rs", "escape.rs"] {
+        assert!(
+            evidence.unknowns.iter().any(|s| s.contains(path)),
+            "{path}: {:?}",
+            evidence.unknowns
+        );
+    }
+    let evidence =
+        git::repository_evidence(std::slice::from_ref(&repo), &exclude, None, 1, 1000, 1000)
+            .unwrap();
+    assert!(evidence.files.len() <= 1);
+    assert!(evidence.unknowns.iter().any(|s| s.contains("count limit")));
+    let evidence =
+        git::repository_evidence(std::slice::from_ref(&repo), &exclude, None, 100, 1000, 1)
+            .unwrap();
+    assert!(evidence.files.is_empty());
+    assert!(
+        evidence
+            .unknowns
+            .iter()
+            .any(|s| s.contains("total evidence"))
+    );
+}
+
+#[test]
+fn committed_review_reads_pinned_objects_and_ignores_mutable_context() {
+    let (_dir, repo) = fixture_repo();
+    write(&repo, "src/lib.rs", "pub fn answer() -> i32 { 1 }\n");
+    run_git(&repo, &["add", "-A"]);
+    run_git(&repo, &["commit", "-qm", "base"]);
+    run_git(&repo, &["branch", "base"]);
+    write(&repo, "src/lib.rs", "pub fn answer() -> i32 { 2 }\n");
+    run_git(&repo, &["add", "-A"]);
+    run_git(&repo, &["commit", "-qm", "committed"]);
+    let head = git::head_sha(&repo).unwrap();
+    write(&repo, "src/lib.rs", "pub fn answer() -> i32 { 999 }\n");
+    write(&repo, "tests/untracked.rs", "fn fake_context() {}\n");
+    let changes = git::changed_files_at(
+        std::slice::from_ref(&repo),
+        &Exclude::default(),
+        "base",
+        &head,
+    )
+    .unwrap();
+    assert_eq!(changes.len(), 1);
+    assert!(changes[0].patch.contains("{ 2 }"));
+    assert!(!changes[0].patch.contains("999"));
+    let sources =
+        git::repository_files_at(std::slice::from_ref(&repo), &Exclude::default(), &head).unwrap();
+    assert_eq!(sources.len(), 1);
+    assert!(sources[0].content.contains("{ 2 }"));
+    assert!(!git::tracked_checkout_clean(&repo).unwrap());
+}
+
+#[test]
+fn bounded_evidence_rejects_multiple_checkouts_even_at_equal_heads_and_ignores_untracked_ci_inputs()
+{
+    let (_dir, repo) = fixture_repo();
+    write(&repo, "README.md", "committed\n");
+    run_git(&repo, &["add", "-A"]);
+    run_git(&repo, &["commit", "-qm", "base"]);
+    let second = tempfile::tempdir().unwrap();
+    run_git(
+        second.path(),
+        &["clone", "-q", repo.to_str().unwrap(), "copy"],
+    );
+    let copy = second.path().join("copy");
+    assert_eq!(git::head_sha(&repo).unwrap(), git::head_sha(&copy).unwrap());
+    let err = git::repository_evidence(
+        &[repo.clone(), copy],
+        &Exclude::default(),
+        None,
+        100,
+        1000,
+        10000,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("one checkout"));
+    write(&repo, "fake-CHANGELOG.md", "untracked evidence\n");
+    let evidence = git::repository_evidence(
+        std::slice::from_ref(&repo),
+        &Exclude::default(),
+        Some("HEAD"),
+        100,
+        1000,
+        10000,
+    )
+    .unwrap();
+    assert!(evidence.files.iter().all(|f| f.path != "fake-CHANGELOG.md"));
+    run_git(&repo, &["mv", "README.md", "README.unrecognized"]);
+    let evidence = git::repository_evidence(
+        std::slice::from_ref(&repo),
+        &Exclude::default(),
+        None,
+        100,
+        1000,
+        10000,
+    )
+    .unwrap();
+    assert!(
+        evidence
+            .unknowns
+            .iter()
+            .any(|s| s.contains("unsupported destination"))
+    );
 }

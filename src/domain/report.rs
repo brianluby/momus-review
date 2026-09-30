@@ -336,6 +336,17 @@ pub struct ShardMetadata {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ReviewReport {
+    /// Exact checkout head captured during review; absent in legacy reports.
+    pub reviewed_head: Option<String>,
+    pub reviewed_base: Option<String>,
+    pub reviewed_clean: bool,
+    pub reviewed_committed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upgrades: Option<crate::review::upgrades::UpgradeSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub docs_drift: Option<crate::review::docs_drift::DocsDriftSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merge_confidence: Option<crate::review::merge_confidence::MergeConfidenceSummary>,
     pub mode: ReviewMode,
     pub scope: String,
     pub dimensions: Vec<DimensionMeta>,

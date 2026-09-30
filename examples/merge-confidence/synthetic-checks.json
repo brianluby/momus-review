@@ -1,0 +1,19 @@
+{
+  "assessedAt": 5000,
+  "auxiliaryUnknowns": [],
+  "checks": [
+    {
+      "completedAt": 4999,
+      "evidence": "fixture://synthetic/check/test; fabricated check receipt",
+      "head": "synthetic-candidate",
+      "name": "test",
+      "status": "passed"
+    }
+  ],
+  "evidenceComplete": true,
+  "head": "synthetic-candidate",
+  "repository": "fixture/repository",
+  "reviewComplete": true,
+  "reviewedHead": "synthetic-candidate",
+  "supportedInputs": true
+}
