@@ -1,8 +1,26 @@
-# Prebuilt `momus` binaries. A `v*` tag builds every target, tests, and
-# attaches `momus-<target>.tar.gz` (+ `.sha256`) to a GitHub release; the
-# Action (`action.yml`) downloads those. `workflow_dispatch` builds the same
-# archives as run artifacts without releasing anything. macOS archives must
-# pass Developer ID signing and Apple notarization before publication.
+# Verifiable releases: build + target SBOMs → Apple sign/notarize → freeze
+# final bytes → attest → verify → publish. A `v*` tag runs the whole chain;
+# `workflow_dispatch` on main is a full rehearsal (signing, attestations and
+# verification included) that publishes nothing and moves no tags.
+#
+# The build and the attestation machinery live in the SHA-pinned reusable
+# builder (BUILDER_PIN below) with fixed commands and a closed target
+# allowlist; this file only orchestrates the order around them. Order
+# matters: signing changes the macOS binary and archive digest, so
+# attestations are made over the FINAL bytes only, after sign-macos has
+# replaced the unsigned artifact. Checksums are recomputed at attest time
+# from those final bytes, and the release manifest records the
+# unsigned→signed transformation with notarization evidence.
+#
+# The BUILDER_PIN appears exactly twice below (the reusable-workflow calls)
+# plus once in the verify step's --signer-digest; all three must move
+# together, deliberately, with the same review bar as this file. Bootstrap:
+# the pin is the commit that introduced .github/workflows/builder.yml.
+#
+# Consumers verify with scripts/verify-release.sh (checksums, signed SLSA
+# provenance for archive and SBOM, SBOM attestation with predicate matched
+# against the published bytes, and macOS codesign/notarization on darwin).
+# docs/slsa.md documents the guarantees, levels and residual gaps.
 name: release
 
 on:
@@ -14,64 +32,39 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_AUDIT_VERSION: "0.22.2"
+
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # 22.04 builds link an older glibc, so they run on more hosts.
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-22.04
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-22.04-arm
-          - target: aarch64-apple-darwin
-            os: macos-14
-    runs-on: ${{ matrix.os }}
-    env:
-      TARGET: ${{ matrix.target }}
+  audit:
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Check the tag matches Cargo.toml
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
+      - name: Install the pinned toolchain
+        run: rustup toolchain install --profile minimal
+
+      - name: Install cargo-audit (pinned, locked)
+        run: cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked --root "$RUNNER_TEMP/tools"
+
+      # Release gate: an advisory-database outage fails the release rather
+      # than shipping unaudited. PR CI runs the same script with
+      # --advisory-db-outage warn (scripts.yml).
+      - name: RustSec audit
         run: |
-          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
-            exit 1
-          fi
+          export PATH="$RUNNER_TEMP/tools/bin:$PATH"
+          scripts/audit.sh --advisory-db-outage fail
 
-      - name: Install Rust
-        shell: bash
-        run: rustup toolchain install stable --profile minimal && rustup default stable
-
-      - name: Test
-        run: cargo test --locked
-
-      - name: Build
-        run: cargo build --release --locked --bin momus
-
-      - name: Package
-        shell: bash
-        run: |
-          name="momus-$TARGET"
-          mkdir -p "dist/$name"
-          cp target/release/momus LICENSE README.md "dist/$name/"
-          tar -C dist -czf "dist/$name.tar.gz" "$name"
-          (cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
-          cat "dist/$name.tar.gz.sha256"
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: momus-${{ matrix.target }}
-          path: |
-            dist/momus-${{ matrix.target }}.tar.gz
-            dist/momus-${{ matrix.target }}.tar.gz.sha256
-          if-no-files-found: error
+  # Fixed-command build, test, target SBOM generation/validation and
+  # packaging, inside the pinned builder.
+  build:
+    uses: brianluby/momus-review/.github/workflows/builder.yml@f9d23e4896b680cdbbde779b4cfc0b30604b6949
+    with:
+      mode: build
+    permissions:
+      contents: read
 
   sign-macos:
     needs: build
@@ -86,29 +79,211 @@ jobs:
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
 
-  publish:
-    needs: [build, sign-macos]
-    # A tag push only: a workflow_dispatch run started on a tag ref is still
-    # a build-only dry run.
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
+  # Attest the FINAL bytes: signing has already replaced the macOS archive.
+  # The builder's attest job holds the repository's only
+  # id-token/attestations grants, runs no repository code, and touches
+  # artifacts only through hashing and the pinned attestation action.
+  attest:
+    needs: [build, sign-macos, audit]
+    uses: brianluby/momus-review/.github/workflows/builder.yml@f9d23e4896b680cdbbde779b4cfc0b30604b6949
+    with:
+      mode: attest
     permissions:
-      contents: write
+      id-token: write
+      attestations: write
+      contents: read
+
+  manifest:
+    needs: attest
+    runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: dist
-          pattern: momus-*
+          pattern: momus-*-attested
           merge-multiple: true
 
-      - name: Create the release
+      - name: Assemble the release manifest
+        run: |
+          python3 - <<'PY'
+          import glob, json, os
+          targets = {}
+          for path in sorted(glob.glob("dist/momus-*.fragment.json")):
+              entry = json.load(open(path))
+              targets[entry["target"]] = entry
+          if sorted(targets) != ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu",
+                                 "x86_64-unknown-linux-gnu"]:
+              raise SystemExit(f"unexpected target set: {sorted(targets)}")
+          for path in glob.glob("dist/momus-*.fragment.json"):
+              os.remove(path)
+          tag = os.environ.get("GITHUB_REF_NAME", "")
+          manifest = {
+              "version": targets["x86_64-unknown-linux-gnu"]["version"],
+              "tag": tag if tag.startswith("v") else None,
+              "source_sha": os.environ["GITHUB_SHA"],
+              "sbom": {"tool": "cargo-cyclonedx", "spec": "CycloneDX 1.5 JSON",
+                       "scope": "momus binary, per-target resolved graph, dev dependencies excluded"},
+              "provenance": {"signer_workflow": ".github/workflows/builder.yml",
+                             "signer_digest": "f9d23e4896b680cdbbde779b4cfc0b30604b6949",
+                             "verify_with": "scripts/verify-release.sh",
+                             "docs": "docs/slsa.md"},
+              "targets": targets,
+          }
+          json.dump(manifest, open("dist/release-manifest.json", "w"), indent=2)
+          PY
+          (cd dist && shasum -a 256 release-manifest.json > release-manifest.json.sha256)
+          cat dist/release-manifest.json.sha256
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: momus-release-manifest
+          path: |
+            dist/release-manifest.json
+            dist/release-manifest.json.sha256
+          if-no-files-found: error
+
+  # Consumer-stance verification of exactly what will be published, on
+  # macOS so the apple-target codesign/notarization checks also run.
+  # The signer digest is pinned to the builder commit that signed.
+  verify:
+    needs: manifest
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          pattern: momus-*-attested
+          merge-multiple: true
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: momus-release-manifest
+          path: dist
+
+      - name: Verify checksums, attestations and macOS signing
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           ls -l dist
-          gh release create "$GITHUB_REF_NAME" dist/* \
+          scripts/verify-release.sh --dir dist --source-sha "$GITHUB_SHA" \
+            --signer-digest f9d23e4896b680cdbbde779b4cfc0b30604b6949
+
+  publish:
+    needs: verify
+    # A tag push only: a workflow_dispatch run started on a tag ref is still
+    # a rehearsal.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # Publication is serialized across the repository: two tags racing the
+    # major-tag move or the asset checks must never interleave.
+    concurrency:
+      group: release-publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          pattern: momus-*-attested
+          merge-multiple: true
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: momus-release-manifest
+          path: dist
+
+      # The complete, explicit asset inventory — never a glob. Duplicate,
+      # unexpected or missing assets block publication.
+      - name: Check the asset inventory
+        run: |
+          python3 - <<'PY'
+          import os, sys
+          targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu",
+                     "aarch64-apple-darwin"]
+          expected = {"release-manifest.json", "release-manifest.json.sha256"}
+          for t in targets:
+              expected |= {
+                  f"momus-{t}.tar.gz", f"momus-{t}.tar.gz.sha256", f"momus-{t}.cdx.json",
+                  f"momus-{t}.provenance.bundle", f"momus-{t}.sbom-attestation.bundle",
+                  f"momus-{t}.fragment.json",
+              }
+          actual = set(os.listdir("dist"))
+          missing, unexpected = expected - actual, actual - expected
+          if missing or unexpected:
+              for name in sorted(missing):
+                  print(f"::error::missing release asset: {name}")
+              for name in sorted(unexpected):
+                  print(f"::error::unexpected file in dist: {name}")
+              sys.exit(1)
+          print(f"asset inventory ok: {len(expected)} files")
+          PY
+
+      # Immutable releases must already be enabled: publishing a mutable
+      # release would let assets be swapped after the fact.
+      - name: Require immutable releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/immutable-releases" \
+            | jq -e '(.immutable // .enabled) == true' >/dev/null \
+            || { echo "::error::immutable releases are not enabled for $GITHUB_REPOSITORY"; exit 1; }
+          echo "immutable releases: enabled"
+
+      # Never overwrite: a failed publish is retried by deleting the draft
+      # by hand or cutting a new version, never by re-publishing over it.
+      - name: Refuse to overwrite an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::release $GITHUB_REF_NAME already exists; never overwrite a published version"
+            exit 1
+          fi
+
+      - name: Create the draft release with the explicit asset set
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          assets=()
+          for t in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu aarch64-apple-darwin; do
+            assets+=(
+              "dist/momus-$t.tar.gz" "dist/momus-$t.tar.gz.sha256" "dist/momus-$t.cdx.json"
+              "dist/momus-$t.provenance.bundle" "dist/momus-$t.sbom-attestation.bundle"
+            )
+          done
+          assets+=(dist/release-manifest.json dist/release-manifest.json.sha256)
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" \
-            --generate-notes --verify-tag
+            --generate-notes --verify-tag --draft
+
+      # Re-verify what the draft actually serves before making it public.
+      - name: Verify the draft release as a consumer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rm -rf "$RUNNER_TEMP/from-draft" && mkdir -p "$RUNNER_TEMP/from-draft"
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --dir "$RUNNER_TEMP/from-draft" --clobber
+          scripts/verify-release.sh --dir "$RUNNER_TEMP/from-draft" --source-sha "$GITHUB_SHA" \
+            --signer-digest f9d23e4896b680cdbbde779b4cfc0b30604b6949
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
 
       # Callers pin the reusable workflow and the action to the major tag
       # (review.yml@v0), so each release moves it; v1.x would move v1.
@@ -137,3 +312,12 @@ jobs:
               -f ref="refs/tags/$major" -f sha="$GITHUB_SHA" --silent
           fi
           echo "$major -> $GITHUB_SHA"
+
+      - name: Confirm the published asset set
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets \
+            -q '[.assets[].name] | sort' > "$RUNNER_TEMP/published.txt"
+          cat "$RUNNER_TEMP/published.txt"
+          test "$(wc -l < "$RUNNER_TEMP/published.txt")" -eq 17
