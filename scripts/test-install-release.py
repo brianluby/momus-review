@@ -22,11 +22,11 @@ if args==['--version']: print('gh version 2.101.0'); sys.exit(0)
 if args[0]=='api':
     endpoint=args[1]
     if '/releases/' in endpoint:
-        print(json.dumps({'tag_name':'v0.3.0','draft':False,'immutable':os.environ.get('MUTABLE')!='1'}))
+        print(json.dumps({'tag_name':os.environ.get('RELEASE_TAG','v0.3.0'),'draft':os.environ.get('DRAFT')=='1','immutable':os.environ.get('MUTABLE')!='1'}))
     elif '/git/ref/' in endpoint:
-        print(json.dumps({'object':{'type':'tag' if os.environ.get('ANNOTATED') else 'commit','sha':'1'*40}}))
+        print(json.dumps({'object':{'type':os.environ.get('TAG_TYPE','tag' if os.environ.get('ANNOTATED') else 'commit'),'sha':os.environ.get('TAG_SHA','1'*40)}}))
     elif '/git/tags/' in endpoint:
-        print(json.dumps({'object':{'type':'commit','sha':'1'*40}}))
+        print(json.dumps({'object':{'type':'tag' if os.environ.get('TAG_CYCLE') else 'commit','sha':'1'*40}}))
     else: sys.exit(8)
 elif args[:2]==['release','download']:
     if os.environ.get('DOWNLOAD_FAIL'): sys.exit(1)
@@ -112,6 +112,12 @@ class InstallerTests(unittest.TestCase):
     def test_mutable_release_rejected(self): self.assert_rejected(MUTABLE='1')
     def test_invalid_policy_rejected(self): self.assert_rejected(VERIFY_ATTESTATIONS='requird')
     def test_unsupported_platform_requires_explicit_source(self): self.assert_rejected(RUNNER_ARCH='ARM')
+    def test_invalid_release_metadata_and_tag_objects_fail_before_download(self):
+        for env in [dict(DRAFT='1'), dict(RELEASE_TAG='../invalid'),
+                    dict(VERSION='v0.2.0'), dict(VERSION='bad/tag'),
+                    dict(RELEASE_REPO='not-a-repository'), dict(TAG_TYPE='tree'),
+                    dict(TAG_SHA='bad-digest'), dict(ANNOTATED='1', TAG_CYCLE='1')]:
+            with self.subTest(env=env): self.assert_rejected(**env)
     def test_explicit_source_build_uses_action_checkout_and_locked_install(self):
         run=self.run_install(VERSION='source'); self.assertEqual(run.returncode,0,run.stderr)
         calls=[json.loads(x) for x in (self.base/'source-calls').read_text().splitlines()]

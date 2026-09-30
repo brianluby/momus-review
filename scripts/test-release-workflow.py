@@ -130,6 +130,21 @@ class ReleaseTests(unittest.TestCase):
         self.assertFalse(policy.version('v0.9.0',refs)['advance_major'])
         self.assertTrue(policy.version('v0.10.0',refs)['advance_major'])
         self.assertFalse(policy.version('v0.10.0',refs)['latest'])
+    def test_invalid_version_and_nonregular_inventory_rejected(self):
+        with self.assertRaises(ValueError): policy.version('v0.3', [])
+        refs=self.base/'refs.json'; refs.write_text('[]')
+        run=subprocess.run(['python3',str(ROOT/'scripts/release-policy.py'),'version',
+            '--tag','v00.3.0','--refs',str(refs)],capture_output=True,text=True)
+        self.assertNotEqual(run.returncode,0); self.assertIn('invalid release tag',run.stderr)
+        path=self.base/'dist/release-manifest.json'; path.unlink(); path.symlink_to(self.base/'refs.json')
+        name,run=self.execute(); self.assertEqual(name,'Check the asset inventory')
+        self.assertIn('nonregular',run.stderr); self.assertFalse((self.base/'draft').exists())
+    def test_duplicate_published_assets_rejected_even_with_complete_name_set(self):
+        release={'draft':False,'immutable':True,'assets':[{'name':n} for n in policy.assets()]}
+        release['assets'].append(release['assets'][0]); p=self.base/'published-fixture.json'; p.write_text(json.dumps(release))
+        run=subprocess.run(['python3',str(ROOT/'scripts/release-policy.py'),'published',
+            '--json',str(p)],capture_output=True,text=True)
+        self.assertNotEqual(run.returncode,0); self.assertIn('duplicate published assets',run.stderr)
     def test_failed_build_sign_audit_verify_and_dispatch_block_publication(self):
         # Interpret the actual job dependency graph and assert publication's
         # event gate, rather than testing a second copy of those dependencies.
