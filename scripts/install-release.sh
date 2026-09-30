@@ -48,14 +48,14 @@ else
       type=$(jq -er '.object.type' <<<"$ref")
       sha=$(jq -er '.object.sha' <<<"$ref")
     done
-    [ "$type" = commit ] && [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || fail "release tag does not resolve to a commit"
+    [[ "$type" = commit && "$sha" =~ ^[0-9a-f]{40}$ ]] || fail "release tag does not resolve to a commit"
   fi
   # Any download/verification failure aborts. No implicit source fallback.
   gh release download "$tag" --repo "$RELEASE_REPO" "${patterns[@]}" --dir "$dl"
   archive="momus-$target.tar.gz"
   expected=$(awk 'NR == 1 {print $1}' "$dl/$archive.sha256")
   actual=$(shasum -a 256 "$dl/$archive" | cut -d' ' -f1)
-  [[ "$expected" =~ ^[0-9a-f]{64}$ ]] && [ "$actual" = "$expected" ] || fail "archive checksum mismatch"
+  [[ "$expected" =~ ^[0-9a-f]{64}$ && "$actual" = "$expected" ]] || fail "archive checksum mismatch"
   if [ "$VERIFY_ATTESTATIONS" = required ]; then
     "$ACTION_PATH/scripts/verify-release.sh" --dir "$dl" --repo "$RELEASE_REPO" \
       --signer-workflow "$RELEASE_REPO/.github/workflows/attest.yml" \

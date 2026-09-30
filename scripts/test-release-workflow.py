@@ -86,6 +86,8 @@ class ReleaseTests(unittest.TestCase):
     def test_stable_draft_verify_publish_inventory_then_major_move(self):
         failed,run=self.execute(); self.assertIsNone(failed,run.stdout+run.stderr)
         self.assertTrue(self.moved()); calls=self.calls()
+        self.assertLess(WORKFLOW.index('- name: Confirm the published asset set'),
+                        WORKFLOW.index('- name: Move the major tag'))
         create=next(a for a in calls if a[:2]==['release','create']); self.assertIn('--draft',create); self.assertIn('--latest=true',create)
         names=json.loads((self.base/'assets').read_text()); self.assertEqual(set(names),policy.assets())
         verify=(self.base/'verify-args').read_text(); self.assertIn('--source-ref refs/tags/v0.3.0',verify)
