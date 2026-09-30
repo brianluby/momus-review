@@ -298,6 +298,8 @@ pub struct ReviewReport {
     pub scope: String,
     pub dimensions: Vec<DimensionMeta>,
     pub config: ConfigSnapshot,
+    /// Review wall time, excluding report serialization/publication.
+    pub wall_time_ms: u64,
     pub screened_files: usize,
     pub context_files: Vec<String>,
     pub matrix: Vec<MatrixRow>,
