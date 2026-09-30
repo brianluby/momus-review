@@ -42,7 +42,7 @@ GH_STUB_OUT="$work/gh-out.json"; export GH_STUB_OUT
 
 TARGET=x86_64-unknown-linux-gnu
 SHA=0000000000000000000000000000000000000001
-SIGNER="brianluby/momus-review/.github/workflows/builder.yml"
+SIGNER="brianluby/momus-review/.github/workflows/attest.yml"
 
 make_fixture() {
   local dir=$1

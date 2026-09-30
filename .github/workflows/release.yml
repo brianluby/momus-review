@@ -3,20 +3,21 @@
 # `workflow_dispatch` on main is a full rehearsal (signing, attestations and
 # verification included) that publishes nothing and moves no tags.
 #
-# The build and the attestation machinery live in the SHA-pinned reusable
-# builder (BUILDER_PIN below) with fixed commands and a closed target
-# allowlist; this file only orchestrates the order around them. Order
-# matters: signing changes the macOS binary and archive digest, so
-# attestations are made over the FINAL bytes only, after sign-macos has
-# replaced the unsigned artifact. Checksums are recomputed at attest time
-# from those final bytes, and the release manifest records the
-# unsigned→signed transformation with notarization evidence.
+# The build and the attestation machinery live in two SHA-pinned reusable
+# workflows (builder.yml and attest.yml, pinned at the same commit below)
+# with fixed commands and closed target allowlists; this file only
+# orchestrates the order around them. Order matters: signing changes the
+# macOS binary and archive digest, so attestations are made over the FINAL
+# bytes only, after sign-macos has replaced the unsigned artifact.
+# Checksums are recomputed at attest time from those final bytes, and the
+# release manifest records the unsigned→signed transformation with
+# notarization evidence.
 #
-# The builder commit appears in exactly five places below — the two
+# The pinned commit appears in exactly five places below — the two
 # reusable-workflow calls, the manifest's recorded signer digest, and the
 # two --signer-digest verifications — and all five must move together,
 # deliberately, with the same review bar as this file. Bootstrap: the pin
-# is the commit that introduced .github/workflows/builder.yml.
+# is the commit that introduced attest.yml alongside builder.yml.
 #
 # Consumers verify with scripts/verify-release.sh (checksums, signed SLSA
 # provenance for archive and SBOM, SBOM attestation with predicate matched
@@ -61,9 +62,7 @@ jobs:
   # Fixed-command build, test, target SBOM generation/validation and
   # packaging, inside the pinned builder.
   build:
-    uses: brianluby/momus-review/.github/workflows/builder.yml@f9d23e4896b680cdbbde779b4cfc0b30604b6949
-    with:
-      mode: build
+    uses: brianluby/momus-review/.github/workflows/builder.yml@deaa471b7a6f4f9ed3a300b2e0a2b922f31141c2
     permissions:
       contents: read
 
@@ -81,14 +80,12 @@ jobs:
       APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
 
   # Attest the FINAL bytes: signing has already replaced the macOS archive.
-  # The builder's attest job holds the repository's only
-  # id-token/attestations grants, runs no repository code, and touches
-  # artifacts only through hashing and the pinned attestation action.
+  # attest.yml holds the repository's only id-token/attestations grants,
+  # runs no repository code, and touches artifacts only through hashing
+  # and the pinned attestation action.
   attest:
     needs: [build, sign-macos, audit]
-    uses: brianluby/momus-review/.github/workflows/builder.yml@f9d23e4896b680cdbbde779b4cfc0b30604b6949
-    with:
-      mode: attest
+    uses: brianluby/momus-review/.github/workflows/attest.yml@deaa471b7a6f4f9ed3a300b2e0a2b922f31141c2
     permissions:
       id-token: write
       attestations: write
@@ -128,8 +125,8 @@ jobs:
               "source_sha": os.environ["GITHUB_SHA"],
               "sbom": {"tool": "cargo-cyclonedx", "spec": "CycloneDX 1.5 JSON",
                        "scope": "momus binary, per-target resolved graph, dev dependencies excluded"},
-              "provenance": {"signer_workflow": ".github/workflows/builder.yml",
-                             "signer_digest": "f9d23e4896b680cdbbde779b4cfc0b30604b6949",
+              "provenance": {"signer_workflow": ".github/workflows/attest.yml",
+                             "signer_digest": "deaa471b7a6f4f9ed3a300b2e0a2b922f31141c2",
                              "verify_with": "scripts/verify-release.sh",
                              "docs": "docs/slsa.md"},
               "targets": targets,
@@ -149,7 +146,7 @@ jobs:
 
   # Consumer-stance verification of exactly what will be published, on
   # macOS so the apple-target codesign/notarization checks also run.
-  # The signer digest is pinned to the builder commit that signed.
+  # The signer digest is pinned to the attest.yml commit that signed.
   verify:
     needs: manifest
     runs-on: macos-14
@@ -175,7 +172,7 @@ jobs:
         run: |
           ls -l dist
           scripts/verify-release.sh --dir dist --source-sha "$GITHUB_SHA" \
-            --signer-digest f9d23e4896b680cdbbde779b4cfc0b30604b6949
+            --signer-digest deaa471b7a6f4f9ed3a300b2e0a2b922f31141c2
 
   publish:
     needs: verify
@@ -291,7 +288,7 @@ jobs:
           gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
             --dir "$RUNNER_TEMP/from-draft" --clobber
           scripts/verify-release.sh --dir "$RUNNER_TEMP/from-draft" --source-sha "$GITHUB_SHA" \
-            --signer-digest f9d23e4896b680cdbbde779b4cfc0b30604b6949
+            --signer-digest deaa471b7a6f4f9ed3a300b2e0a2b922f31141c2
 
       - name: Publish
         env:

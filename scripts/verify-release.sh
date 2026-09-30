@@ -26,7 +26,7 @@
 #     --dir DIR              directory holding the downloaded assets
 #     --source-sha SHA       required expected source commit (plain hex)
 #     --repo OWNER/REPO      default brianluby/momus-review
-#     --signer-workflow P    default <repo>/.github/workflows/builder.yml
+#     --signer-workflow P    default <repo>/.github/workflows/attest.yml
 #     --signer-digest SHA    optional. The builder workflow's pinned commit
 #                            (recorded in the release manifest). Omitted by
 #                            consumers who cannot know it independently;
@@ -40,7 +40,7 @@ set -euo pipefail
 
 ALL_TARGETS="x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu,aarch64-apple-darwin"
 REPO="brianluby/momus-review"
-SIGNER_WORKFLOW="brianluby/momus-review/.github/workflows/builder.yml"
+SIGNER_WORKFLOW="brianluby/momus-review/.github/workflows/attest.yml"
 APPLE_TEAM_ID="DVH6X33J83"
 SOURCE_SHA=""
 SIGNER_DIGEST=""
