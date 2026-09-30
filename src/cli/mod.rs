@@ -201,6 +201,7 @@ pub enum Command {
     },
 }
 
+/// Dispatch the parsed CLI command and preserve each command's exit contract.
 pub async fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Review {
@@ -334,6 +335,7 @@ pub enum EventArg {
 }
 
 impl From<EventArg> for ReviewEvent {
+    /// Translate the CLI review event into the publisher's event type.
     fn from(event: EventArg) -> Self {
         match event {
             EventArg::Comment => ReviewEvent::Comment,
@@ -517,6 +519,7 @@ async fn run_mode<S: ReviewStrategy>(
     persist_report(&report, &scopes, sarif.as_ref(), fail_on_blocking)
 }
 
+/// Save JSON and final artifacts; partial shards defer history, SARIF and blocking gates.
 fn persist_report(
     report: &ReviewReport,
     scopes: &[PathBuf],

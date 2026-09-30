@@ -25,6 +25,7 @@ pub struct ChangesStrategy {
 }
 
 impl ChangesStrategy {
+    /// Configure diff discovery, exclusions and a shared client with a lazy index pre-pass.
     pub fn new(client: TypeSafeClient, exclude: Exclude, base: Option<String>) -> Self {
         Self {
             client,
@@ -39,22 +40,27 @@ impl ChangesStrategy {
 impl ReviewStrategy for ChangesStrategy {
     type File = ChangedFile;
 
+    /// Identify the review mode represented by this strategy.
     fn mode(&self) -> ReviewMode {
         ReviewMode::Changes
     }
 
+    /// Name the review subjects for progress output.
     fn subject(&self) -> &'static str {
         "changed source"
     }
 
+    /// Name the test context accompanying the review subjects.
     fn context_label(&self) -> &'static str {
         "changed test"
     }
 
+    /// Return the shared request client used by judgments and global refinement.
     fn client(&self) -> &TypeSafeClient {
         &self.client
     }
 
+    /// Discover review subjects and test-context files after exclusions.
     fn discover(&self, scopes: &[PathBuf]) -> Result<Discovery<ChangedFile>> {
         let changed = match &self.base {
             Some(base) => git::changed_files_since(scopes, &self.exclude, base)?,
@@ -75,6 +81,7 @@ impl ReviewStrategy for ChangesStrategy {
         })
     }
 
+    /// Index current source bytes and map related changed tests before concurrent judgments.
     fn prepass(&self, scopes: &[PathBuf], discovery: &Discovery<ChangedFile>) -> Result<()> {
         // Best-effort index discovery: changed-file review remains available
         // even when a full-tree pre-pass cannot read the repository inventory.
@@ -104,9 +111,11 @@ impl ReviewStrategy for ChangesStrategy {
         let _ = self.index.set(index);
         Ok(())
     }
+    /// Snapshot computed, reused and fallback metadata counts from the pre-pass.
     fn index_stats(&self) -> crate::review::index::IndexStats {
         self.index.get().map_or_else(Default::default, |i| i.stats)
     }
+    /// Return bounded one-hop source dependencies/importers for refinement.
     fn neighbor_context(&self, path: &str) -> serde_json::Value {
         let neighbors: Vec<_> = self
             .index
@@ -120,6 +129,7 @@ impl ReviewStrategy for ChangesStrategy {
         serde_json::json!(neighbors)
     }
 
+    /// Screen this file using indexed metadata and bounded related-test context.
     async fn screen(
         &self,
         file: &ChangedFile,
@@ -135,6 +145,7 @@ impl ReviewStrategy for ChangesStrategy {
         .await
     }
 
+    /// Classify file role and review priority without gating findings.
     async fn profile(
         &self,
         file: &ChangedFile,
@@ -143,10 +154,12 @@ impl ReviewStrategy for ChangesStrategy {
         judgments::profile_file(&self.client, file, probabilities).await
     }
 
+    /// Locate concrete evidence for a threshold signal, or return no finding.
     async fn locate(&self, signal: &Signal<ChangedFile>) -> Result<Option<Finding>> {
         judgments::locate_signal(&self.client, signal).await
     }
 
+    /// Choose supported fix/test strategies for the located finding.
     async fn suggestions(&self, finding: &Finding) -> Result<(Option<String>, Option<String>)> {
         crate::review::explain::enrich_suggestions(&self.client, finding).await
     }

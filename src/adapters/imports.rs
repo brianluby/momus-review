@@ -74,6 +74,7 @@ static JS_IMPORT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     .expect("valid regex")
 });
 
+/// Extract Rust use/mod candidates without resolving them to repository paths.
 fn extract_rust_imports(content: &str) -> Vec<String> {
     let mut out: Vec<String> = MOD_REGEX
         .captures_iter(content)
@@ -87,6 +88,7 @@ fn extract_rust_imports(content: &str) -> Vec<String> {
     out
 }
 
+/// Extract JavaScript/TypeScript import and require candidates.
 fn extract_js_imports(content: &str) -> Vec<String> {
     JS_IMPORT_REGEX
         .captures_iter(content)
@@ -179,6 +181,7 @@ struct Resolver {
 }
 
 impl Resolver {
+    /// Index normalized paths by their final segment for candidate resolution.
     fn new(files: &[SourceFile]) -> Resolver {
         let mut norm = Vec::with_capacity(files.len());
         let mut by_last: HashMap<String, Vec<usize>> = HashMap::new();
@@ -231,6 +234,7 @@ impl Resolver {
         (relative, self.norm[i].len())
     }
 
+    /// Compare normalized trailing path segments when resolving an import.
     fn suffix_matches(&self, cand: &[String]) -> Vec<usize> {
         let Some(idxs) = self.by_last.get(&cand[cand.len() - 1]) else {
             return Vec::new();
@@ -253,6 +257,7 @@ pub struct ImportGraph {
 }
 
 impl ImportGraph {
+    /// Build forward and reverse edges by resolving candidates against this inventory.
     pub fn build(files: &[SourceFile]) -> ImportGraph {
         Self::from_candidates(files, |f| extract_imports(&f.path, &f.content))
     }

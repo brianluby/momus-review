@@ -616,3 +616,173 @@ async fn shards_merge_the_same_matrix_and_confidence_and_reject_dirty_inventory(
     assert!(!dirty.status.success());
     assert!(String::from_utf8_lossy(&dirty.stderr).contains("inventory"));
 }
+
+/// A delayed Tier-0 server records overlap and exercises conservative fallbacks.
+async fn tier_server(
+    mixed: bool,
+) -> (
+    String,
+    std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) {
+    use axum::{Json, Router, http::StatusCode, routing::post};
+    use serde_json::{Value, json};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let seen = bodies.clone();
+    let active = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let peak_sink = peak.clone();
+    let app = Router::new().route(
+        "/v1/systemone",
+        post(move |Json(body): Json<Value>| {
+            let seen = seen.clone();
+            let active = active.clone();
+            let peak = peak_sink.clone();
+            async move {
+                let questions = body["questions"].as_object().unwrap();
+                let tier = questions.contains_key("concern");
+                seen.lock().unwrap().push(body.clone());
+                if tier {
+                    let n = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(n, Ordering::SeqCst);
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    active.fetch_sub(1, Ordering::SeqCst);
+                    if mixed && body["state"]["file"]["path"] == "b.rs" {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({"error": "tier unavailable"})),
+                        );
+                    }
+                    if mixed && body["state"]["file"]["path"] == "lib.rs" {
+                        return (
+                            StatusCode::OK,
+                            Json(json!({"model": "stub", "answers": {}})),
+                        );
+                    }
+                }
+                if questions.values().any(|q| q["type"] != "noul") {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({"error": "profile unavailable"})),
+                    );
+                }
+                let answers: serde_json::Map<String, Value> = questions
+                    .keys()
+                    .map(|k| (k.clone(), json!({"noul": if tier {0.01} else {0.1}})))
+                    .collect();
+                (
+                    StatusCode::OK,
+                    Json(json!({"model": "stub", "answers": answers})),
+                )
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (url, bodies, peak)
+}
+
+/// The all-dismissed return preserves audit totals and avoids every full screen.
+#[tokio::test(flavor = "multi_thread")]
+async fn all_tier_dismissals_preserve_redactions_and_run_concurrently() {
+    let (url, bodies, peak) = tier_server(false).await;
+    let dir = two_file_branch();
+    let repo = dir.path().to_path_buf();
+    fs::write(
+        repo.join("a.rs"),
+        "pub const KEY: &str = \"AKIAIOSFODNN7EXAMPLE\";\n",
+    )
+    .unwrap();
+    let out = tokio::task::spawn_blocking(move || {
+        Command::new(env!("CARGO_BIN_EXE_momus"))
+            .args(["scan", "--tiered", "--no-refine", "--no-cache"])
+            .current_dir(&repo)
+            .env("TYPESAFE_BASE_URL", url)
+            .env("TYPESAFE_DEFAULT_MODEL", "stub")
+            .env_remove("TYPESAFE_API_KEY")
+            .env("MOMUS_CONCURRENCY", "3")
+            .env("MOMUS_REPORT", repo.join("report.json"))
+            .output()
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let r: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(r["screenedFiles"], 0);
+    assert_eq!(r["tier"]["screened"], 3);
+    assert_eq!(
+        r["tier"]["dismissed"],
+        serde_json::json!(["lib.rs", "a.rs", "b.rs"])
+    );
+    assert_eq!(r["redactions"]["aws-access-key"], 1);
+    assert_eq!(r["partial"], true);
+    assert_eq!(r["usage"]["calls"], 3);
+    assert_eq!(bodies.lock().unwrap().len(), 3);
+    assert!(peak.load(std::sync::atomic::Ordering::SeqCst) > 1);
+    assert!(
+        !serde_json::to_string(&*bodies.lock().unwrap())
+            .unwrap()
+            .contains("AKIAIOSFODNN7EXAMPLE")
+    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("redacted secrets before sending"));
+}
+
+/// Errors, malformed answers and oversized files must receive full screening.
+#[tokio::test(flavor = "multi_thread")]
+async fn tier_uncertainty_and_oversized_sources_are_retained() {
+    let (url, bodies, _) = tier_server(true).await;
+    let dir = two_file_branch();
+    let repo = dir.path().to_path_buf();
+    fs::write(repo.join("oversized.rs"), "pub fn f() {}\n".repeat(8000)).unwrap();
+    let out = tokio::task::spawn_blocking(move || {
+        Command::new(env!("CARGO_BIN_EXE_momus"))
+            .args(["scan", "--tiered", "--no-refine", "--no-cache"])
+            .current_dir(&repo)
+            .env("TYPESAFE_BASE_URL", url)
+            .env("TYPESAFE_DEFAULT_MODEL", "stub")
+            .env_remove("TYPESAFE_API_KEY")
+            .env("MOMUS_CONCURRENCY", "3")
+            .env("MOMUS_CONTEXT_BUDGET_CHARS", "96000")
+            .env("MOMUS_REPORT", repo.join("report.json"))
+            .output()
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let r: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(r["tier"]["screened"], 3);
+    assert_eq!(r["tier"]["dismissed"], serde_json::json!(["a.rs"]));
+    let paths: std::collections::BTreeSet<_> = r["matrix"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["file"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        paths,
+        ["b.rs", "lib.rs", "oversized.rs"].into_iter().collect()
+    );
+    assert!(
+        !bodies
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|b| b["questions"].get("concern").is_some()
+                && b["state"]["file"]["path"] == "oversized.rs")
+    );
+}

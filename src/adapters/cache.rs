@@ -90,6 +90,7 @@ impl ResultCache {
         aliases.insert(requested.to_string(), resolved.to_string());
     }
 
+    /// Whether disk lookups and writes are enabled for this cache.
     pub fn enabled(&self) -> bool {
         self.dir.is_some()
     }

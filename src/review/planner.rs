@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 
+/// Order files by role, historical hotspots and Git churn, with deterministic path ties.
 pub fn prioritize<F: FileEntry>(files: &mut [F], scopes: &[PathBuf]) {
     let mut scores: HashMap<String, f64> = HashMap::new();
     // Historical profiles provide file roles; findings identify local hotspots.
@@ -56,6 +57,7 @@ pub fn prioritize<F: FileEntry>(files: &mut [F], scopes: &[PathBuf]) {
     });
 }
 
+/// Parse calls=N, including zero for a cache-only run.
 pub fn parse_budget(raw: &str) -> Result<u64, String> {
     raw.strip_prefix("calls=")
         .and_then(|v| v.parse().ok())
@@ -69,6 +71,7 @@ pub struct Shard {
 }
 impl std::str::FromStr for Shard {
     type Err = String;
+    /// Parse a 1-based shard selector and reject invalid indices or counts above 256.
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         let parse = || {
             let (i, n) = raw.split_once('/')?;
@@ -84,6 +87,7 @@ impl std::str::FromStr for Shard {
     }
 }
 impl Shard {
+    /// Assign each path to exactly one shard using the first eight SHA-256 bytes.
     pub fn contains(&self, path: &str) -> bool {
         use sha2::{Digest, Sha256};
         let digest = Sha256::digest(path.as_bytes());

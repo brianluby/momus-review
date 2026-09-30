@@ -174,6 +174,7 @@ pub enum SummaryReason {
 }
 
 impl SummaryReason {
+    /// Render a concise finding description for inline or summary publication.
     fn describe(self) -> &'static str {
         match self {
             SummaryReason::NotADiffReview => "codebase scan",
@@ -272,6 +273,7 @@ pub fn plan<'a>(
     out
 }
 
+/// Return the human-readable label for a review dimension.
 fn dimension_label(dimension: Dimension) -> String {
     dimension_metadata()
         .into_iter()
@@ -291,6 +293,7 @@ fn heading(finding: &Finding) -> String {
     )
 }
 
+/// Replace secrets in outbound GitHub comment text before publication.
 fn redacted(text: &str) -> String {
     redact(text, &mut Redactions::default())
 }
@@ -340,7 +343,7 @@ pub fn summary_body(report: &ReviewReport, plan: &Plan, head_sha: &str) -> Strin
             report.budget.deferred, report.tier.dismissed.len(), report.skipped.len()));
         out.push(String::new());
     }
-    if total == 0 && report.screened_files == 0 && report.skipped.is_empty() {
+    if total == 0 && report.screened_files == 0 && report.skipped.is_empty() && !report.partial {
         out.push("No source files to review in this pull request.".to_string());
     } else if total == 0 {
         out.push("No findings.".to_string());
@@ -453,6 +456,36 @@ pub fn summary_body(report: &ReviewReport, plan: &Plan, head_sha: &str) -> Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Incomplete reviews must disclose deferred, dismissed, and failed work.
+    #[test]
+    fn summary_marks_partial_coverage_with_actual_counters() {
+        let mut report = ReviewReport {
+            partial: true,
+            ..Default::default()
+        };
+        report.budget.deferred = 3;
+        report.tier.dismissed = vec!["a.rs".into(), "b.rs".into()];
+        report.skipped.push(crate::domain::report::SkippedFile {
+            file: "c.rs".into(),
+            stage: crate::domain::report::ReviewStage::Screen,
+            reason: "budget exhausted".into(),
+        });
+        let plan = plan(&report, &[], &Posted::default(), 10);
+        let body = summary_body(&report, &plan, "abcdef");
+        assert!(body.contains("**Partial coverage**"));
+        assert!(body.contains("3 deferred requests, 2 Tier-0 dismissals, 1 skipped requests"));
+        drop(plan);
+        report.skipped.clear();
+        let dismissed_plan = super::plan(&report, &[], &Posted::default(), 10);
+        let dismissed_body = summary_body(&report, &dismissed_plan, "abcdef");
+        assert!(dismissed_body.contains("No findings."));
+        assert!(!dismissed_body.contains("No source files"));
+        drop(dismissed_plan);
+        report.partial = false;
+        let plan = super::plan(&report, &[], &Posted::default(), 10);
+        assert!(!summary_body(&report, &plan, "abcdef").contains("Partial coverage"));
+    }
 
     fn finding(file: &str, line: usize, severity: f64, fingerprint: &str) -> Finding {
         Finding {

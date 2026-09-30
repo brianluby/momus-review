@@ -237,6 +237,7 @@ pub enum ReviewStage {
 }
 
 impl ReviewStage {
+    /// Return the stable serialized label of the failed workflow stage.
     pub fn key(self) -> &'static str {
         match self {
             ReviewStage::Screen => "screen",

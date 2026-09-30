@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[derive(Debug)]
 pub struct BudgetExhausted;
 impl std::fmt::Display for BudgetExhausted {
+    /// Explain why uncached work was deferred without implying that it completed.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("budget_exhausted: request queued for a cached rerun")
     }
@@ -13,6 +14,7 @@ pub struct CallBudget {
     deferred: AtomicU64,
 }
 impl CallBudget {
+    /// Create a shared reservation counter with an optional HTTP-attempt ceiling.
     pub fn new(limit: Option<u64>) -> Self {
         Self {
             limit,
@@ -20,6 +22,7 @@ impl CallBudget {
             deferred: AtomicU64::new(0),
         }
     }
+    /// Atomically reserve one attempt, or count deferred work when the limit is reached.
     pub fn reserve(&self) -> Result<(), BudgetExhausted> {
         if self
             .reserved
@@ -37,6 +40,7 @@ impl CallBudget {
         }
         Ok(())
     }
+    /// Snapshot the configured limit and reserved/deferred attempt counters.
     pub fn summary(&self) -> crate::domain::report::BudgetSummary {
         crate::domain::report::BudgetSummary {
             limit: self.limit,

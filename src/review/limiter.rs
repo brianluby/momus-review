@@ -18,6 +18,7 @@ pub struct Permit {
     gate: Arc<AdaptiveLimiter>,
 }
 impl AdaptiveLimiter {
+    /// Start at up to three in-flight requests, bounded by a positive configured cap.
     pub fn new(cap: usize) -> Arc<Self> {
         Arc::new(Self {
             cap: cap.max(1),
@@ -30,6 +31,7 @@ impl AdaptiveLimiter {
             changed: Notify::new(),
         })
     }
+    /// Wait for capacity and cooldown; the returned permit releases capacity on cancellation.
     pub async fn acquire(self: &Arc<Self>) -> Permit {
         loop {
             // Register before testing capacity; this avoids a lost wakeup.
@@ -51,6 +53,7 @@ impl AdaptiveLimiter {
             }
         }
     }
+    /// Increase capacity after eight healthy responses without exceeding the cap.
     pub fn healthy(&self) {
         let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         s.healthy += 1;
@@ -61,6 +64,7 @@ impl AdaptiveLimiter {
         drop(s);
         self.changed.notify_waiters();
     }
+    /// Halve capacity and extend a shared cooldown, bounded to five minutes.
     pub fn throttled(&self, pause: Duration) {
         let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         s.limit = (s.limit / 2).max(1);
@@ -73,6 +77,7 @@ impl AdaptiveLimiter {
     }
 }
 impl Drop for Permit {
+    /// Release one active slot and wake requests waiting for capacity.
     fn drop(&mut self) {
         let mut s = self.gate.state.lock().unwrap_or_else(|e| e.into_inner());
         s.active -= 1;

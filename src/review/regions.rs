@@ -17,6 +17,7 @@ pub struct RegionSpan {
     pub lines: usize,
 }
 
+/// Persist source region boundaries without storing their full source bodies.
 pub fn region_spans(content: &str, path: &str, max_lines: usize) -> Vec<RegionSpan> {
     function_regions(content, path, max_lines)
         .into_iter()

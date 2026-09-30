@@ -64,6 +64,7 @@ pub async fn screen_source_file(
     screen_source_file_indexed(client, file, test_files, neighbors, None).await
 }
 
+/// Screen a source with optional indexed regions/signatures and bounded related-test context.
 pub async fn screen_source_file_indexed(
     client: &TypeSafeClient,
     file: &SourceFile,
@@ -270,6 +271,7 @@ pub async fn locate_source_signal(
     locate_source_signal_indexed(client, signal, neighbors, None).await
 }
 
+/// Locate and classify a source signal using indexed evidence regions when available.
 pub async fn locate_source_signal_indexed(
     client: &TypeSafeClient,
     signal: &Signal<SourceFile>,
@@ -434,6 +436,7 @@ pub async fn locate_source_signal_indexed(
 
 // ---- Helpers ---------------------------------------------------------
 
+/// Trim a neighboring source to the supplied refinement-context character limit.
 pub(crate) fn compact_neighbor(f: &SourceFile) -> SourceFile {
     let content: String = f
         .content

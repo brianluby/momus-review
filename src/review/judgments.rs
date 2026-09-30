@@ -54,6 +54,7 @@ pub async fn screen_file(
     screen_file_indexed(client, file, changed_tests, None, json!([])).await
 }
 
+/// Screen a diff with indexed source signatures and bounded related changed-test context.
 pub async fn screen_file_indexed(
     client: &TypeSafeClient,
     file: &ChangedFile,
