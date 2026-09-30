@@ -268,6 +268,17 @@ pub struct UsageSummary {
     pub calls: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    pub cache: CacheSummary,
+}
+
+/// Result-cache counters inside `usage`: work units answered from the
+/// local cache vs sent to the API (`adapters::cache`). A hit is not a Jev
+/// call — `usage.calls` counts only requests that left the machine.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CacheSummary {
+    pub hits: u64,
+    pub misses: u64,
 }
 
 /// The full review report. `#[serde(default)]` keeps reads deliberately
@@ -314,7 +325,10 @@ mod tests {
 
         let report = ReviewReport {
             screened_files: 1,
-            matrix: vec![MatrixRow { file: "src/main.rs".into(), probabilities }],
+            matrix: vec![MatrixRow {
+                file: "src/main.rs".into(),
+                probabilities,
+            }],
             findings: vec![Finding {
                 file: "src/main.rs".into(),
                 line: 1,

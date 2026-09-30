@@ -13,13 +13,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Result, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
+use crate::adapters::cache::ResultCache;
 use crate::domain::language::Language;
 use crate::domain::policy::{Dimension, mechanisms_for};
 use crate::domain::redact::{RedactionLog, Redactions, redact_value};
-use crate::domain::report::UsageSummary;
+use crate::domain::report::{CacheSummary, UsageSummary};
 
 const DEFAULT_BASE_URL: &str = "https://api.typesafe.ai";
 const DEFAULT_MODEL: &str = "jev-latest";
@@ -29,7 +30,7 @@ const MAX_RETRIES: usize = 3;
 /// Token usage attached to a `system_one` response. Both hosted Jev and
 /// Winnow report it on every response (measured 2026-09-29, ticket #32);
 /// `Option` keeps a server that omits the block parseable.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Usage {
     /// Winnow sends snake_case; a camelCase server would otherwise read as 0.
@@ -40,7 +41,7 @@ pub struct Usage {
 }
 
 /// A `system_one` response: the model id plus answers keyed by question name.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SystemOneResponse {
     pub model: String,
     pub answers: Map<String, Value>,
@@ -116,7 +117,9 @@ impl ClientConfig {
             .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
         let api_key = var("TYPESAFE_API_KEY");
         if api_key.is_none() && !is_loopback(&base_url) {
-            bail!("TYPESAFE_API_KEY is not set (required unless TYPESAFE_BASE_URL is a local server)");
+            bail!(
+                "TYPESAFE_API_KEY is not set (required unless TYPESAFE_BASE_URL is a local server)"
+            );
         }
         let model = var("TYPESAFE_DEFAULT_MODEL").unwrap_or_else(|| DEFAULT_MODEL.to_string());
         let timeout = match var("TYPESAFE_TIMEOUT_SECS") {
@@ -127,7 +130,13 @@ impl ClientConfig {
             Some(raw) => parse_switch("MOMUS_REDACT", &raw)?,
             None => true,
         };
-        Ok(Self { api_key, base_url, model, timeout, redact })
+        Ok(Self {
+            api_key,
+            base_url,
+            model,
+            timeout,
+            redact,
+        })
     }
 }
 
@@ -142,11 +151,17 @@ fn parse_switch(name: &str, raw: &str) -> Result<bool> {
 
 /// Whether `url` points at this machine (`localhost`, `127.0.0.0/8`, `::1`).
 fn is_loopback(url: &str) -> bool {
-    let Ok(parsed) = reqwest::Url::parse(url) else { return false };
-    let Some(host) = parsed.host_str() else { return false };
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
     let host = host.trim_start_matches('[').trim_end_matches(']');
     host.eq_ignore_ascii_case("localhost")
-        || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// Parses a positive integer setting, naming the variable on error.
@@ -165,6 +180,9 @@ pub struct TypeSafeClient {
     base_url: String,
     model: String,
     usage: Arc<UsageMeter>,
+    cache: Arc<ResultCache>,
+    cache_hits: Arc<AtomicU64>,
+    cache_misses: Arc<AtomicU64>,
     redact: bool,
     redactions: Arc<Mutex<RedactionLog>>,
 }
@@ -174,11 +192,20 @@ impl TypeSafeClient {
     /// `TYPESAFE_TIMEOUT_SECS`, and `MOMUS_REDACT` from the environment. The
     /// key is required unless the base URL is a local server.
     pub fn from_env() -> Result<Self> {
-        Self::from_config(ClientConfig::from_lookup(|name| std::env::var(name).ok())?)
+        Ok(
+            Self::from_config(ClientConfig::from_lookup(|name| std::env::var(name).ok())?)?
+                .with_cache(ResultCache::from_env()),
+        )
     }
 
     fn from_config(config: ClientConfig) -> Result<Self> {
-        let ClientConfig { api_key, base_url, model, timeout, redact } = config;
+        let ClientConfig {
+            api_key,
+            base_url,
+            model,
+            timeout,
+            redact,
+        } = config;
         let http = reqwest::Client::builder().timeout(timeout).build()?;
         Ok(Self {
             http,
@@ -186,9 +213,30 @@ impl TypeSafeClient {
             base_url,
             model,
             usage: Arc::new(UsageMeter::default()),
+            cache: Arc::new(ResultCache::disabled()),
+            cache_hits: Arc::new(AtomicU64::new(0)),
+            cache_misses: Arc::new(AtomicU64::new(0)),
             redact,
             redactions: Arc::new(Mutex::new(RedactionLog::default())),
         })
+    }
+
+    /// Uses a local cache. Clones share model resolutions and counters.
+    pub fn with_cache(mut self, cache: ResultCache) -> Self {
+        self.cache = Arc::new(cache);
+        self
+    }
+
+    /// Bypasses both reads and writes (`--no-cache`).
+    pub fn without_cache(self) -> Self {
+        self.with_cache(ResultCache::disabled())
+    }
+
+    pub fn cache_summary(&self) -> CacheSummary {
+        CacheSummary {
+            hits: self.cache_hits.load(Ordering::Relaxed),
+            misses: self.cache_misses.load(Ordering::Relaxed),
+        }
     }
 
     /// Turns off secret redaction (`--no-redact`): states are sent verbatim.
@@ -203,15 +251,49 @@ impl TypeSafeClient {
     ///
     /// Unless redaction is off, every string in `state` is scrubbed of
     /// secrets first (`domain::redact`); `questions` are policy text we own.
-    pub async fn system_one(&self, mut state: Value, questions: Value) -> Result<SystemOneResponse> {
+    pub async fn system_one(
+        &self,
+        mut state: Value,
+        questions: Value,
+    ) -> Result<SystemOneResponse> {
         if self.redact {
             let mut found = Redactions::default();
             redact_value(&mut state, &mut found);
             if !found.is_empty() {
                 // Held only for a hash insert, never across an await.
-                self.redactions.lock().unwrap_or_else(|e| e.into_inner()).record(found);
+                self.redactions
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .record(found);
             }
         }
+        // Redaction precedes addressing: the key covers exactly the sent state.
+        // An unresolved mutable alias must observe a live response this run.
+        let resolved = self.cache.resolve_model(&self.model);
+        let unresolved_alias = self.model.ends_with("latest") && resolved == self.model;
+        let cached = if !unresolved_alias && self.cache.enabled() {
+            let cache = self.cache.clone();
+            let base_url = self.base_url.clone();
+            let model = self.model.clone();
+            let state = state.clone();
+            let questions = questions.clone();
+            tokio::task::spawn_blocking(move || cache.lookup(&base_url, &model, &state, &questions))
+                .await
+                .ok()
+                .flatten()
+        } else {
+            None
+        };
+        if let Some(value) = cached
+            && let Ok(mut response) = serde_json::from_value::<SystemOneResponse>(value)
+            && response.model == resolved
+            && valid_answers(&response, &questions)
+        {
+            response.usage = None;
+            self.cache_hits.fetch_add(1, Ordering::Relaxed);
+            return Ok(response);
+        }
+        self.cache_misses.fetch_add(1, Ordering::Relaxed);
         let url = format!("{}/v1/systemone", self.base_url);
         let body = json!({ "state": state, "questions": questions, "model": self.model });
 
@@ -233,6 +315,23 @@ impl TypeSafeClient {
             if status.is_success() {
                 let resp: SystemOneResponse = resp.json().await?;
                 self.usage.record(resp.usage);
+                if valid_answers(&resp, &questions) {
+                    self.cache.record_model(&self.model, &resp.model);
+                    if self.cache.enabled() && !resp.model.ends_with("latest") {
+                        // Persist only the typed model and answers, never the
+                        // server's extra fields, usage, questions, or state.
+                        let cached = json!({ "model": resp.model, "answers": resp.answers });
+                        let cache = self.cache.clone();
+                        let base_url = self.base_url.clone();
+                        let model = resp.model.clone();
+                        let state = state.clone();
+                        let questions = questions.clone();
+                        let _ = tokio::task::spawn_blocking(move || {
+                            cache.store(&base_url, &model, &state, &questions, &cached)
+                        })
+                        .await;
+                    }
+                }
                 return Ok(resp);
             }
 
@@ -251,13 +350,36 @@ impl TypeSafeClient {
     /// Cumulative usage of every successful `system_one` call this client
     /// has made (shared across clones, so the whole review reports one total).
     pub fn usage_summary(&self) -> UsageSummary {
-        self.usage.summary()
+        UsageSummary {
+            cache: self.cache_summary(),
+            ..self.usage.summary()
+        }
     }
 
     /// Distinct secret values redacted per rule across the whole review.
     pub fn redaction_summary(&self) -> BTreeMap<String, usize> {
-        self.redactions.lock().unwrap_or_else(|e| e.into_inner()).summary()
+        self.redactions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .summary()
     }
+}
+
+/// Malformed or incomplete successful responses must not poison later runs.
+fn valid_answers(response: &SystemOneResponse, questions: &Value) -> bool {
+    !response.model.is_empty()
+        && questions.as_object().is_some_and(|qs| {
+            qs.iter().all(|(id, q)| match q["type"].as_str() {
+                Some("noul") => response.noul(id).is_ok_and(|n| (0.0..=1.0).contains(&n)),
+                Some("choice") => response
+                    .choice(id)
+                    .is_ok_and(|(_, c)| (0.0..=1.0).contains(&c)),
+                Some("score") => response
+                    .score(id)
+                    .is_ok_and(|(n, c)| n.is_finite() && (0.0..=1.0).contains(&c)),
+                _ => false,
+            })
+        })
 }
 
 /// Per-run usage counters. Atomics, not a mutex: `record` runs on the async
@@ -275,8 +397,10 @@ impl UsageMeter {
     fn record(&self, usage: Option<Usage>) {
         self.calls.fetch_add(1, Ordering::Relaxed);
         if let Some(usage) = usage {
-            self.input_tokens.fetch_add(usage.input_tokens, Ordering::Relaxed);
-            self.output_tokens.fetch_add(usage.output_tokens, Ordering::Relaxed);
+            self.input_tokens
+                .fetch_add(usage.input_tokens, Ordering::Relaxed);
+            self.output_tokens
+                .fetch_add(usage.output_tokens, Ordering::Relaxed);
         }
     }
 
@@ -285,6 +409,7 @@ impl UsageMeter {
             calls: self.calls.load(Ordering::Relaxed),
             input_tokens: self.input_tokens.load(Ordering::Relaxed),
             output_tokens: self.output_tokens.load(Ordering::Relaxed),
+            cache: CacheSummary::default(),
         }
     }
 }
@@ -347,7 +472,12 @@ pub fn choice_criteria(entries: &[(&str, &str)]) -> Value {
 
 /// Builds a `score` criteria array from an ordered rubric of levels.
 pub fn score_criteria(levels: &[&str]) -> Value {
-    Value::Array(levels.iter().map(|l| Value::String((*l).to_string())).collect())
+    Value::Array(
+        levels
+            .iter()
+            .map(|l| Value::String((*l).to_string()))
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -356,7 +486,9 @@ mod tests {
 
     fn config(vars: &[(&str, &str)]) -> Result<ClientConfig> {
         ClientConfig::from_lookup(|name| {
-            vars.iter().find(|(k, _)| *k == name).map(|(_, v)| (*v).to_string())
+            vars.iter()
+                .find(|(k, _)| *k == name)
+                .map(|(_, v)| (*v).to_string())
         })
     }
 
@@ -419,7 +551,10 @@ mod tests {
         let meter = UsageMeter::default();
         meter.record(winnow.usage);
         meter.record(hosted.usage);
-        meter.record(Some(Usage { input_tokens: 8, output_tokens: 0 }));
+        meter.record(Some(Usage {
+            input_tokens: 8,
+            output_tokens: 0,
+        }));
 
         let totals = meter.summary();
         assert_eq!(totals.calls, 3);
@@ -448,6 +583,54 @@ mod tests {
         (url, bodies)
     }
 
+    #[tokio::test]
+    async fn cached_units_resume_without_billing_and_no_cache_bypasses() {
+        let (url, bodies) = recording_server().await;
+        let dir = tempfile::tempdir().unwrap();
+        let make = || stub_client(&url, true).with_cache(ResultCache::open(dir.path().into()));
+        let state = json!({ "unit": "AKIAIOSFODNN7EXAMPLE" });
+        let client = make();
+        client.system_one(state.clone(), json!({})).await.unwrap();
+        client.system_one(state.clone(), json!({})).await.unwrap();
+        assert_eq!(bodies.lock().unwrap().len(), 1);
+        assert_eq!(client.usage_summary().calls, 1);
+        assert_eq!(client.cache_summary(), CacheSummary { hits: 1, misses: 1 });
+        assert_eq!(client.redaction_summary().values().sum::<usize>(), 1);
+        // Pin the resolved model and reopen the directory like a fresh run.
+        let mut resumed = make();
+        resumed.model = "stub".into();
+        resumed.system_one(state.clone(), json!({})).await.unwrap();
+        assert_eq!(resumed.usage_summary().calls, 0);
+        assert_eq!(resumed.cache_summary().hits, 1);
+        resumed
+            .without_cache()
+            .system_one(state, json!({}))
+            .await
+            .unwrap();
+        assert_eq!(bodies.lock().unwrap().len(), 2);
+        // Changed state and policy must miss (empty question map stays valid).
+        client
+            .system_one(json!({ "unit": "changed" }), json!({}))
+            .await
+            .unwrap();
+        client
+            .system_one(
+                json!({ "unit": "changed" }),
+                json!({ "q": { "type": "noul" } }),
+            )
+            .await
+            .unwrap();
+        // Missing answers are never reused, despite a 200 response.
+        client
+            .system_one(
+                json!({ "unit": "changed" }),
+                json!({ "q": { "type": "noul" } }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(bodies.lock().unwrap().len(), 5);
+    }
+
     fn stub_client(url: &str, redact: bool) -> TypeSafeClient {
         let config = config(&[("TYPESAFE_BASE_URL", url)]).unwrap();
         TypeSafeClient::from_config(ClientConfig { redact, ..config }).unwrap()
@@ -460,20 +643,36 @@ mod tests {
         let (url, bodies) = recording_server().await;
         let client = stub_client(&url, true);
         let secret = "AKIAIOSFODNN7EXAMPLE";
-        let state = json!({ "file": { "path": "a.ts", "content": format!("const k = \"{secret}\";\n") } });
+        let state =
+            json!({ "file": { "path": "a.ts", "content": format!("const k = \"{secret}\";\n") } });
         let questions = json!({ "q": noul(json!("mentions AKIAIOSFODNN7EXAMPLE?"), json!({})) });
 
-        client.system_one(state.clone(), questions.clone()).await.unwrap();
+        client
+            .system_one(state.clone(), questions.clone())
+            .await
+            .unwrap();
         client.system_one(state, questions).await.unwrap();
 
         let sent = bodies.lock().unwrap();
         assert_eq!(sent.len(), 2);
         let wire = sent[0].to_string();
-        assert!(!wire.contains(&format!("\"{secret}")), "secret left in state: {wire}");
-        assert_eq!(sent[0]["state"]["file"]["content"], "const k = \"<redacted:aws-access-key>\";\n");
+        assert!(
+            !wire.contains(&format!("\"{secret}")),
+            "secret left in state: {wire}"
+        );
+        assert_eq!(
+            sent[0]["state"]["file"]["content"],
+            "const k = \"<redacted:aws-access-key>\";\n"
+        );
         assert_eq!(sent[0]["questions"], sent[1]["questions"]);
-        assert_eq!(sent[0]["questions"]["q"]["instructions"], "mentions AKIAIOSFODNN7EXAMPLE?");
-        assert_eq!(client.redaction_summary(), BTreeMap::from([("aws-access-key".to_string(), 1)]));
+        assert_eq!(
+            sent[0]["questions"]["q"]["instructions"],
+            "mentions AKIAIOSFODNN7EXAMPLE?"
+        );
+        assert_eq!(
+            client.redaction_summary(),
+            BTreeMap::from([("aws-access-key".to_string(), 1)])
+        );
     }
 
     #[tokio::test]
@@ -494,7 +693,13 @@ mod tests {
                 "usage": { "inputTokens": 10, "outputTokens": 4 } }"#,
         )
         .unwrap();
-        assert_eq!(resp.usage, Some(Usage { input_tokens: 10, output_tokens: 4 }));
+        assert_eq!(
+            resp.usage,
+            Some(Usage {
+                input_tokens: 10,
+                output_tokens: 4
+            })
+        );
     }
 
     #[test]
@@ -512,7 +717,12 @@ mod tests {
     #[test]
     fn mechanism_criteria_carry_the_file_languages_vocabulary() {
         let keys = |value: &Value| -> Vec<String> {
-            value.as_object().expect("criteria is a map").keys().cloned().collect()
+            value
+                .as_object()
+                .expect("criteria is a map")
+                .keys()
+                .cloned()
+                .collect()
         };
 
         let rust = keys(&mechanism_criteria("src/lib.rs", Dimension::Correctness));
