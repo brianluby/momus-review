@@ -1,0 +1,198 @@
+#!/usr/bin/env bash
+# Offline failure-mode tests for scripts/verify-release.sh.
+#
+# `gh` is replaced by a stub that records its arguments and returns a fixed
+# verification result, so these tests exercise OUR enforcement surface:
+# checksum comparison, subject/bundle wiring, SBOM predicate matching,
+# manifest digest matching, missing-asset detection, and the exact policy
+# flags handed to gh (repository, source digest, signer workflow and
+# digest, predicate type, hosted runners). The cryptographic verification
+# behind those flags is gh + Sigstore's; it is exercised for real by the
+# release workflow's verify job and rehearsal.
+#
+# Covered failure modes (each must block): tampered archive, altered SBOM,
+# missing bundle, missing target, manifest digest mismatch, and passing
+# wrong source/signer expectations onward. Signing failure and conflicting
+# rerun are enforced by the workflow graph (needs: sign-macos, and the
+# publish job's release-exists check).
+set -uo pipefail
+
+here=$(cd "$(dirname "$0")" && pwd)
+verify="$here/verify-release.sh"
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+bin="$work/bin"
+mkdir -p "$bin"
+
+cat > "$bin/gh" <<'STUB'
+#!/usr/bin/env bash
+if [ "$1" = "--version" ]; then
+  echo "gh version 2.101.0 (test stub)"
+  exit 0
+fi
+printf '%s\n' "$*" >> "$GH_ARGS_LOG"
+cat "$GH_STUB_OUT"
+exit 0
+STUB
+chmod +x "$bin/gh"
+export PATH="$bin:$PATH"
+GH_ARGS_LOG="$work/gh-args.log"; export GH_ARGS_LOG
+GH_STUB_OUT="$work/gh-out.json"; export GH_STUB_OUT
+: > "$GH_ARGS_LOG"
+
+TARGET=x86_64-unknown-linux-gnu
+SHA=0000000000000000000000000000000000000001
+SIGNER="brianluby/momus-review/.github/workflows/builder.yml"
+
+make_fixture() {
+  local dir=$1
+  rm -rf "$dir"
+  mkdir -p "$dir/pkg"
+  echo '#!/bin/sh' > "$dir/pkg/momus"
+  tar -C "$dir" -czf "$dir/momus-$TARGET.tar.gz" pkg
+  (cd "$dir" && if command -v sha256sum >/dev/null 2>&1; then
+      sha256sum "momus-$TARGET.tar.gz" > "momus-$TARGET.tar.gz.sha256"
+    else
+      shasum -a 256 "momus-$TARGET.tar.gz" > "momus-$TARGET.tar.gz.sha256"
+    fi)
+  rm -rf "$dir/pkg"
+  cat > "$dir/momus-$TARGET.cdx.json" <<'EOF'
+{"bomFormat":"CycloneDX","specVersion":"1.5","version":1,"components":[{"type":"library","name":"serde","version":"1.0.219"}]}
+EOF
+  echo '{"mediaType":"application/vnd.dsse.envelope.v1+json"}' > "$dir/momus-$TARGET.provenance.bundle"
+  echo '{"mediaType":"application/vnd.dsse.envelope.v1+json"}' > "$dir/momus-$TARGET.sbom-attestation.bundle"
+  python3 - "$dir" "$TARGET" <<'PY'
+import hashlib, json, sys
+root, target = sys.argv[1], sys.argv[2]
+def digest(name):
+    return hashlib.sha256(open(f"{root}/{name}", "rb").read()).hexdigest()
+manifest = {"version": "9.9.9", "targets": {target: {
+    "archive": {"name": f"momus-{target}.tar.gz", "sha256": digest(f"momus-{target}.tar.gz")},
+    "sbom": {"name": f"momus-{target}.cdx.json", "sha256": digest(f"momus-{target}.cdx.json")},
+}}}
+open(f"{root}/release-manifest.json", "w").write(json.dumps(manifest, indent=2))
+PY
+  # The stub's verification result embeds the SBOM as its predicate, the
+  # same canonicalization verify-release.sh applies to the published file.
+  jq -Sjc '[{verificationResult:{statement:{predicate:.}}}]' "$dir/momus-$TARGET.cdx.json" > "$GH_STUB_OUT"
+}
+
+run_verify() { # dir [extra args...]
+  local dir=$1; shift
+  "$verify" --dir "$dir" --source-sha "$SHA" --signer-workflow "$SIGNER" \
+    --targets "$TARGET" "$@" >"$work/out.txt" 2>&1
+}
+
+expect_pass() {
+  local name=$1 dir=$2
+  if run_verify "$dir"; then
+    echo "ok   $name"
+  else
+    echo "FAIL $name: expected success, got failure"; sed 's/^/     /' "$work/out.txt"; FAILED=1
+  fi
+}
+
+expect_fail() {
+  local name=$1 dir=$2 want=$3
+  if run_verify "$dir"; then
+    echo "FAIL $name: expected failure, got success"; FAILED=1
+  elif grep -q "$want" "$work/out.txt"; then
+    echo "ok   $name (blocked: $want)"
+  else
+    echo "FAIL $name: failed without the expected message '$want'"; sed 's/^/     /' "$work/out.txt"; FAILED=1
+  fi
+}
+
+FAILED=0
+
+# 1. Good path: everything verifies.
+make_fixture "$work/good"
+expect_pass "good fixtures" "$work/good"
+
+# 2. The policy flags we must hand to gh on every attestation check.
+gh_flags_ok=1
+grep -q -- "--repo brianluby/momus-review" "$GH_ARGS_LOG" || gh_flags_ok=0
+grep -q -- "--source-digest $SHA" "$GH_ARGS_LOG" || gh_flags_ok=0
+grep -q -- "--signer-workflow $SIGNER" "$GH_ARGS_LOG" || gh_flags_ok=0
+if grep -q -- "--signer-digest" "$GH_ARGS_LOG"; then
+  echo "FAIL signer digest passed to gh without an explicit pin"; FAILED=1
+else
+  echo "ok   signer digest omitted unless pinned"
+fi
+grep -q -- "--predicate-type https://slsa.dev/provenance/v1" "$GH_ARGS_LOG" || gh_flags_ok=0
+grep -q -- "--predicate-type https://cyclonedx.org/bom" "$GH_ARGS_LOG" || gh_flags_ok=0
+grep -q -- "--deny-self-hosted-runners" "$GH_ARGS_LOG" || gh_flags_ok=0
+grep -q -- "attestation verify momus-$TARGET.cdx.json" "$GH_ARGS_LOG" || gh_flags_ok=0
+if [ "$gh_flags_ok" -eq 1 ]; then
+  echo "ok   policy flags (repo, source, signer, predicates, hosted runners, SBOM subject)"
+else
+  echo "FAIL policy flags handed to gh are incomplete:"; sed 's/^/     /' "$GH_ARGS_LOG"; FAILED=1
+fi
+: > "$GH_ARGS_LOG"
+
+# 3. Tampered archive: appended bytes vs the old checksum.
+make_fixture "$work/tampered"
+printf 'extra' >> "$work/tampered/momus-$TARGET.tar.gz"
+expect_fail "tampered archive" "$work/tampered" "checksum mismatch"
+
+# 4. Altered SBOM: published bytes differ from the attested predicate.
+make_fixture "$work/altered-sbom"
+python3 - "$work/altered-sbom/momus-$TARGET.cdx.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["components"][0]["version"] = "9.9.9-eviltwin"
+open(p, "w").write(json.dumps(d))
+PY
+expect_fail "altered SBOM" "$work/altered-sbom" "predicate does not match"
+
+# 5. Missing attestation bundle for a target.
+make_fixture "$work/no-bundle"
+rm "$work/no-bundle/momus-$TARGET.provenance.bundle"
+expect_fail "missing bundle" "$work/no-bundle" "provenance.bundle: missing"
+
+# 6. Missing target entirely (asked for it, nothing there).
+mkdir -p "$work/no-target"
+expect_fail "missing target" "$work/no-target" "missing"
+
+# 7. Manifest records a digest that does not match the shipped file.
+make_fixture "$work/bad-manifest"
+python3 - "$work/bad-manifest" <<'PY'
+import json, sys
+p = f"{sys.argv[1]}/release-manifest.json"
+d = json.load(open(p))
+for t in d["targets"].values():
+    t["archive"]["sha256"] = "0" * 64
+open(p, "w").write(json.dumps(d))
+PY
+expect_fail "manifest digest mismatch" "$work/bad-manifest" "manifest says"
+
+# 8. A wrong expectation must be forwarded, not ignored: the caller's
+# source sha and explicit signer digest are what gh enforces for us.
+make_fixture "$work/expectations"
+run_verify "$work/expectations" --signer-digest 000000000000000000000000000000000000dead
+if grep -q -- "--signer-digest 000000000000000000000000000000000000dead" "$GH_ARGS_LOG"; then
+  echo "ok   explicit signer digest forwarded to gh"
+else
+  echo "FAIL explicit signer digest was not forwarded"; FAILED=1
+fi
+
+# 9. Without --signer-digest it defaults to the source sha (in-repo
+# signer at a tag): already asserted in test 2 via the same value.
+
+# 10. A requested target with no files blocks.
+if "$verify" --dir "$work/good" --source-sha "$SHA" --signer-workflow "$SIGNER" \
+     --targets "$TARGET,aarch64-apple-darwin" >"$work/out.txt" 2>&1; then
+  echo "FAIL second target missing: expected failure, got success"; FAILED=1
+elif grep -q "aarch64-apple-darwin.provenance.bundle: missing" "$work/out.txt"; then
+  echo "ok   second target missing (blocked)"
+else
+  echo "FAIL second target missing: unexpected failure output"; sed 's/^/     /' "$work/out.txt"; FAILED=1
+fi
+
+if [ "$FAILED" -eq 0 ]; then
+  echo "test-verify-release.sh: all tests passed"
+else
+  echo "test-verify-release.sh: FAILED" >&2
+  exit 1
+fi

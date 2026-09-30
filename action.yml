@@ -60,6 +60,16 @@ inputs:
       the action's own source is built.
     required: false
     default: latest
+  verify-attestations:
+    description: >-
+      Artifact-attestation policy for downloaded binaries. `required`
+      (default) verifies SLSA provenance and the SBOM attestation against
+      the release tag's source commit before extraction — releases v0.3.0
+      and later. `legacy` allows pre-attestation releases (checksum only);
+      set it explicitly when pinning a version older than v0.3.0. Source
+      builds are trusted checkouts and are not attested.
+    required: false
+    default: required
   release-repo:
     description: >-
       Repository whose releases hold the momus binaries. Defaults to this
@@ -115,6 +125,7 @@ runs:
       shell: bash
       env:
         VERSION: ${{ inputs.version }}
+        VERIFY_ATTESTATIONS: ${{ inputs.verify-attestations }}
         GH_TOKEN: ${{ inputs.github-token }}
         ACTION_PATH: ${{ github.action_path }}
         RELEASE_REPO: ${{ inputs.release-repo || github.action_repository || github.repository }}
@@ -123,7 +134,8 @@ runs:
         mkdir -p "$root/bin"
         from_source() {
           echo "building momus from $ACTION_PATH"
-          rustup toolchain install stable --profile minimal
+          # rust-toolchain.toml pins the exact channel for source installs.
+          rustup toolchain install --profile minimal
           cargo install --locked --path "$ACTION_PATH" --bin momus --root "$root"
         }
         case "$RUNNER_OS-$RUNNER_ARCH" in
@@ -143,8 +155,30 @@ runs:
           tag=()
           if [ "$VERSION" != latest ]; then tag=("$VERSION"); fi
           if gh release download "${tag[@]}" --repo "$RELEASE_REPO" \
-               --pattern "momus-$target.tar.gz" --pattern "momus-$target.tar.gz.sha256" --dir "$dl"; then
+               --pattern "momus-$target.tar.gz" --pattern "momus-$target.tar.gz.sha256" \
+               --pattern "momus-$target.cdx.json" --pattern "momus-$target.provenance.bundle" \
+               --pattern "momus-$target.sbom-attestation.bundle" \
+               --pattern "release-manifest.json" --pattern "release-manifest.json.sha256" --dir "$dl"; then
             (cd "$dl" && shasum -a 256 -c "momus-$target.tar.gz.sha256")
+            if [ "$VERIFY_ATTESTATIONS" != legacy ]; then
+              # The expected source commit is resolved from the selected
+              # (immutable) tag, outside the release assets; the
+              # attestations must bind these exact bytes to that commit and
+              # to our signing workflow. On failure this step fails: never
+              # fall back to source after authenticity verification fails.
+              resolved_tag=$([ "$VERSION" = latest ] \
+                && gh api "repos/$RELEASE_REPO/releases/latest" -q .tag_name || echo "$VERSION")
+              ref=$(gh api "repos/$RELEASE_REPO/git/ref/tags/$resolved_tag")
+              sha=$(jq -r .object.sha <<<"$ref")
+              if [ "$(jq -r .object.type <<<"$ref")" = tag ]; then
+                sha=$(gh api "repos/$RELEASE_REPO/git/tags/$sha" -q .object.sha)
+              fi
+              echo "verifying attestations for momus $resolved_tag ($sha) from $RELEASE_REPO"
+              "$ACTION_PATH/scripts/verify-release.sh" \
+                --dir "$dl" --source-sha "$sha" --targets "$target"
+            else
+              echo "::notice::legacy attestation policy: checksum-only verification for $VERSION"
+            fi
             tar -xzf "$dl/momus-$target.tar.gz" -C "$dl"
             install -m 0755 "$dl/momus-$target/momus" "$root/bin/momus"
           else

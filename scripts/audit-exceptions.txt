@@ -1,0 +1,5 @@
+# RustSec advisories temporarily accepted by scripts/audit.sh.
+# One exception per line: RUSTSEC-ID|YYYY-MM-DD|reason
+# The date is a hard expiry: on it the run fails until the exception is
+# renewed with a fresh reason or the dependency is fixed.
+# Keep this list empty; every entry is supply-chain debt.

@@ -5,13 +5,17 @@ requests.
 
 ## Install
 
-- **Prebuilt binaries**: every `v*` release carries
-  `momus-<target>.tar.gz` plus a `.sha256` for `x86_64-unknown-linux-gnu`,
-  `aarch64-unknown-linux-gnu`, and `aarch64-apple-darwin`
-  (`.github/workflows/release.yml`). Linux builds link against Ubuntu
-  22.04's glibc so they run on older hosts too.
+- **Prebuilt binaries**: every `v*` release from v0.3.0 on carries, per
+  target, `momus-<target>.tar.gz` plus `.sha256`, a CycloneDX 1.5 SBOM
+  (`momus-<target>.cdx.json`) and signed provenance/SBOM attestation
+  bundles for `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, and
+  `aarch64-apple-darwin` (`.github/workflows/release.yml`). Linux builds
+  link against Ubuntu 22.04's glibc so they run on older hosts too.
+  Verify a download with `scripts/verify-release.sh` (docs/slsa.md);
+  releases before v0.3.0 have checksums only.
 - **From source**: `cargo install --locked --git https://github.com/brianluby/momus-review`
-  (binary `momus`); `cargo run -q --bin momus --` for development.
+  (binary `momus`); `cargo run -q --bin momus --` for development. The
+  exact toolchain is pinned by `rust-toolchain.toml`.
 - No runtime beyond the binary: `momus review ~/repos/anything` just works.
 - Config comes from the environment (`TYPESAFE_API_KEY`, …; see README
   "Configuration"). The report defaults to `./reviews/latest.json` in the
@@ -21,8 +25,10 @@ requests.
 ## CI
 
 - **GitHub Action** (`action.yml` at the repo root): on `pull_request`,
-  downloads the release binary for the runner and verifies its checksum,
-  runs `momus review --base <PR base sha>`, optionally uploads SARIF to code
+  downloads the release binary for the runner, verifies its checksum and
+  (for v0.3.0+ releases, by default) its provenance and SBOM attestations
+  against the selected tag's source commit, runs `momus review --base <PR
+  base sha>`, optionally uploads SARIF to code
   scanning, then `momus github-review` posts inline comments and a sticky
   summary. With no prebuilt binary (or `version: source`) it builds the
   action's own checkout with `cargo install --locked`. Usage: README "CI".
@@ -46,12 +52,16 @@ requests.
 ## Releasing
 
 1. Bump `version` in `Cargo.toml` (and `Cargo.lock`), merge to `main`.
-2. Tag and push: `git tag v0.1.0 && git push origin v0.1.0`. The workflow
-   refuses a tag that does not match `Cargo.toml`, runs the tests on every
-   target, creates the release with generated notes, and moves the major
-   tag (`v0`) to the release so `@v0` callers pick it up.
-3. `workflow_dispatch` on the release workflow builds the same archives as
-   run artifacts without publishing anything, for a dry run.
+2. Rehearse: `workflow_dispatch` the release workflow on `main`. It runs
+   the full chain — audit, all three targets, SBOM generation and
+   validation, Apple signing/notarization, attestations and consumer
+   verification — without publishing or moving tags. A release is cut only
+   after a passing rehearsal and review.
+3. Tag and push: `git tag v0.3.0 && git push origin v0.3.0`. The workflow
+   refuses a tag that does not match `Cargo.toml`, refuses to overwrite an
+   existing release, requires immutable releases, verifies the draft as a
+   consumer before publishing, and moves the major tag (`v0`) only after
+   verified publication. The full per-release inventory is in docs/slsa.md.
 
 ## Package names
 

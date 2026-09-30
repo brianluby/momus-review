@@ -66,8 +66,12 @@ request content with a write token, so:
 - **No script injection**: every input and event field reaches the action's
   scripts through `env`, never `${{ }}` inside `run`.
 - **Binary integrity**: the downloaded release archive is checked against
-  its `.sha256`; a mismatch fails the step (no silent fallback). Third-party
-  actions are pinned to commit SHAs.
+  its `.sha256`, and (default `verify-attestations: required`) its SLSA
+  provenance and SBOM attestations are verified against the selected tag's
+  source commit before extraction; any mismatch fails the step (no silent
+  fallback). `verify-attestations: legacy` documents the checksum-only
+  behavior for pre-v0.3.0 releases. Third-party actions are pinned to
+  commit SHAs; see docs/slsa.md for the full provenance model.
 - **Report stays off the log**: `momus review`'s stdout (the report, with
   unredacted `evidence`) goes to `/dev/null`; the report file stays in
   `RUNNER_TEMP`.
@@ -111,6 +115,19 @@ warm the default branch or sibling PRs. A custom trusted base-branch job can see
 that cache only with the action's exact `momus-work-v1-<OS>-<branch>-` key
 prefix and `RUNNER_TEMP/momus-work/{cache,index}` paths. The shipped sharded
 `scan.yml` uses incompatible keys and paths and cannot seed the action cache. Raw review reports are never part of the work cache.
+
+## Dependency auditing
+
+`scripts/audit.sh` gates releases and CI on the RustSec advisory database
+(`cargo audit`, pinned and installed `--locked`). Exceptions live in
+`scripts/audit-exceptions.txt`, one per line
+(`RUSTSEC-ID|YYYY-MM-DD|reason`); the date is a hard expiry — on it the run
+fails until the exception is renewed with a fresh reason or the dependency
+is fixed. An advisory-database outage fails the release gate (no release
+ships unaudited) and only warns in PR CI so an upstream outage cannot
+block unrelated pull requests. Broader license/source policy (cargo-deny)
+is a separate later step. The full release supply-chain model — SBOMs,
+attestations, verification, SLSA levels — is documented in docs/slsa.md.
 
 ## Residual Risks
 

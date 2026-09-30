@@ -187,6 +187,7 @@ then `momus github-review`. Inputs:
 | `max-comments` | `10` | new inline comments per run; the rest go in the summary |
 | `sarif` | `false` | also upload SARIF to code scanning (add `security-events: write`) |
 | `version` | `latest` | a release tag, `latest`, or `source` to build the action's own checkout |
+| `verify-attestations` | `required` | verify provenance/SBOM attestations before using a downloaded binary (`legacy` for pre-v0.3.0 releases) |
 | `github-token` | `github.token` | token for reading the PR and posting |
 
 Every run uploads a `momus-report` artifact (7-day retention): the report
