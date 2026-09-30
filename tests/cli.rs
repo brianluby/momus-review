@@ -499,3 +499,120 @@ async fn cold_and_warm_indexes_send_identical_requests_and_cached_reruns_make_no
         assert!(changed["usage"]["cache"]["hits"].as_u64().unwrap() > 0);
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn budget_is_a_hard_http_cap_and_cached_units_resume_for_free() {
+    let (url, bodies) = capturing_stub_server().await;
+    let dir = two_file_branch();
+    let repo = dir.path().to_path_buf();
+    for limit in [0, 1, 10] {
+        let repo = repo.clone();
+        let url = url.clone();
+        let before = bodies.lock().unwrap().len();
+        let out = tokio::task::spawn_blocking(move || {
+            Command::new(env!("CARGO_BIN_EXE_momus"))
+                .args(["scan", "--no-refine", "--budget", &format!("calls={limit}")])
+                .current_dir(&repo)
+                .env("TYPESAFE_BASE_URL", url)
+                .env("TYPESAFE_DEFAULT_MODEL", "stub")
+                .env_remove("TYPESAFE_API_KEY")
+                .env("MOMUS_CONCURRENCY", "1")
+                .env("MOMUS_REPORT", repo.join("report.json"))
+                .output()
+                .unwrap()
+        })
+        .await
+        .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let r: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let attempts = bodies.lock().unwrap().len() - before;
+        assert!(attempts <= limit as usize);
+        assert_eq!(r["budget"]["reserved"].as_u64().unwrap(), attempts as u64);
+        if limit < 3 {
+            assert_eq!(r["partial"], true);
+        }
+        if limit == 10 {
+            assert!(r["usage"]["cache"]["hits"].as_u64().unwrap() > 0);
+        }
+        assert!(String::from_utf8_lossy(&out.stderr).contains("momus_metrics"));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shards_merge_the_same_matrix_and_confidence_and_reject_dirty_inventory() {
+    let (url, _) = capturing_stub_server().await;
+    let dir = two_file_branch();
+    let repo = dir.path().to_path_buf();
+    let run = |args: Vec<String>, report: &str| {
+        let repo = repo.clone();
+        let url = url.clone();
+        let report = report.to_string();
+        tokio::task::spawn_blocking(move || {
+            Command::new(env!("CARGO_BIN_EXE_momus"))
+                .args(args)
+                .current_dir(&repo)
+                .env("TYPESAFE_BASE_URL", url)
+                .env("TYPESAFE_DEFAULT_MODEL", "stub")
+                .env_remove("TYPESAFE_API_KEY")
+                .env("MOMUS_REPORT", repo.join(report))
+                .env("MOMUS_CONCURRENCY", "1")
+                .output()
+                .unwrap()
+        })
+    };
+    let full = run(vec!["scan".into(), "--no-refine".into()], "full.json")
+        .await
+        .unwrap();
+    assert!(
+        full.status.success(),
+        "{}",
+        String::from_utf8_lossy(&full.stderr)
+    );
+    let full: serde_json::Value = serde_json::from_slice(&full.stdout).unwrap();
+    for i in 1..=5 {
+        let out = run(
+            vec![
+                "scan".into(),
+                "--no-refine".into(),
+                "--shard".into(),
+                format!("{i}/5"),
+            ],
+            &format!("shard-{i}.json"),
+        )
+        .await
+        .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let r: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(r["partial"], true);
+        assert_eq!(r["pRevert"], 0.0);
+    }
+    let merge_args = || {
+        std::iter::once("merge".to_string())
+            .chain((1..=5).map(|i| format!("shard-{i}.json")))
+            .collect()
+    };
+    let merged = run(merge_args(), "merged.json").await.unwrap();
+    assert!(
+        merged.status.success(),
+        "{}",
+        String::from_utf8_lossy(&merged.stderr)
+    );
+    let merged: serde_json::Value = serde_json::from_slice(&merged.stdout).unwrap();
+    let mut a = full["matrix"].as_array().unwrap().clone();
+    a.sort_by_key(|r| r["file"].as_str().unwrap().to_string());
+    assert_eq!(serde_json::json!(a), merged["matrix"]);
+    assert_eq!(full["findings"], merged["findings"]);
+    assert_eq!(full["pRevert"], merged["pRevert"]);
+    fs::write(repo.join("a.rs"), "pub fn changed() {}\n").unwrap();
+    let dirty = run(merge_args(), "dirty.json").await.unwrap();
+    assert!(!dirty.status.success());
+    assert!(String::from_utf8_lossy(&dirty.stderr).contains("inventory"));
+}

@@ -100,7 +100,7 @@ pub const MIN_META_JUDGE_CONFIDENCE: f64 = 0.55;
 /// documents the original budget for reference.
 pub const MAX_FOLLOW_UPS: usize = 8;
 pub const MAX_PROFILES: usize = 5;
-pub const CONCURRENCY: usize = 3;
+pub const CONCURRENCY: usize = 16;
 
 // ---- Refinement: post-locate judgments (see `review/refine`) ------------
 

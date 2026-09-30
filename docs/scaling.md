@@ -24,7 +24,7 @@ the run.
 - A single failed screen used to abort the whole run, and only after every
   screen had been sent; #34 added failure isolation — failed units are
   skipped and recorded, with a circuit breaker (`review/workflow.rs`).
-- Everything runs in one process at a fixed concurrency (3, or
+- HTTP requests share an adaptive gate (starts at 3, caps at 16 or
   `MOMUS_CONCURRENCY`), with a local content-addressed answer cache: unchanged requests reuse results.
 - Each Jev `system_one` call is stateless, so context cannot be "stored" in
   the model between calls; it has to be rebuilt, compactly, per request.
@@ -113,18 +113,47 @@ Oversized or NUL-containing inputs fall back to the ordinary region splitter;
 Git discovery retains its existing guarded-read exclusions for unreadable and
 binary files. Index files are local context metadata and must stay out of Git.
 
-### 4. Shards and merge
+### 4. Shards and one global merge
 
-A planner writes the unit list; `momus scan --shard i/N` runs one slice,
-assigned by a stable hash of the file path (so each shard's cache stays
-warm), and writes a partial report. `momus merge` combines the partial
-reports and runs the stages that need the whole picture: cross-file dedupe,
-pairwise ranking, `pRevert`, history, SARIF, and `github-review`. In CI that
-is an Actions matrix of N scan jobs followed by one merge job.
+`momus scan --shard i/N` partitions source paths with SHA-256 (1-based,
+N <= 256). Each partial records the complete source/test inventory digest,
+expected paths, model/server and configuration. It runs screening, profiles,
+location and suppression locally. It defers **all** refinement and enrichment
+until `momus merge`, so dedupe, taint, counterfactual, ensemble and pairwise
+ranking keep their original global caps. Confidence, history, SARIF and
+`github-review` also run only on the merged report. Partial reports cannot be
+published. A follow-up cap is rejected on shards because applying it per shard
+would change the global selection.
 
-Per-finding refinement (taint, counterfactual, ensemble) can run in the
-shard; their top-K caps become per-shard, which changes semantics slightly
-and needs an eval check.
+Merge rejects missing/duplicate/incompatible shards, wrongly assigned files,
+unaccounted inventory paths, and a checkout whose discovered bytes changed.
+Use a pinned `TYPESAFE_DEFAULT_MODEL` for every shard and the merger; mutable
+aliases cannot establish the same model before a merge starts. Source/test
+context stays global: partitioning changes ownership, not context availability.
+
+The reusable `.github/workflows/scan.yml` has plan/build, scan matrix and merge
+jobs. It fixes every target checkout to the same head SHA, builds the tool at
+the reusable workflow commit, skips fork PRs/missing secrets, restores per-shard
+cache/index data, and uploads **only redacted partials** with one-day retention.
+Each matrix job uses a cap of 4; account-wide concurrency is shards times 4.
+The merged result produces SARIF/history, and publishes once when called from
+a same-repository PR workflow. Dispatch runs produce SARIF without PR posting.
+Scopes are whitespace-separated directories, as in the existing review workflow.
+
+```yaml
+jobs:
+  scan:
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: brianluby/momus-review/.github/workflows/scan.yml@<immutable-commit>
+    with:
+      shards: 4
+      paths: "."
+      model: jev-1.13.0
+    secrets:
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+```
 
 ### 5. Tiered screening under a budget
 
@@ -210,3 +239,27 @@ repos practical.
 - **Cache invalidation on policy change.** The questions JSON is in the key,
   so any wording change invalidates every result. That is correct, but a
   policy tweak then costs a full re-scan.
+
+## Budget and adaptive gate implementation
+
+`--budget calls=N` is a shared atomic HTTP-attempt cap, including retries,
+across every stage. Cache hits are checked first and cost zero attempts.
+Budget-exhausted work is recorded instead of tripping the failure breaker.
+Priorities combine persisted role/priority profiles, finding hotspots, Git churn
+and conservative path role hints; ties use path order. This schedules files,
+then their existing stages; it does not claim an optimal value-of-information
+planner. Reruns resume cached successful units; failed/uncached units retry.
+
+`--tiered` asks one cheap question for each file whose complete content fits the
+context budget. Only probabilities below 0.05 skip full screening; uncertain,
+failed, and oversized files retain full screening. Dismissals remain explicit
+and the report remains partial. Default scans never use this heuristic. A paired
+Juice Shop evaluation must show no loss of baseline finding coverage and curated
+security-route coverage before promoting it to default behavior.
+
+Every client clone shares one adaptive gate. Eight healthy responses increase
+capacity by one, up to `MOMUS_CONCURRENCY` (default 16). HTTP 429/529 halve the
+current capacity and establish a shared cooldown; numeric Retry-After is honored
+up to five minutes. Permits are released before retry sleeps and on cancellation.
+Transport/other 5xx retries keep the existing bounded backoff. Healthy cached
+answers neither consume permits nor inflate the success ramp.

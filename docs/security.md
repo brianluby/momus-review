@@ -148,3 +148,8 @@ that branch's cache. Raw review reports are never part of the work cache.
   same-origin feedback writes.
 - Fail-loud I/O: skip only on benign-race errnos.
 - One egress point to the Jev API, redacted; publish only redacted text.
+
+Sharded Actions runs use `scan --sanitized-report` before artifact exchange.
+Raw partials stay in runner temporary storage; only secret-redacted evidence
+crosses jobs. The merger requires identical inventory digests and pinned model
+identity. Partial shards cannot be sent through `github-review`.
