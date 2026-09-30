@@ -103,26 +103,39 @@ release-exists check and immutable releases. A `workflow_dispatch` run on
 attestations, verification — without publishing or moving tags; a real
 release happens only after a passing rehearsal and review.
 
-## Isolated builder
+## Isolated builder and attestation
 
-`.github/workflows/builder.yml` is the vetted builder: fixed commands, a
-closed target allowlist, and a single caller input (`mode: build|attest`)
-that cannot carry shell, paths or versions. `release.yml` calls it at a
-pinned commit (`BUILDER_PIN`) that is bumped deliberately with the same
-review bar as the release workflow. The build (which executes `build.rs`
-scripts of dependencies) has no signing credentials; the attest job holds
-the repository's only `id-token`/`attestations` grants and executes no
-repository code — it downloads artifacts, hashes them, and invokes the
-SHA-pinned `actions/attest`. Apple credentials stay in the separate
-`brianluby/apple-signing` reusable workflow and its protected environment.
-Because attestations are signed by the builder, consumers pin the builder
-workflow path (`--signer-workflow`); release-time verification also pins
-its digest.
+The build and the attestation machinery are two vetted reusable workflows,
+both pinned by `release.yml` at the same commit and both with fixed
+commands and a closed target allowlist — no caller inputs at all, so no
+caller-controlled shell, paths or versions reach them:
 
-Bootstrap note: the pin refers to the commit that introduced
-`builder.yml`; until `release.yml`'s pin exists on the default branch the
-two files cannot change atomically, so the pin lands in the immediately
-following commit of the same pull request.
+- `.github/workflows/builder.yml` builds, tests, generates and validates
+  the target SBOMs, and packages. It needs nothing beyond
+  `contents: read`, and it is where dependency `build.rs` scripts execute.
+- `.github/workflows/attest.yml` freezes final-byte checksums and creates
+  the attestations. Its job holds the repository's only
+  `id-token`/`attestations` grants and executes no repository code —
+  artifact downloads, hashing, and the SHA-pinned `actions/attest`.
+
+They are separate files for a reason: GitHub validates every nested job of
+a called workflow against the caller's grants regardless of job-level
+`if:` gating, so one workflow containing both build and attest would force
+the build call to carry the signing permissions, and the compiler would
+sit one bug away from signing material. Apple credentials stay in the
+separate `brianluby/apple-signing` reusable workflow and its protected
+environment, running between the two calls.
+
+Because attestations are signed by `attest.yml`, that file is the signer
+whose identity consumers pin (`scripts/verify-release.sh
+--signer-workflow`, the default); release-time verification also pins its
+digest, and the release manifest records it. The shared pin is bumped
+deliberately with the same review bar as the release workflow.
+
+Bootstrap note: the pins refer to a commit that contains both files; until
+that commit exists on the default branch the files and the pin cannot
+land atomically, so the pin lands in the immediately following commit of
+the same pull request.
 
 ## SLSA v1.2 Build level assessment
 
@@ -171,10 +184,11 @@ Requirement/evidence/gap matrix (SLSA v1.2 Build requirements):
 - **Release**: push `vX.Y.Z` matching `Cargo.toml`. The pipeline refuses
   mismatches, existing releases, non- immutable publication, and any
   verification failure.
-- **Bump the builder**: change `builder.yml`, land it, then update the
-  builder commit in all five of its `release.yml` sites (the two
-  reusable-workflow calls, the manifest's `signer_digest`, and the two
-  `--signer-digest` verifications) in the next commit of the same PR.
+- **Bump the builder/attest workflows**: change `builder.yml` and/or
+  `attest.yml`, land them, then update the pinned commit at all five of
+  its `release.yml` sites (the two reusable-workflow calls, the manifest's
+  `signer_digest`, and the two `--signer-digest` verifications) in the
+  next commit of the same PR.
 - **Toolchain/generators**: `rust-toolchain.toml` pins the channel; the
   workflow env pins `cargo-cyclonedx`, `cargo-audit`, the CycloneDX schema
   commit, `jsonschema` and `actionlint`. Bumps are deliberate and recorded
