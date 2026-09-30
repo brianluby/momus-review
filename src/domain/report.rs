@@ -1,6 +1,5 @@
 //! Report shapes shared by both review modes and the saved dashboard report.
-//! Serde-only: no logic, no imports beyond `serde`, `serde_json`, and the
-//! policy vocabulary.
+//! Serde-only report contracts, including the optional judgment artifact types.
 
 use std::collections::BTreeMap;
 
@@ -98,6 +97,9 @@ pub struct Finding {
     /// A model-selected test strategy (actionable description).
     #[serde(default)]
     pub test: Option<String>,
+    /// Opt-in, unfinished scaffold and assertion guidance; never applied or executed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub test_plan: Option<crate::review::test_planner::TestPlan>,
     /// Stable identity across runs (file, dimension, mechanism, evidence text;
     /// not line numbers), keying feedback and the suppression list.
     #[serde(default)]
@@ -192,6 +194,16 @@ pub struct MatrixRow {
 /// `max_follow_ups: None` means unlimited (follow up every threshold signal).
 /// `screen_thresholds` holds the per-dimension thresholds actually applied
 /// (feedback-tuned; `screen_threshold` stays the policy default).
+///
+/// The 0.2 Rust API adds `follow_up_strategy`; construct unspecified fields
+/// through `Default` when migrating an exhaustive 0.1 struct literal:
+///
+/// ```
+/// use momus_review::domain::report::ConfigSnapshot;
+/// use momus_review::review::voi::FollowUpStrategy;
+/// let config = ConfigSnapshot { screen_threshold: 0.7, ..Default::default() };
+/// assert_eq!(config.follow_up_strategy, FollowUpStrategy::Probability);
+/// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ConfigSnapshot {
@@ -200,6 +212,8 @@ pub struct ConfigSnapshot {
     pub severity_max: f64,
     pub max_follow_ups: Option<usize>,
     pub max_profiles: usize,
+    /// Selection policy; probability remains the default for older reports.
+    pub follow_up_strategy: crate::review::voi::FollowUpStrategy,
 }
 
 /// Funnel counters reported in `workflow`.
@@ -221,7 +235,7 @@ pub struct WorkflowCounts {
     /// Flagged for a human by ensemble disagreement.
     pub needs_human_findings: usize,
     /// Context characters trimmed off (or wholly dropped) because they did
-    /// not fit a screen request's budget (`review::context`).
+    /// not fit screening or attached test-plan context (`review::context`).
     pub dropped_context_chars: usize,
     /// Context items (unit, base, test, neighbor, region) so trimmed.
     pub dropped_context_items: usize,
@@ -234,6 +248,7 @@ pub enum ReviewStage {
     Screen,
     Profile,
     Locate,
+    TestPlan,
 }
 
 impl ReviewStage {
@@ -243,6 +258,7 @@ impl ReviewStage {
             ReviewStage::Screen => "screen",
             ReviewStage::Profile => "profile",
             ReviewStage::Locate => "locate",
+            ReviewStage::TestPlan => "testplan",
         }
     }
 }
@@ -335,6 +351,12 @@ pub struct ReviewReport {
     pub usage: UsageSummary,
     pub index: IndexStats,
     pub budget: BudgetSummary,
+    /// Auditable heuristic follow-up priorities, when VOI was requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub follow_up_plan: Option<crate::review::voi::VoiSummary>,
+    /// Advisory comparison with explicitly supplied local requirements.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spec_drift: Option<crate::review::spec_drift::SpecSummary>,
     /// Deferred/failed work means absence of findings is not a complete review.
     pub partial: bool,
     pub tier: TierSummary,
@@ -415,5 +437,37 @@ mod tests {
         assert_eq!(report.screened_files, 3);
         assert_eq!(report.usage.calls, 0);
         assert_eq!(report.findings.len(), 0);
+    }
+
+    /// Legacy report/config fields retain their values without any new artifacts.
+    #[test]
+    fn legacy_report_keeps_probability_policy_and_optional_artifacts_absent() {
+        let mut legacy_finding = serde_json::to_value(Finding {
+            file: "src/lib.rs".into(),
+            line: 7,
+            dimension: Dimension::Security,
+            mechanism: "sqlInjection".into(),
+            evidence: "query(input)".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        legacy_finding.as_object_mut().unwrap().remove("testPlan");
+        let report: ReviewReport = serde_json::from_value(serde_json::json!({
+            "scope":"src", "screenedFiles":1, "findings":[legacy_finding],
+            "config": { "screenThreshold":0.7, "screenThresholds":{"security":0.8},
+                "severityMax":3.0, "maxFollowUps":4, "maxProfiles":8 }
+        }))
+        .unwrap();
+        assert_eq!(
+            report.config.follow_up_strategy,
+            crate::review::voi::FollowUpStrategy::Probability
+        );
+        assert_eq!(report.config.screen_thresholds[&Dimension::Security], 0.8);
+        assert_eq!(report.config.max_follow_ups, Some(4));
+        assert_eq!(report.findings[0].file, "src/lib.rs");
+        assert_eq!(report.findings[0].line, 7);
+        assert_eq!(report.findings[0].mechanism, "sqlInjection");
+        assert!(report.findings[0].test_plan.is_none());
+        assert!(report.follow_up_plan.is_none() && report.spec_drift.is_none());
     }
 }

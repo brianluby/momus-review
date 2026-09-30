@@ -79,6 +79,8 @@ Now is complete.
 - Decision-theoretic budgets: value-of-information follow-up selection
   ("which 8 would most change the merge decision?") instead of top-8 by
   probability; per-dimension thresholds; cost/latency meter; result caching.
+  Implemented as opt-in heuristic priorities and explicit threshold overrides
+  (#11); calibration remains future work. See [Review robustness](review-robustness.md).
 - ✅ Pairwise severity ranking (`choice` A-vs-B + Bradley-Terry) for stable
   "top 3 to fix".
 - ✅ Multi-hop taint chains via composed narrow calls
@@ -101,8 +103,10 @@ The five refinement judgments run as one post-locate stage
 
 - Merge-confidence engine: `P(revert)`/`P(incident)`/`P(flake)` per PR from
   signals + history; auto-approve routine + low-risk.
-- Test planner: `choice` over strategies per gap → emit test stub.
-- Spec drift: `compare([code, ticket/PRD])` — correct code, wrong behavior.
+- Test planner (#18): opt-in `choice` over strategies per gap → unfinished test
+  scaffold and observable assertion guidance; no source writes or execution.
+- Spec drift (#19): opt-in comparison with supplied local requirements, exact
+  evidence and skeptical confirmation; advisory, not full requirement coverage.
 - Upgrade/changelog triage: screen dependency diffs for breaking-risk.
 - Onboarding tours: extend file-role classification to repo tours + arch maps.
 - Docs drift: code-vs-docs `noul` on doc-touched PRs.

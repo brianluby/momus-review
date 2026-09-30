@@ -8,7 +8,7 @@ use anyhow::{Result, anyhow};
 use futures::{Stream, StreamExt, stream};
 use std::future::Future;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde_json::json;
 
@@ -27,6 +27,7 @@ use crate::review::merge_confidence;
 use crate::review::refine::{self, RefineCounts, Refiner};
 use crate::review::strategy::{Discovery, FileEntry, ReviewStrategy, Screening, Signal};
 use crate::review::typesafe::parse_positive;
+use crate::review::voi::{self, FollowUpStrategy};
 
 /// Parallel System One requests: `MOMUS_CONCURRENCY` if set, else the policy
 /// default. A local server usually wants 1; the hosted API handles more.
@@ -131,6 +132,14 @@ where
 pub struct ReviewOptions {
     /// Cap follow-ups per `select_follow_ups`; `None` follows every signal.
     pub max_follow_ups: Option<usize>,
+    /// Opt-in information-value ordering; default probability policy stays unchanged.
+    pub follow_up_strategy: FollowUpStrategy,
+    /// Explicit eligibility thresholds applied after saved reviewer feedback.
+    pub threshold_overrides: BTreeMap<Dimension, f64>,
+    /// Attach unfinished scaffolds for supported test-gap findings; never execute them.
+    pub test_plans: bool,
+    /// Explicit bounded requirement inputs for the opt-in spec check.
+    pub specs: Option<crate::review::spec_drift::SpecInputs>,
     /// Run the post-locate refinement stages (`review::refine`).
     pub refine: bool,
     /// Reviewer feedback: tunes per-dimension thresholds and suppresses
@@ -148,6 +157,10 @@ impl Default for ReviewOptions {
     fn default() -> Self {
         Self {
             max_follow_ups: None,
+            follow_up_strategy: FollowUpStrategy::default(),
+            threshold_overrides: BTreeMap::new(),
+            test_plans: false,
+            specs: None,
             refine: true,
             feedback: FeedbackLog::default(),
             allow_empty: false,
@@ -167,18 +180,41 @@ pub async fn run_review<S: ReviewStrategy>(
 ) -> Result<ReviewReport> {
     let ReviewOptions {
         max_follow_ups,
+        follow_up_strategy,
+        threshold_overrides,
+        test_plans,
+        specs,
         refine,
         feedback,
         allow_empty,
         tiered,
         shard,
     } = options;
-    let thresholds = feedback.thresholds();
+    if shard.is_some()
+        && (test_plans || specs.is_some() || follow_up_strategy == FollowUpStrategy::Voi)
+    {
+        return Err(anyhow!(
+            "test plans, spec checks and VOI require a global, unsharded review"
+        ));
+    }
+    if tiered && specs.is_some() {
+        return Err(anyhow!("spec checks cannot omit Tier-0 dismissed files"));
+    }
+    let mut thresholds = feedback.thresholds();
+    for (dimension, threshold) in threshold_overrides {
+        if !threshold.is_finite() || !(0.0..=1.0).contains(&threshold) {
+            return Err(anyhow!(
+                "{} threshold must be finite and from 0 to 1",
+                dimension.key()
+            ));
+        }
+        thresholds.insert(dimension, threshold);
+    }
     let suppressed = feedback.suppressed();
     for (dimension, threshold) in &thresholds {
         if (*threshold - SCREEN_THRESHOLD).abs() > f64::EPSILON {
             log(&format!(
-                "Feedback tuned the {} threshold to {threshold:.2}",
+                "Using the {} threshold {threshold:.2}",
                 dimension.key()
             ));
         }
@@ -211,6 +247,8 @@ pub async fn run_review<S: ReviewStrategy>(
     if strategy.client().budget_summary().limit.is_some() || tiered {
         crate::review::planner::prioritize(&mut files, scopes);
     }
+    // Retain the requested spec inventory independently of successful risk screens.
+    let spec_files = specs.as_ref().map(|_| files.clone());
     if files.is_empty() && (allow_empty || shard.is_some()) {
         log(&format!(
             "No {} files to review under {scope_label}",
@@ -225,10 +263,17 @@ pub async fn run_review<S: ReviewStrategy>(
                 screen_thresholds: thresholds,
                 severity_max: SEVERITY_MAX,
                 max_follow_ups,
+                follow_up_strategy,
                 max_profiles: MAX_PROFILES,
             },
             shard: shard_metadata,
             partial: shard.is_some(),
+            spec_drift: specs
+                .as_ref()
+                .map(|s| crate::review::spec_drift::SpecSummary {
+                    documents: s.documents(),
+                    checks: Vec::new(),
+                }),
             context_files: context_files.iter().map(|f| f.path().to_string()).collect(),
             ..Default::default()
         });
@@ -297,6 +342,7 @@ pub async fn run_review<S: ReviewStrategy>(
                 screen_thresholds: thresholds,
                 severity_max: SEVERITY_MAX,
                 max_follow_ups,
+                follow_up_strategy,
                 max_profiles: MAX_PROFILES,
             },
             index: strategy.index_stats(),
@@ -372,7 +418,11 @@ pub async fn run_review<S: ReviewStrategy>(
     });
     let threshold_signals = signals.len();
 
-    // 3. Profile: top MAX_PROFILES by max probability.
+    // 3. Profiles are optional metadata. Under a finite HTTP ceiling, VOI
+    //    spends available attempts on concrete evidence first.
+    let skip_optional_profiles = follow_up_strategy == FollowUpStrategy::Voi
+        && strategy.client().budget_summary().limit.is_some();
+    //    Otherwise retain the existing top MAX_PROFILES by max probability.
     let mut profile_candidates: Vec<&Screening<S::File>> = matrix.iter().collect();
     profile_candidates.sort_by(|a, b| {
         max_probability(b)
@@ -380,6 +430,10 @@ pub async fn run_review<S: ReviewStrategy>(
             .unwrap_or(Ordering::Equal)
     });
     profile_candidates.truncate(MAX_PROFILES);
+    if skip_optional_profiles {
+        profile_candidates.clear();
+        log("VOI: skipping optional profiles to prioritize evidence under the call budget");
+    }
 
     log(&format!("Profiling {} files...", profile_candidates.len()));
     // Profiles are a triage aid and never gate findings: even the breaker
@@ -418,15 +472,34 @@ pub async fn run_review<S: ReviewStrategy>(
 
     // 4. Locate: follow up every threshold signal (unlimited), or cap with a
     //    per-dimension budget when `max_follow_ups` is set.
-    let follow_ups = select_follow_ups(&signals, max_follow_ups);
+    let (follow_ups, follow_up_plan) = match follow_up_strategy {
+        FollowUpStrategy::Probability => (select_follow_ups(&signals, max_follow_ups), None),
+        FollowUpStrategy::Voi => {
+            let (selected, plan) = voi::select(
+                &signals,
+                max_follow_ups,
+                &thresholds,
+                skip_optional_profiles,
+            );
+            (selected, Some(plan))
+        }
+    };
     let followed_signals = follow_ups.len();
     log(&format!(
         "Following {} of {} threshold signals...",
         followed_signals, threshold_signals
     ));
+    // Sequential evidence pipelines prevent concurrent partially completed
+    // signals from spending the final finite attempts ahead of the top plan.
+    // Cached pipelines are still tried after exhaustion, including calls=0.
+    let locate_concurrency = if skip_optional_profiles {
+        1
+    } else {
+        concurrency
+    };
     let located: Vec<Option<Finding>> = run_stage(
         follow_ups,
-        concurrency,
+        locate_concurrency,
         ReviewStage::Locate,
         log,
         &mut skipped,
@@ -456,19 +529,77 @@ pub async fn run_review<S: ReviewStrategy>(
     findings.retain(|f| !suppressed.contains(&f.fingerprint));
     let suppressed_findings = located_findings - findings.len();
 
+    // Explicit requirement checks precede optional refinement/enrichment/scaffolds.
+    let spec_drift = match (specs.as_ref(), spec_files) {
+        (Some(specs), Some(files)) => {
+            let mut checks = Vec::with_capacity(files.len());
+            for file in files {
+                log(&format!("  spec {}", file.path()));
+                let check = match crate::review::spec_drift::assess_file(
+                    strategy.client(),
+                    specs,
+                    serde_json::to_value(&file)?,
+                )
+                .await
+                {
+                    Ok(check) => check,
+                    Err(error) => crate::review::spec_drift::SpecCheck::deferred(
+                        file.path(),
+                        format!("{error:#}")
+                            .chars()
+                            .take(MAX_SKIP_REASON_CHARS)
+                            .collect::<String>(),
+                    ),
+                };
+                checks.push(check);
+            }
+            Some(crate::review::spec_drift::SpecSummary {
+                documents: specs.documents(),
+                checks,
+            })
+        }
+        _ => None,
+    };
+    let spec_incomplete = spec_drift.as_ref().is_some_and(|summary| {
+        summary.checks.iter().any(|check| {
+            matches!(
+                check.status,
+                crate::review::spec_drift::SpecCheckStatus::Deferred
+                    | crate::review::spec_drift::SpecCheckStatus::Uncertain
+            )
+        })
+    });
+
     let files: HashMap<&str, &S::File> = matrix.iter().map(|s| (s.file.path(), &s.file)).collect();
-    let (findings, refine_counts) = if shard.is_none() {
+    let (mut findings, refine_counts) = if shard.is_none() {
         finish_findings(&strategy, &files, findings, refine, log, concurrency).await
     } else {
         (findings, RefineCounts::default())
     };
+    if test_plans {
+        attach_test_plans(
+            &strategy,
+            &files,
+            &context_files,
+            &mut findings,
+            log,
+            &mut skipped,
+        )
+        .await;
+    }
     let routed_findings = findings.iter().filter(|f| f.owner.is_some()).count();
 
     let context_drops = matrix
         .iter()
         .fold(ContextDrops::default(), |acc, screening| {
             acc + screening.dropped
-        });
+        })
+        + findings
+            .iter()
+            .filter_map(|f| f.test_plan.as_ref())
+            .fold(ContextDrops::default(), |acc, plan| {
+                acc + plan.context_drops
+            });
 
     let matrix_rows: Vec<MatrixRow> = matrix
         .iter()
@@ -494,14 +625,19 @@ pub async fn run_review<S: ReviewStrategy>(
             screen_thresholds: thresholds,
             severity_max: SEVERITY_MAX,
             max_follow_ups,
+            follow_up_strategy,
             max_profiles: MAX_PROFILES,
         },
         budget: strategy.client().budget_summary(),
+        follow_up_plan,
+        spec_drift,
         shard: shard_metadata.map(|mut meta| {
             meta.model = strategy.client().model_identity();
             meta
         }),
         partial: shard.is_some()
+            || spec_incomplete
+            || followed_signals < threshold_signals
             || strategy.client().budget_summary().deferred > 0
             || !skipped.is_empty()
             || !tier.dismissed.is_empty(),
@@ -533,6 +669,43 @@ pub async fn run_review<S: ReviewStrategy>(
         findings,
         p_revert,
     })
+}
+
+/// Attach at most the global planning cap, preserving findings when a plan fails.
+async fn attach_test_plans<S: ReviewStrategy>(
+    strategy: &S,
+    files: &HashMap<&str, &S::File>,
+    tests: &[S::File],
+    findings: &mut [Finding],
+    log: &dyn Fn(&str),
+    skipped: &mut Vec<SkippedFile>,
+) {
+    for finding in findings
+        .iter_mut()
+        .filter(|f| crate::review::test_planner::should_plan(f))
+        .take(crate::review::test_planner::MAX_TEST_PLANS)
+    {
+        let file = files.get(finding.file.as_str());
+        let context = json!({
+            "fileContext": file.map(|file| file.context_around(finding.line)),
+            "relatedTests": file.map(|file| file.test_context(tests)),
+            "neighbors": strategy.neighbor_context(&finding.file),
+        });
+        match crate::review::test_planner::plan(strategy.client(), finding, context).await {
+            Ok(plan) => finding.test_plan = plan,
+            Err(error) => {
+                log(&format!("  test plan {} deferred: {error:#}", finding.file));
+                skipped.push(SkippedFile {
+                    file: finding.file.clone(),
+                    stage: ReviewStage::TestPlan,
+                    reason: format!("{error:#}")
+                        .chars()
+                        .take(MAX_SKIP_REASON_CHARS)
+                        .collect(),
+                });
+            }
+        }
+    }
 }
 
 /// Whole-review stages are deferred to merge, retaining global top-K semantics.
@@ -870,6 +1043,49 @@ mod tests {
         let options = ReviewOptions::default();
         assert!(options.refine);
         assert_eq!(options.max_follow_ups, None);
+        assert_eq!(options.follow_up_strategy, FollowUpStrategy::Probability);
+        assert!(options.threshold_overrides.is_empty());
+        assert!(!options.test_plans);
+        assert!(options.specs.is_none());
+    }
+
+    #[tokio::test]
+    async fn sequential_evidence_stage_completes_priority_pipeline_before_next() {
+        use std::sync::{Arc, Mutex};
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut skipped = Vec::new();
+        let outcomes = run_stage(
+            vec!["security", "testGap"],
+            1,
+            ReviewStage::Locate,
+            &|_| {},
+            &mut skipped,
+            |dimension| {
+                let events = events.clone();
+                async move {
+                    events.lock().unwrap().push(format!("{dimension}:evidence"));
+                    tokio::task::yield_now().await;
+                    events
+                        .lock()
+                        .unwrap()
+                        .push(format!("{dimension}:mechanism"));
+                    (dimension.to_string(), Ok(dimension))
+                }
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcomes, ["security", "testGap"]);
+        assert!(skipped.is_empty());
+        assert_eq!(
+            *events.lock().unwrap(),
+            [
+                "security:evidence",
+                "security:mechanism",
+                "testGap:evidence",
+                "testGap:mechanism"
+            ]
+        );
     }
 
     #[test]

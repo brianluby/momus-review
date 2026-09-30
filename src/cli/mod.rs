@@ -2,7 +2,7 @@
 //! (publish to a pull request), `dashboard`, under one clap binary.
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
 use crate::adapters::exclude::Exclude;
@@ -31,6 +31,58 @@ use crate::review::workflow::{ReviewOptions, run_review};
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
+}
+
+/// Optional robustness judgments; ordinary reviews retain their existing funnel.
+#[derive(Debug, Default, Args)]
+pub struct RobustnessArgs {
+    /// Emit unfinished test scaffolds for well-supported test-gap findings
+    #[arg(long)]
+    test_plans: bool,
+    /// Compare reviewed source with a local UTF-8 requirement file (repeatable)
+    #[arg(long, value_name = "PATH")]
+    spec: Vec<PathBuf>,
+    /// Rank follow-ups by probability or an auditable VOI heuristic
+    #[arg(long, value_enum, default_value = "probability")]
+    follow_up_strategy: crate::review::voi::FollowUpStrategy,
+    /// Override one dimension's screening threshold, e.g. security=0.7 (repeatable)
+    #[arg(long, value_name = "DIMENSION=P", value_parser = crate::review::voi::parse_threshold)]
+    threshold: Vec<(crate::domain::policy::Dimension, f64)>,
+}
+
+impl RobustnessArgs {
+    /// Validate global-option boundaries and load authoritative specs before API work.
+    fn apply(self, mut options: ReviewOptions) -> Result<ReviewOptions> {
+        if options.shard.is_some()
+            && (self.test_plans
+                || !self.spec.is_empty()
+                || self.follow_up_strategy != crate::review::voi::FollowUpStrategy::Probability)
+        {
+            anyhow::bail!(
+                "--shard cannot use --test-plans, --spec or VOI: these require a global review"
+            );
+        }
+        if options.tiered && !self.spec.is_empty() {
+            anyhow::bail!(
+                "--spec cannot use --tiered: dismissed files would escape requirement checks"
+            );
+        }
+        for (dimension, threshold) in self.threshold {
+            if options
+                .threshold_overrides
+                .insert(dimension, threshold)
+                .is_some()
+            {
+                anyhow::bail!("duplicate threshold override for {}", dimension.key());
+            }
+        }
+        options.test_plans = self.test_plans;
+        options.follow_up_strategy = self.follow_up_strategy;
+        if !self.spec.is_empty() {
+            options.specs = Some(crate::review::spec_drift::SpecInputs::load(&self.spec)?);
+        }
+        Ok(options)
+    }
 }
 
 #[derive(Subcommand)]
@@ -87,6 +139,9 @@ pub enum Command {
         /// Maximum HTTP attempts; cached units cost no budget (calls=N)
         #[arg(long, value_parser = crate::review::planner::parse_budget)]
         budget: Option<u64>,
+
+        #[command(flatten)]
+        robustness: RobustnessArgs,
     },
 
     /// Scan every non-ignored source file under a scope
@@ -141,6 +196,9 @@ pub enum Command {
         /// Emit a partial scan for stable path partition i/N (1-based)
         #[arg(long)]
         shard: Option<crate::review::planner::Shard>,
+
+        #[command(flatten)]
+        robustness: RobustnessArgs,
     },
 
     /// Combine every partial scan, then refine/rank the combined findings
@@ -216,22 +274,16 @@ pub async fn run(cli: Cli) -> Result<()> {
             no_redact,
             no_cache,
             budget,
+            robustness,
         } => {
+            let options = robustness.apply(options(follow_ups, no_refine, allow_empty, false))?;
             let strategy = ChangesStrategy::new(
                 client(no_redact, no_cache)?.with_budget(budget),
                 Exclude::new(&exclude)?,
                 base,
             );
             let sarif = sarif.map(PathBuf::from);
-            run_mode(
-                paths,
-                fail_on_blocking,
-                options(follow_ups, no_refine, allow_empty, false),
-                sarif,
-                strategy,
-                None,
-            )
-            .await
+            run_mode(paths, fail_on_blocking, options, sarif, strategy, None).await
         }
         Command::Scan {
             paths,
@@ -246,12 +298,17 @@ pub async fn run(cli: Cli) -> Result<()> {
             tiered,
             shard,
             sanitized_report,
+            robustness,
         } => {
             if shard.is_some() && follow_ups.is_some() {
                 anyhow::bail!(
                     "--shard cannot use --follow-ups: a per-shard cap changes global selection"
                 );
             }
+            let options = robustness.apply(ReviewOptions {
+                shard,
+                ..options(follow_ups, no_refine, false, tiered)
+            })?;
             let strategy = CodebaseStrategy::new(
                 client(no_redact, no_cache)?.with_budget(budget),
                 Exclude::new(&exclude)?,
@@ -260,10 +317,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             run_mode(
                 paths,
                 fail_on_blocking,
-                ReviewOptions {
-                    shard,
-                    ..options(follow_ups, no_refine, false, tiered)
-                },
+                options,
                 sarif,
                 strategy,
                 sanitized_report,
@@ -448,6 +502,7 @@ fn options(
         allow_empty,
         tiered,
         shard: None,
+        ..Default::default()
     }
 }
 

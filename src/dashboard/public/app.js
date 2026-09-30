@@ -47,6 +47,23 @@ function h(tag, props = {}, ...children) {
 const isNum = (value) => typeof value === "number" && Number.isFinite(value);
 const fixed = (value, digits = 2) => (isNum(value) ? value.toFixed(digits) : "–");
 
+function thresholdFor(report, key) {
+  const value = report.config?.screenThresholds?.[key];
+  return isNum(value) && value >= 0 && value <= 1 ? value : THRESHOLD;
+}
+
+function thresholdsLabel(report) {
+  return dimensionsFor(report).map(([key, label]) => `${label} ${fixed(thresholdFor(report, key))}`).join(" · ");
+}
+
+function partialCoverage(report) {
+  if (!report.partial) return null;
+  const omitted = Math.max(0, (report.workflow?.thresholdSignals ?? 0) - (report.workflow?.followedSignals ?? 0));
+  const unfinishedSpecs = (report.specDrift?.checks ?? []).filter((c) => c.status === "deferred" || c.status === "uncertain").length;
+  return quiet("Partial review — coverage is incomplete",
+    `${report.budget?.deferred ?? 0} deferred requests · ${report.skipped?.length ?? 0} skipped requests · ${omitted} follow-ups omitted by cap · ${report.tier?.dismissed?.length ?? 0} Tier-0 dismissals · ${unfinishedSpecs} uncertain/deferred spec checks. Increase the budget or follow-up allowance; uncertain comparisons need more context or human review.`);
+}
+
 function ago(iso) {
   const seconds = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
   if (seconds < 60) return "just now";
@@ -111,7 +128,7 @@ function summary(report) {
   const stats = [
     { value: report.screenedFiles, label: "files" },
     { value: tests.length, label: testLabel, title: tests.join("\n") || null },
-    { value: report.followedSignals, label: "investigated", title: "potential concerns at or above " + THRESHOLD.toFixed(2) + " reviewed for evidence" },
+    { value: report.followedSignals, label: "selected", title: "eligible concerns selected for evidence review; failures and deferrals are disclosed separately" },
     { value: findings.length, label: "findings", cls: "lead" },
     { value: blocking, label: "request changes", cls: blocking > 0 ? "alert" : "" },
     { display: prDisplay, label: "P(revert)", title: "uncalibrated heuristic spike (see roadmap #17)" },
@@ -146,14 +163,14 @@ function workflow(report) {
     {
       value: flow.thresholdSignals,
       label: "flagged",
-      detail: "at least " + THRESHOLD.toFixed(2),
-      title: "Screening probabilities at or above the follow-up threshold",
+      detail: "dimension threshold",
+      title: thresholdsLabel(report),
     },
     {
       value: flow.followedSignals,
-      label: "investigated",
+      label: "selected",
       detail: "evidence review",
-      title: "Highest-risk potential concerns selected for deeper evidence review",
+      title: "Eligible concerns selected for deeper evidence review; deferred work remains incomplete",
     },
     {
       value: flow.locatedFindings,
@@ -267,7 +284,7 @@ function profiles(report) {
 function matrix(report) {
   const dimensions = dimensionsFor(report);
   const rows = [...report.matrix].sort((a, b) => maxP(b, dimensions) - maxP(a, dimensions));
-  const screeningNote = "Each cell is the estimated probability, from 0 to 1, that a file has that kind of concern. Darker cells mean higher probability; cells at or above " + THRESHOLD.toFixed(2) + " are flagged for deeper review. Screening is triage, not a confirmed finding.";
+  const screeningNote = "Each cell is the estimated probability, from 0 to 1, that a file has that kind of concern. Darker cells mean higher probability; highlighted cells meet their dimension threshold. Thresholds: " + thresholdsLabel(report) + ". Screening is triage, not a confirmed finding.";
 
   const toggle = h(
     "button",
@@ -290,8 +307,9 @@ function matrix(report) {
     h("span", { class: "legend-end" }, "0"),
     h(
       "span",
-      { class: "legend-ramp", role: "img", "aria-label": `Probability scale, threshold ${THRESHOLD}` },
-      h("i", { class: "legend-tick", style: { left: `${THRESHOLD * 100}%` } }),
+      { class: "legend-ramp", role: "img", "aria-label": "Probability scale; " + thresholdsLabel(report) },
+      [...new Set(dimensions.map(([key]) => thresholdFor(report, key)))].map((threshold) =>
+        h("i", { class: "legend-tick", style: { left: `${threshold * 100}%` } })),
     ),
     h("span", { class: "legend-end" }, "1"),
     toggle,
@@ -342,7 +360,7 @@ function matrix(report) {
           dimensions.map(([key, label]) => {
             const p = row[key];
             if (!isNum(p)) return h("td", { class: "cell missing" }, h("span", { class: "v" }, "–"));
-            const hot = p >= THRESHOLD;
+            const hot = p >= thresholdFor(report, key);
             return h(
               "td",
               {
@@ -391,15 +409,15 @@ function findings(report) {
 
   if (list.length === 0) {
     const followed = report.followedSignals;
-    const detail =
+    const detail = report.partial ? "No supported findings were produced by the completed work. Omitted, failed, deferred or uncertain work prevents a complete review." :
       followed > 0
         ? followed + " potential " + (followed === 1 ? "concern was" : "concerns were") + " investigated; none had enough evidence to become a finding"
-        : "No screening probability reached the " + THRESHOLD.toFixed(2) + " follow-up threshold";
+        : "No screening probability reached its applied dimension threshold";
     return section(
       "Findings",
       count,
       h("p", { class: "section-note" }, findingsNote),
-      quiet("No supported findings", detail),
+      quiet(report.partial ? "Review incomplete" : "No supported findings", detail),
     );
   }
 
@@ -573,6 +591,10 @@ function formatPrComment(finding, label = null) {
   if (finding.why) lines.push(`> ${finding.why}`);
   if (finding.fix) lines.push(`- Fix: ${finding.fix}`);
   if (finding.test) lines.push(`- Test: ${finding.test}`);
+  if (finding.testPlan) {
+    lines.push(`- Unfinished test plan: ${finding.testPlan.scenario}`);
+    lines.push(`- Required assertion: ${finding.testPlan.assertion}`);
+  }
   return lines.join("\n");
 }
 
@@ -687,7 +709,7 @@ function findingRows(finding, labels, onFileClick) {
     );
   }
 
-  if (finding.why || finding.fix || finding.test) {
+  if (finding.why || finding.fix || finding.test || finding.testPlan) {
     rows.push(
       h(
         "tr",
@@ -702,6 +724,7 @@ function findingRows(finding, labels, onFileClick) {
             finding.why && h("p", {}, String(finding.why)),
             finding.fix && h("p", {}, h("strong", {}, "Fix: "), String(finding.fix)),
             finding.test && h("p", {}, h("strong", {}, "Test: "), String(finding.test)),
+            finding.testPlan && testPlanDetails(finding.testPlan),
           ),
         ),
       ),
@@ -720,6 +743,43 @@ function findingRows(finding, labels, onFileClick) {
   }
 
   return rows;
+}
+
+// Scaffolds and all source/spec evidence remain inert text nodes.
+function testPlanDetails(plan) {
+  return h("details", {},
+    h("summary", {}, "Unfinished test scaffold"),
+    h("p", {}, String(plan.scenario ?? "")),
+    h("p", {}, h("strong", {}, "Required assertion: "), String(plan.assertion ?? "")),
+    h("p", {}, "Requires repository-specific setup, API calls and assertions. This scaffold provides no coverage yet."),
+    h("pre", {}, h("code", {}, String(plan.stub ?? ""))));
+}
+
+function specDrift(report) {
+  const result = report.specDrift;
+  if (!result) return null;
+  const checks = result.checks ?? [];
+  const drift = checks.filter((c) => c.status === "drift").length;
+  return section("Spec comparison", `${drift} possible contradictions`,
+    h("p", { class: "section-note" }, "Advisory checks against supplied requirements. A match is limited to visible context and does not prove compliance. At most one contradiction per file."),
+    checks.length === 0 && h("p", {}, "No source files were available for comparison."),
+    checks.map((check) => h("details", {},
+      h("summary", {}, `${check.file}: ${humanize(check.status)} (${fixed(check.confidence)})`),
+      h("p", {}, String(check.reason ?? "")),
+      [check.spec, check.source].filter(Boolean).map((e) => h("div", {},
+        h("code", {}, `${e.path}:${e.startLine}–${e.endLine}`),
+        h("pre", {}, h("code", {}, String(e.text ?? ""))))))));
+}
+
+function followUpPlan(report) {
+  const plan = report.followUpPlan;
+  if (!plan) return null;
+  const candidates = plan.candidates ?? [];
+  return section("Follow-up priorities", `${candidates.filter((c) => c.selected).length} selected`,
+    h("p", { class: "section-note" }, "Heuristic priorities use probability, dimension impact, uncertainty and nominal call cost. They are not calibrated risk or dollar savings."),
+    plan.skippedOptionalProfiles && h("p", {}, "Optional file profiles were omitted to spend the call budget on evidence review."),
+    h("ul", {}, candidates.map((c) => h("li", {},
+      `${c.file} · ${humanize(c.dimension)} · score ${fixed(c.score)} · ${c.estimatedCalls} estimated calls · ${c.selected ? "selected" : "omitted by cap"}`))));
 }
 
 // "validatedUpstream" -> "validated upstream"
@@ -1027,10 +1087,13 @@ function render(state) {
       app.replaceChildren(
         ...[
           summary(state.report),
+          partialCoverage(state.report),
           workflow(state.report),
           profiles(state.report),
           matrix(state.report),
           findings(state.report),
+          specDrift(state.report),
+          followUpPlan(state.report),
           h("div", { id: "history" }),
         ].filter(Boolean),
       );

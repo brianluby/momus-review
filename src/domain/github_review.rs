@@ -312,6 +312,12 @@ pub fn comment_body(finding: &Finding) -> String {
     if let Some(test) = &finding.test {
         lines.push(format!("- Test: {test}"));
     }
+    if let Some(plan) = &finding.test_plan {
+        lines.push(format!("- Unfinished test plan: {}", plan.scenario));
+        lines.push(format!("- Required assertion: {}", plan.assertion));
+        lines.push("Repository-specific setup, calls and assertions are still required; this scaffold provides no coverage yet.".into());
+        lines.push(fenced(&plan.stub));
+    }
     let mut body = redacted(&lines.join("\n"));
     let mut markers = Vec::new();
     if !finding.fingerprint.is_empty() {
@@ -339,7 +345,24 @@ pub fn summary_body(report: &ReviewReport, plan: &Plan, head_sha: &str) -> Strin
     let mut out = vec!["### momus review".to_string(), String::new()];
 
     if report.partial {
-        out.push(format!("**Partial coverage**: {} deferred requests, {} Tier-0 dismissals, {} skipped requests. Rerun to complete uncached work.",
+        let omitted = report
+            .workflow
+            .threshold_signals
+            .saturating_sub(report.workflow.followed_signals);
+        let incomplete_specs = report.spec_drift.as_ref().map_or(0, |summary| {
+            summary
+                .checks
+                .iter()
+                .filter(|c| {
+                    matches!(
+                        c.status,
+                        crate::review::spec_drift::SpecCheckStatus::Uncertain
+                            | crate::review::spec_drift::SpecCheckStatus::Deferred
+                    )
+                })
+                .count()
+        });
+        out.push(format!("**Partial coverage**: {} deferred requests, {} Tier-0 dismissals, {} skipped requests, {omitted} follow-ups omitted by cap, {incomplete_specs} uncertain/deferred spec checks. Rerun with sufficient budget and follow-up allowance; uncertain spec checks require more context or human review.",
             report.budget.deferred, report.tier.dismissed.len(), report.skipped.len()));
         out.push(String::new());
     }
@@ -428,7 +451,72 @@ pub fn summary_body(report: &ReviewReport, plan: &Plan, head_sha: &str) -> Strin
         out.push("</details>".to_string());
     }
 
+    let test_plans: Vec<_> = report
+        .findings
+        .iter()
+        .filter_map(|f| f.test_plan.as_ref())
+        .collect();
+    if !test_plans.is_empty() {
+        out.push(String::new());
+        out.push("<details><summary>Unfinished test scaffolds</summary>".into());
+        out.push(String::new());
+        for test in test_plans
+            .iter()
+            .take(crate::review::test_planner::MAX_TEST_PLANS)
+        {
+            out.push(format!(
+                "**`{}:{}`**: {}",
+                test.file, test.line, test.scenario
+            ));
+            out.push(format!("Required assertion: {}", test.assertion));
+            out.push("Repository-specific setup, calls and assertions are still required; no coverage is provided yet.".into());
+            out.push(fenced(&test.stub));
+        }
+        out.push(String::new());
+        out.push("</details>".into());
+    }
+    if let Some(specs) = &report.spec_drift {
+        let drift = specs
+            .checks
+            .iter()
+            .filter(|c| c.status == crate::review::spec_drift::SpecCheckStatus::Drift)
+            .count();
+        out.push(String::new());
+        out.push(format!("**Spec comparison (advisory)**: {} comparison outcomes, {drift} possible contradictions. Matches concern visible behavior only; full requirement coverage is not established.", specs.checks.len()));
+        for check in specs
+            .checks
+            .iter()
+            .filter(|c| c.status != crate::review::spec_drift::SpecCheckStatus::NotApplicable)
+            .take(SUMMARY_LIST_MAX)
+        {
+            out.push(format!(
+                "- `{}`: {:?} · {}",
+                check.file, check.status, check.reason
+            ));
+            for evidence in [check.spec.as_ref(), check.source.as_ref()]
+                .into_iter()
+                .flatten()
+            {
+                out.push(format!(
+                    "`{}:{}–{}`",
+                    evidence.path, evidence.start_line, evidence.end_line
+                ));
+                out.push(fenced(&evidence.text));
+            }
+        }
+        if specs.checks.len() > SUMMARY_LIST_MAX {
+            out.push("Additional checks are available in the JSON report and dashboard.".into());
+        }
+    }
+
     let mut footer = vec![format!("Jev calls: {}", report.usage.calls)];
+    if let Some(plan) = &report.follow_up_plan {
+        footer.push(format!(
+            "VOI heuristic: {} of {} eligible follow-ups selected",
+            plan.candidates.iter().filter(|c| c.selected).count(),
+            plan.candidates.len()
+        ));
+    }
     if report.usage.input_tokens + report.usage.output_tokens > 0 {
         footer.push(format!(
             "tokens: {} in / {} out",
@@ -453,9 +541,71 @@ pub fn summary_body(report: &ReviewReport, plan: &Plan, head_sha: &str) -> Strin
     format!("{SUMMARY_MARKER}\n{}", redacted(&out.join("\n")))
 }
 
+/// Keep untrusted excerpts inside a Markdown code block, including embedded fences.
+fn fenced(text: &str) -> String {
+    let longest = text.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+    let fence = "`".repeat(longest.saturating_add(1).max(3));
+    format!("\n{fence}\n{text}\n{fence}\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Advisory outcomes and previously posted plans stay visible and secret-safe.
+    #[test]
+    fn optional_artifacts_publish_evidence_and_redact_secrets() {
+        use crate::review::spec_drift::{SpecCheck, SpecCheckStatus, SpecEvidence, SpecSummary};
+        let evidence = SpecEvidence {
+            path: "contract.md".into(),
+            start_line: 2,
+            end_line: 2,
+            text: "Credential AKIAIOSFODNN7EXAMPLE\n```\nReturn seven.".into(),
+        };
+        let plan: crate::review::test_planner::TestPlan = serde_json::from_value(serde_json::json!({
+            "strategy":"componentIntegration", "confidence":0.96, "file":"answer.rs", "line":1,
+            "language":"rust", "stubLanguage":"rust", "scenario":"Connect producer and consumer",
+            "assertion":"Assert the consumer's observable result", "stub":"panic!(\"TODO\");",
+            "incomplete":true, "requiredWork":["setup", "assertions"], "contextDrops":{}
+        })).unwrap();
+        let report = ReviewReport {
+            partial: true,
+            findings: vec![Finding {
+                test_plan: Some(plan),
+                ..finding("answer.rs", 1, 1.0, "aaaa")
+            }],
+            spec_drift: Some(SpecSummary {
+                documents: vec![],
+                checks: vec![
+                    SpecCheck {
+                        file: "answer.rs".into(),
+                        status: SpecCheckStatus::Drift,
+                        confidence: 0.95,
+                        spec: Some(evidence.clone()),
+                        source: Some(SpecEvidence {
+                            path: "answer.rs".into(),
+                            text: "return 9;".into(),
+                            ..evidence
+                        }),
+                        reason: "Contradicts explicit requirement".into(),
+                    },
+                    SpecCheck::deferred("other.rs", "budget exhausted"),
+                ],
+            }),
+            ..Default::default()
+        };
+        let summary = summary_body(&report, &Plan::default(), "abc");
+        assert!(summary.contains("2 comparison outcomes, 1 possible contradictions"));
+        assert!(summary.contains("uncertain/deferred spec checks"));
+        assert!(summary.contains("Deferred") && summary.contains("contract.md:2"));
+        assert!(summary.contains("Required assertion: Assert the consumer"));
+        assert!(summary.contains("no coverage is provided yet"));
+        assert!(summary.contains("````"), "embedded fences remain inert");
+        assert!(!summary.contains("AKIAIOSFODNN7EXAMPLE"));
+        assert!(summary.contains("redacted:aws-access-key"));
+        let inline = comment_body(&report.findings[0]);
+        assert!(inline.contains("Unfinished test plan") && inline.contains("Required assertion"));
+    }
 
     /// Incomplete reviews must disclose deferred, dismissed, and failed work.
     #[test]
