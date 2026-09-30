@@ -28,9 +28,20 @@ pub trait FileEntry: std::fmt::Debug + Clone + serde::Serialize {
     /// The file around `line`, as `fileContext` state for refinement
     /// judgments (dedupe, taint, counterfactual, ensemble).
     fn context_around(&self, line: usize) -> Value;
+
+    /// Select bounded related tests using the same conventions as screening.
+    fn test_context(&self, _tests: &[Self]) -> Value {
+        json!([])
+    }
 }
 
 impl FileEntry for ChangedFile {
+    /// Reuse changed-test selection rather than attaching unrelated test inventories.
+    fn test_context(&self, tests: &[Self]) -> Value {
+        json!(crate::review::context::select_related_changed_tests(
+            self, tests
+        ))
+    }
     /// Return the repository-relative identity used for context, cache and shard selection.
     fn path(&self) -> &str {
         &self.path
@@ -46,6 +57,10 @@ impl FileEntry for ChangedFile {
 }
 
 impl FileEntry for SourceFile {
+    /// Reuse source-test selection for the optional test planner.
+    fn test_context(&self, tests: &[Self]) -> Value {
+        json!(crate::review::context::select_related_tests(self, tests))
+    }
     /// Return the repository-relative identity used for context, cache and shard selection.
     fn path(&self) -> &str {
         &self.path

@@ -98,6 +98,12 @@ Completed runs emit one `momus_metrics` line to stderr using report counters;
 stdout remains report JSON. A budget-limited report explicitly records deferred
 requests and `partial: true`; rerun against the same checkout to resume.
 
+Optional review robustness features add `--test-plans` for unfinished regression
+test scaffolds, repeatable `--spec PATH` for advisory comparisons with local
+requirements, and `--follow-up-strategy voi` for auditable follow-up priorities.
+Per-dimension `--threshold DIMENSION=P` overrides apply after feedback tuning.
+See [Review robustness](docs/review-robustness.md) for usage, budgets and limits.
+
 ## Configuration
 
 Read from the environment (or `.env`):

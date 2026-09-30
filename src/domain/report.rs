@@ -1,6 +1,5 @@
 //! Report shapes shared by both review modes and the saved dashboard report.
-//! Serde-only: no logic, no imports beyond `serde`, `serde_json`, and the
-//! policy vocabulary.
+//! Serde-only report contracts, including the optional judgment artifact types.
 
 use std::collections::BTreeMap;
 
@@ -98,6 +97,9 @@ pub struct Finding {
     /// A model-selected test strategy (actionable description).
     #[serde(default)]
     pub test: Option<String>,
+    /// Opt-in, unfinished scaffold and assertion guidance; never applied or executed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub test_plan: Option<crate::review::test_planner::TestPlan>,
     /// Stable identity across runs (file, dimension, mechanism, evidence text;
     /// not line numbers), keying feedback and the suppression list.
     #[serde(default)]
@@ -200,6 +202,8 @@ pub struct ConfigSnapshot {
     pub severity_max: f64,
     pub max_follow_ups: Option<usize>,
     pub max_profiles: usize,
+    /// Selection policy; probability remains the default for older reports.
+    pub follow_up_strategy: crate::review::voi::FollowUpStrategy,
 }
 
 /// Funnel counters reported in `workflow`.
@@ -221,7 +225,7 @@ pub struct WorkflowCounts {
     /// Flagged for a human by ensemble disagreement.
     pub needs_human_findings: usize,
     /// Context characters trimmed off (or wholly dropped) because they did
-    /// not fit a screen request's budget (`review::context`).
+    /// not fit screening or attached test-plan context (`review::context`).
     pub dropped_context_chars: usize,
     /// Context items (unit, base, test, neighbor, region) so trimmed.
     pub dropped_context_items: usize,
@@ -234,6 +238,7 @@ pub enum ReviewStage {
     Screen,
     Profile,
     Locate,
+    TestPlan,
 }
 
 impl ReviewStage {
@@ -243,6 +248,7 @@ impl ReviewStage {
             ReviewStage::Screen => "screen",
             ReviewStage::Profile => "profile",
             ReviewStage::Locate => "locate",
+            ReviewStage::TestPlan => "testplan",
         }
     }
 }
@@ -335,6 +341,12 @@ pub struct ReviewReport {
     pub usage: UsageSummary,
     pub index: IndexStats,
     pub budget: BudgetSummary,
+    /// Auditable heuristic follow-up priorities, when VOI was requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub follow_up_plan: Option<crate::review::voi::VoiSummary>,
+    /// Advisory comparison with explicitly supplied local requirements.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spec_drift: Option<crate::review::spec_drift::SpecSummary>,
     /// Deferred/failed work means absence of findings is not a complete review.
     pub partial: bool,
     pub tier: TierSummary,
