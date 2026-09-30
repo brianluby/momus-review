@@ -62,7 +62,7 @@ jobs:
   # Fixed-command build, test, target SBOM generation/validation and
   # packaging, inside the pinned builder.
   build:
-    uses: brianluby/momus-review/.github/workflows/builder.yml@deaa471b7a6f4f9ed3a300b2e0a2b922f31141c2
+    uses: brianluby/momus-review/.github/workflows/builder.yml@f3569937b4e75dc3d73ece062394ddcccd4dbbe9
     permissions:
       contents: read
 
@@ -85,7 +85,7 @@ jobs:
   # and the pinned attestation action.
   attest:
     needs: [build, sign-macos, audit]
-    uses: brianluby/momus-review/.github/workflows/attest.yml@deaa471b7a6f4f9ed3a300b2e0a2b922f31141c2
+    uses: brianluby/momus-review/.github/workflows/attest.yml@f3569937b4e75dc3d73ece062394ddcccd4dbbe9
     permissions:
       id-token: write
       attestations: write
@@ -126,7 +126,7 @@ jobs:
               "sbom": {"tool": "cargo-cyclonedx", "spec": "CycloneDX 1.5 JSON",
                        "scope": "momus binary, per-target resolved graph, dev dependencies excluded"},
               "provenance": {"signer_workflow": ".github/workflows/attest.yml",
-                             "signer_digest": "deaa471b7a6f4f9ed3a300b2e0a2b922f31141c2",
+                             "signer_digest": "f3569937b4e75dc3d73ece062394ddcccd4dbbe9",
                              "verify_with": "scripts/verify-release.sh",
                              "docs": "docs/slsa.md"},
               "targets": targets,
@@ -172,7 +172,7 @@ jobs:
         run: |
           ls -l dist
           scripts/verify-release.sh --dir dist --source-sha "$GITHUB_SHA" \
-            --signer-digest deaa471b7a6f4f9ed3a300b2e0a2b922f31141c2
+            --signer-digest f3569937b4e75dc3d73ece062394ddcccd4dbbe9
 
   publish:
     needs: verify
@@ -288,7 +288,7 @@ jobs:
           gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
             --dir "$RUNNER_TEMP/from-draft" --clobber
           scripts/verify-release.sh --dir "$RUNNER_TEMP/from-draft" --source-sha "$GITHUB_SHA" \
-            --signer-digest deaa471b7a6f4f9ed3a300b2e0a2b922f31141c2
+            --signer-digest f3569937b4e75dc3d73ece062394ddcccd4dbbe9
 
       - name: Publish
         env:

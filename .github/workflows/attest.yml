@@ -60,6 +60,29 @@ jobs:
       # be published, never carried over from pre-signing artifacts.
       - name: Freeze checksums
         run: |
+          set -euo pipefail
+          # Signing overwrites the archive artifact. The SBOM therefore
+          # travels with build metadata, outside the signing boundary.
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, shutil
+          target = os.environ["TARGET"]
+          sbom = pathlib.Path(f"meta/momus-{target}.cdx.json")
+          metadata = json.loads(pathlib.Path("meta/metadata.json").read_text())
+          if metadata["target"] != target or metadata["sbom"]["name"] != sbom.name:
+              raise SystemExit("SBOM target does not match build metadata")
+          data = sbom.read_bytes()
+          if hashlib.sha256(data).hexdigest() != metadata["sbom"]["sha256"]:
+              raise SystemExit("SBOM digest does not match build metadata")
+          bom = json.loads(data)
+          if not (bom.get("bomFormat") == "CycloneDX" and
+                  bom.get("specVersion") == "1.5" and bom.get("serialNumber")):
+              raise SystemExit("SBOM is not compatible with the pinned attestation action")
+          shutil.copyfile(sbom, pathlib.Path("dist") / sbom.name)
+          PY
+          # Missing subjects must fail before the action's glob can silently
+          # attest only the archive.
+          test -s "dist/momus-$TARGET.tar.gz"
+          test -s "dist/momus-$TARGET.cdx.json"
           cd dist
           shasum -a 256 "momus-$TARGET.tar.gz" > "momus-$TARGET.tar.gz.sha256"
           cat "momus-$TARGET.tar.gz.sha256"
