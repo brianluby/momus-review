@@ -47,6 +47,21 @@ jobs:
           "$RUNNER_TEMP/sbom-tests/bin/pip" install --quiet jsonschema==4.25.0
           "$RUNNER_TEMP/sbom-tests/bin/python" -B scripts/test-sbom.py
 
+  macos-shell:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test verifier and installer with system Bash 3.2
+        run: |
+          mkdir -p "$RUNNER_TEMP/system-bash"
+          ln -s /bin/bash "$RUNNER_TEMP/system-bash/bash"
+          export PATH="$RUNNER_TEMP/system-bash:$PATH"
+          bash --version
+          scripts/test-verify-release.sh
+          python3 -B scripts/test-install-release.py
+
   actionlint:
     runs-on: ubuntu-latest
     steps:
