@@ -186,7 +186,7 @@ then `momus github-review`. Inputs:
 | `fail-on-blocking` | `true` | fail the check when a finding requests changes (after posting) |
 | `max-comments` | `10` | new inline comments per run; the rest go in the summary |
 | `sarif` | `false` | also upload SARIF to code scanning (add `security-events: write`) |
-| `version` | `latest` | a release tag, `latest`, or `source` to build the action's own checkout |
+| `version` | `latest` | a release tag, `latest`, or explicit `source`; download/verification failures stop installation |
 | `verify-attestations` | `required` | verify provenance/SBOM attestations before using a downloaded binary (`legacy` for pre-v0.3.0 releases) |
 | `github-token` | `github.token` | token for reading the PR and posting |
 

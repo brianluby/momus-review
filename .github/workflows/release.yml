@@ -13,9 +13,9 @@
 # release manifest records the unsigned→signed transformation with
 # notarization evidence.
 #
-# The pinned commit appears in exactly five places below — the two
+# The pinned commit appears in exactly six places below — the two
 # reusable-workflow calls, the manifest's recorded signer digest, and the
-# two --signer-digest verifications — and all five must move together,
+# two --signer-digest verifications and negative-policy test — all six move together,
 # deliberately, with the same review bar as this file. Bootstrap: the pin
 # is the commit that introduced attest.yml alongside builder.yml.
 #
@@ -171,8 +171,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           ls -l dist
-          scripts/verify-release.sh --dir dist --source-sha "$GITHUB_SHA" \
+          scripts/verify-release.sh --dir dist --source-sha "$GITHUB_SHA" --source-ref "$GITHUB_REF" \
             --signer-digest 290feb94f125b7525302a46e1a37ff5eaefd3465
+
+      - name: Reject wrong attestation policies
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/test-attestation-policy.sh dist 290feb94f125b7525302a46e1a37ff5eaefd3465
 
   publish:
     needs: verify
@@ -207,27 +212,7 @@ jobs:
       # unexpected or missing assets block publication.
       - name: Check the asset inventory
         run: |
-          python3 - <<'PY'
-          import os, sys
-          targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu",
-                     "aarch64-apple-darwin"]
-          expected = {"release-manifest.json", "release-manifest.json.sha256"}
-          for t in targets:
-              expected |= {
-                  f"momus-{t}.tar.gz", f"momus-{t}.tar.gz.sha256", f"momus-{t}.cdx.json",
-                  f"momus-{t}.provenance.bundle.json", f"momus-{t}.sbom-attestation.bundle.json",
-                  f"momus-{t}.fragment.json",
-              }
-          actual = set(os.listdir("dist"))
-          missing, unexpected = expected - actual, actual - expected
-          if missing or unexpected:
-              for name in sorted(missing):
-                  print(f"::error::missing release asset: {name}")
-              for name in sorted(unexpected):
-                  print(f"::error::unexpected file in dist: {name}")
-              sys.exit(1)
-          print(f"asset inventory ok: {len(expected)} files")
-          PY
+          python3 scripts/release-policy.py inventory --dir dist --fragments
 
       # Immutable releases must already be enabled: publishing a mutable
       # release would let assets be swapped after the fact.
@@ -248,8 +233,11 @@ jobs:
             echo "$response" | jq -e '(.immutable // .enabled) == true' >/dev/null \
               || { echo "::error::immutable releases are not enabled for $GITHUB_REPOSITORY"; exit 1; }
             echo "immutable releases: enabled"
+          elif [[ "$response" == *"HTTP 403"* ]]; then
+            echo "::warning::workflow token lacks Administration: read; verify immutable releases with admin access before tagging"
           else
-            echo "::warning::could not verify the immutable-releases setting with the workflow token ($response)"
+            echo "::error::immutable-release setting lookup failed: $response"
+            exit 1
           fi
 
       # Never overwrite: a failed publish is retried by deleting the draft
@@ -258,10 +246,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "::error::release $GITHUB_REF_NAME already exists; never overwrite a published version"
+          if response=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" 2>&1); then
+            echo "::error::release $GITHUB_REF_NAME already exists; never overwrite a draft or published version"
+            exit 1
+          elif [[ "$response" != *"HTTP 404"* ]]; then
+            echo "::error::release existence lookup failed: $response"
             exit 1
           fi
+
+      - name: Select release version policy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases" > "$RUNNER_TEMP/published-releases.json"
+          python3 scripts/release-policy.py version --tag "$GITHUB_REF_NAME" \
+            --releases "$RUNNER_TEMP/published-releases.json" > "$RUNNER_TEMP/version-policy.json"
 
       - name: Create the draft release with the explicit asset set
         env:
@@ -275,7 +274,11 @@ jobs:
             )
           done
           assets+=(dist/release-manifest.json dist/release-manifest.json.sha256)
-          gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+          policy=(--latest="$(jq -r .latest "$RUNNER_TEMP/version-policy.json")")
+          if [ "$(jq -r .prerelease "$RUNNER_TEMP/version-policy.json")" = true ]; then
+            policy+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" "${policy[@]}" \
             --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" \
             --generate-notes --verify-tag --draft
 
@@ -287,13 +290,22 @@ jobs:
           rm -rf "$RUNNER_TEMP/from-draft" && mkdir -p "$RUNNER_TEMP/from-draft"
           gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
             --dir "$RUNNER_TEMP/from-draft" --clobber
-          scripts/verify-release.sh --dir "$RUNNER_TEMP/from-draft" --source-sha "$GITHUB_SHA" \
+          scripts/verify-release.sh --dir "$RUNNER_TEMP/from-draft" --source-sha "$GITHUB_SHA" --source-ref "$GITHUB_REF" \
             --signer-digest 290feb94f125b7525302a46e1a37ff5eaefd3465
 
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
+        run: |
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false \
+            --latest="$(jq -r .latest "$RUNNER_TEMP/version-policy.json")"
+
+      - name: Confirm the published asset set
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" > "$RUNNER_TEMP/published.json"
+          python3 scripts/release-policy.py published --json "$RUNNER_TEMP/published.json"
 
       # Callers pin the reusable workflow and the action to the major tag
       # (review.yml@v0), so each release moves it; v1.x would move v1.
@@ -301,19 +313,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          major="${GITHUB_REF_NAME%%.*}"
-          if ! [[ "$major" =~ ^v[0-9]+$ ]]; then
-            echo "::error::cannot derive a major tag from $GITHUB_REF_NAME"
-            exit 1
-          fi
-          # Only the newest vN.x.y moves vN: a backport (v0.1.5 after v0.2.0)
-          # or a pre-release (v0.3.0-rc1) must not move callers onto it.
-          newest=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$major." \
-            -q '.[].ref | sub("^refs/tags/"; "")' | grep -E "^$major\.[0-9]+\.[0-9]+$" | sort -V | tail -n 1)
-          if [ "$newest" != "$GITHUB_REF_NAME" ]; then
-            echo "$GITHUB_REF_NAME is not the newest $major release ($newest); leaving $major where it is"
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases" > "$RUNNER_TEMP/published-releases.json"
+          policy=$(python3 scripts/release-policy.py version --tag "$GITHUB_REF_NAME" \
+            --releases "$RUNNER_TEMP/published-releases.json")
+          if [ "$(jq -r .advance_major <<<"$policy")" != true ]; then
+            echo "backport or prerelease: leaving the major tag unchanged"
             exit 0
           fi
+          major=$(jq -r .major <<<"$policy")
           if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$major" --silent 2>/dev/null; then
             gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$major" \
               -f sha="$GITHUB_SHA" -F force=true --silent
@@ -322,12 +329,3 @@ jobs:
               -f ref="refs/tags/$major" -f sha="$GITHUB_SHA" --silent
           fi
           echo "$major -> $GITHUB_SHA"
-
-      - name: Confirm the published asset set
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets \
-            -q '[.assets[].name] | sort' > "$RUNNER_TEMP/published.txt"
-          cat "$RUNNER_TEMP/published.txt"
-          test "$(wc -l < "$RUNNER_TEMP/published.txt")" -eq 17

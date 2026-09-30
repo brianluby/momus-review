@@ -56,8 +56,8 @@ inputs:
   version:
     description: >-
       momus release to download (`v0.1.0`, or `latest`), or `source` to build
-      this action's own checkout. Without a prebuilt binary for the runner,
-      the action's own source is built.
+      this action's own checkout. Download or verification failures stop
+      installation; choose `source` explicitly to build from source.
     required: false
     default: latest
   verify-attestations:
@@ -130,70 +130,7 @@ runs:
         ACTION_PATH: ${{ github.action_path }}
         RELEASE_REPO: ${{ inputs.release-repo || github.action_repository || github.repository }}
       run: |
-        root="$RUNNER_TEMP/momus-bin"
-        mkdir -p "$root/bin"
-        from_source() {
-          echo "building momus from $ACTION_PATH"
-          # Run from the action's own directory: rustup and cargo resolve
-          # rust-toolchain.toml from the working directory, not from --path,
-          # so building in the caller's workspace would use the caller's
-          # toolchain pin instead of momus's.
-          (
-            cd "$ACTION_PATH"
-            rustup toolchain install --profile minimal
-            cargo install --locked --path . --bin momus --root "$root"
-          )
-        }
-        case "$RUNNER_OS-$RUNNER_ARCH" in
-          Linux-X64) target=x86_64-unknown-linux-gnu ;;
-          Linux-ARM64) target=aarch64-unknown-linux-gnu ;;
-          macOS-ARM64) target=aarch64-apple-darwin ;;
-          *) target="" ;;
-        esac
-        if [ "$VERSION" = source ]; then
-          from_source
-        elif [ -z "$target" ]; then
-          echo "::warning::no prebuilt momus for $RUNNER_OS-$RUNNER_ARCH"
-          from_source
-        else
-          dl="$RUNNER_TEMP/momus-dl"
-          rm -rf "$dl" && mkdir -p "$dl"
-          tag=()
-          if [ "$VERSION" != latest ]; then tag=("$VERSION"); fi
-          if gh release download "${tag[@]}" --repo "$RELEASE_REPO" \
-               --pattern "momus-$target.tar.gz" --pattern "momus-$target.tar.gz.sha256" \
-               --pattern "momus-$target.cdx.json" --pattern "momus-$target.provenance.bundle.json" \
-               --pattern "momus-$target.sbom-attestation.bundle.json" \
-               --pattern "release-manifest.json" --pattern "release-manifest.json.sha256" --dir "$dl"; then
-            (cd "$dl" && shasum -a 256 -c "momus-$target.tar.gz.sha256")
-            if [ "$VERIFY_ATTESTATIONS" != legacy ]; then
-              # The expected source commit is resolved from the selected
-              # (immutable) tag, outside the release assets; the
-              # attestations must bind these exact bytes to that commit and
-              # to our signing workflow. On failure this step fails: never
-              # fall back to source after authenticity verification fails.
-              resolved_tag=$([ "$VERSION" = latest ] \
-                && gh api "repos/$RELEASE_REPO/releases/latest" -q .tag_name || echo "$VERSION")
-              ref=$(gh api "repos/$RELEASE_REPO/git/ref/tags/$resolved_tag")
-              sha=$(jq -r .object.sha <<<"$ref")
-              if [ "$(jq -r .object.type <<<"$ref")" = tag ]; then
-                sha=$(gh api "repos/$RELEASE_REPO/git/tags/$sha" -q .object.sha)
-              fi
-              echo "verifying attestations for momus $resolved_tag ($sha) from $RELEASE_REPO"
-              "$ACTION_PATH/scripts/verify-release.sh" \
-                --dir "$dl" --source-sha "$sha" --targets "$target"
-            else
-              echo "::notice::legacy attestation policy: checksum-only verification for $VERSION"
-            fi
-            tar -xzf "$dl/momus-$target.tar.gz" -C "$dl"
-            install -m 0755 "$dl/momus-$target/momus" "$root/bin/momus"
-          else
-            echo "::warning::could not download momus $VERSION for $target from $RELEASE_REPO"
-            from_source
-          fi
-        fi
-        echo "$root/bin" >> "$GITHUB_PATH"
-        "$root/bin/momus" --version
+        "$ACTION_PATH/scripts/install-release.sh"
 
     # Restore by target branch, then save a unique run key even when the
     # blocking-findings gate fails. Only answers/index metadata are cached.

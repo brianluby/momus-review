@@ -25,6 +25,7 @@
 #   scripts/verify-release.sh --dir DIST --source-sha SHA [options]
 #     --dir DIR              directory holding the downloaded assets
 #     --source-sha SHA       required expected source commit (plain hex)
+#     --source-ref REF       optional expected ref (installer/release CI pin it)
 #     --repo OWNER/REPO      default brianluby/momus-review
 #     --signer-workflow P    default <repo>/.github/workflows/attest.yml
 #     --signer-digest SHA    optional. The builder workflow's pinned commit
@@ -43,6 +44,7 @@ REPO="brianluby/momus-review"
 SIGNER_WORKFLOW="brianluby/momus-review/.github/workflows/attest.yml"
 APPLE_TEAM_ID="DVH6X33J83"
 SOURCE_SHA=""
+SOURCE_REF=""
 SIGNER_DIGEST=""
 TARGETS="$ALL_TARGETS"
 SKIP_CODESIGN=0
@@ -56,6 +58,7 @@ while [ $# -gt 0 ]; do
     --dir) DIR=$2; shift 2 ;;
     --repo) REPO=$2; shift 2 ;;
     --source-sha) SOURCE_SHA=$2; shift 2 ;;
+    --source-ref) SOURCE_REF=$2; shift 2 ;;
     --signer-workflow) SIGNER_WORKFLOW=$2; shift 2 ;;
     --signer-digest) SIGNER_DIGEST=$2; shift 2 ;;
     --apple-team-id) APPLE_TEAM_ID=$2; shift 2 ;;
@@ -67,6 +70,9 @@ while [ $# -gt 0 ]; do
 done
 need dir "$DIR"
 need source-sha "$SOURCE_SHA"
+# Optionally require the source ref as well as its commit.
+ref_args=()
+[ -n "$SOURCE_REF" ] && ref_args=(--source-ref "$SOURCE_REF")
 # An array so the digest flag is simply absent when not pinned.
 digest_args=()
 [ -n "$SIGNER_DIGEST" ] && digest_args=(--signer-digest "$SIGNER_DIGEST")
@@ -112,7 +118,7 @@ for target in ${TARGETS//,/ }; do
         --predicate-type "https://slsa.dev/provenance/v1" \
         --signer-workflow "$SIGNER_WORKFLOW" \
         "${digest_args[@]}" \
-        --source-digest "$SOURCE_SHA" \
+        --source-digest "$SOURCE_SHA" "${ref_args[@]}" \
         --deny-self-hosted-runners >/dev/null; then
       fail "$subject: SLSA provenance verification failed ($provenance)"
       continue
@@ -127,7 +133,7 @@ for target in ${TARGETS//,/ }; do
       --predicate-type "https://cyclonedx.org/bom" \
       --signer-workflow "$SIGNER_WORKFLOW" \
       "${digest_args[@]}" \
-      --source-digest "$SOURCE_SHA" \
+      --source-digest "$SOURCE_SHA" "${ref_args[@]}" \
       --deny-self-hosted-runners --format=json); then
     if ! diff <(printf '%s' "$gh_json" | jq -Sjc '.[0].verificationResult.statement.predicate') \
               <(jq -Sjc . "$sbom"); then
