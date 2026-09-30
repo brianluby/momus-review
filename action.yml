@@ -162,8 +162,8 @@ runs:
           if [ "$VERSION" != latest ]; then tag=("$VERSION"); fi
           if gh release download "${tag[@]}" --repo "$RELEASE_REPO" \
                --pattern "momus-$target.tar.gz" --pattern "momus-$target.tar.gz.sha256" \
-               --pattern "momus-$target.cdx.json" --pattern "momus-$target.provenance.bundle" \
-               --pattern "momus-$target.sbom-attestation.bundle" \
+               --pattern "momus-$target.cdx.json" --pattern "momus-$target.provenance.bundle.json" \
+               --pattern "momus-$target.sbom-attestation.bundle.json" \
                --pattern "release-manifest.json" --pattern "release-manifest.json.sha256" --dir "$dl"; then
             (cd "$dl" && shasum -a 256 -c "momus-$target.tar.gz.sha256")
             if [ "$VERIFY_ATTESTATIONS" != legacy ]; then

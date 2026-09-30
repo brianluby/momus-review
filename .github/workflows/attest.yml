@@ -105,8 +105,8 @@ jobs:
 
       - name: Collect bundles and the target manifest fragment
         run: |
-          cp "${{ steps.provenance.outputs.bundle-path }}" "dist/momus-$TARGET.provenance.bundle"
-          cp "${{ steps.sbom.outputs.bundle-path }}" "dist/momus-$TARGET.sbom-attestation.bundle"
+          cp "${{ steps.provenance.outputs.bundle-path }}" "dist/momus-$TARGET.provenance.bundle.json"
+          cp "${{ steps.sbom.outputs.bundle-path }}" "dist/momus-$TARGET.sbom-attestation.bundle.json"
           python3 - <<'PY'
           import hashlib, json, os
           target = os.environ["TARGET"]
@@ -118,8 +118,8 @@ jobs:
           fragment["archive"].update({"sha256": sha(archive), "bytes": os.path.getsize(f"dist/{archive}")})
           fragment["sbom"]["sha256"] = sha(sbom)
           fragment["attestations"] = {
-              "provenance_bundle": f"momus-{target}.provenance.bundle",
-              "sbom_bundle": f"momus-{target}.sbom-attestation.bundle",
+              "provenance_bundle": f"momus-{target}.provenance.bundle.json",
+              "sbom_bundle": f"momus-{target}.sbom-attestation.bundle.json",
           }
           if target == "aarch64-apple-darwin":
               # Record the finalization transformation honestly: input
@@ -146,7 +146,7 @@ jobs:
             dist/momus-${{ matrix.target }}.tar.gz
             dist/momus-${{ matrix.target }}.tar.gz.sha256
             dist/momus-${{ matrix.target }}.cdx.json
-            dist/momus-${{ matrix.target }}.provenance.bundle
-            dist/momus-${{ matrix.target }}.sbom-attestation.bundle
+            dist/momus-${{ matrix.target }}.provenance.bundle.json
+            dist/momus-${{ matrix.target }}.sbom-attestation.bundle.json
             dist/momus-${{ matrix.target }}.fragment.json
           if-no-files-found: error

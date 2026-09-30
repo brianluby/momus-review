@@ -31,6 +31,18 @@ if [ "$1" = "--version" ]; then
   exit 0
 fi
 printf '%s\n' "$*" >> "$GH_ARGS_LOG"
+# Real gh rejects bundles unless the filename ends in .json or .jsonl.
+# Enforce the same file contract instead of accepting every fixture path.
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = --bundle ]; then
+    case "$2" in
+      *.json|*.jsonl) ;;
+      *) echo "bundle file extension not supported, must be json or jsonl" >&2; exit 1 ;;
+    esac
+    shift
+  fi
+  shift
+done
 cat "$GH_STUB_OUT"
 exit 0
 STUB
@@ -59,8 +71,8 @@ make_fixture() {
   cat > "$dir/momus-$TARGET.cdx.json" <<'EOF'
 {"bomFormat":"CycloneDX","specVersion":"1.5","version":1,"components":[{"type":"library","name":"serde","version":"1.0.219"}]}
 EOF
-  echo '{"mediaType":"application/vnd.dsse.envelope.v1+json"}' > "$dir/momus-$TARGET.provenance.bundle"
-  echo '{"mediaType":"application/vnd.dsse.envelope.v1+json"}' > "$dir/momus-$TARGET.sbom-attestation.bundle"
+  echo '{"mediaType":"application/vnd.dsse.envelope.v1+json"}' > "$dir/momus-$TARGET.provenance.bundle.json"
+  echo '{"mediaType":"application/vnd.dsse.envelope.v1+json"}' > "$dir/momus-$TARGET.sbom-attestation.bundle.json"
   python3 - "$dir" "$TARGET" <<'PY'
 import hashlib, json, sys
 root, target = sys.argv[1], sys.argv[2]
@@ -128,6 +140,8 @@ grep -q -- "--predicate-type https://slsa.dev/provenance/v1" "$GH_ARGS_LOG" || g
 grep -q -- "--predicate-type https://cyclonedx.org/bom" "$GH_ARGS_LOG" || gh_flags_ok=0
 grep -q -- "--deny-self-hosted-runners" "$GH_ARGS_LOG" || gh_flags_ok=0
 grep -q -- "attestation verify momus-$TARGET.cdx.json" "$GH_ARGS_LOG" || gh_flags_ok=0
+grep -q -- "--bundle momus-$TARGET.provenance.bundle.json" "$GH_ARGS_LOG" || gh_flags_ok=0
+grep -q -- "--bundle momus-$TARGET.sbom-attestation.bundle.json" "$GH_ARGS_LOG" || gh_flags_ok=0
 if [ "$gh_flags_ok" -eq 1 ]; then
   echo "ok   policy flags (repo, source, signer, predicates, hosted runners, SBOM subject)"
 else
@@ -153,8 +167,8 @@ expect_fail "altered SBOM" "$work/altered-sbom" "predicate does not match"
 
 # 5. Missing attestation bundle for a target.
 make_fixture "$work/no-bundle"
-rm "$work/no-bundle/momus-$TARGET.provenance.bundle"
-expect_fail "missing bundle" "$work/no-bundle" "provenance.bundle: missing"
+rm "$work/no-bundle/momus-$TARGET.provenance.bundle.json"
+expect_fail "missing bundle" "$work/no-bundle" "provenance.bundle.json: missing"
 
 # 6. Missing target entirely (asked for it, nothing there).
 mkdir -p "$work/no-target"
@@ -220,7 +234,7 @@ fi
 if "$verify" --dir "$work/good" --source-sha "$SHA" --signer-workflow "$SIGNER" \
      --targets "$TARGET,aarch64-apple-darwin" >"$work/out.txt" 2>&1; then
   echo "FAIL second target missing: expected failure, got success"; FAILED=1
-elif grep -q "aarch64-apple-darwin.provenance.bundle: missing" "$work/out.txt"; then
+elif grep -q "aarch64-apple-darwin.provenance.bundle.json: missing" "$work/out.txt"; then
   echo "ok   second target missing (blocked)"
 else
   echo "FAIL second target missing: unexpected failure output"; sed 's/^/     /' "$work/out.txt"; FAILED=1

@@ -62,7 +62,7 @@ jobs:
   # Fixed-command build, test, target SBOM generation/validation and
   # packaging, inside the pinned builder.
   build:
-    uses: brianluby/momus-review/.github/workflows/builder.yml@f3569937b4e75dc3d73ece062394ddcccd4dbbe9
+    uses: brianluby/momus-review/.github/workflows/builder.yml@290feb94f125b7525302a46e1a37ff5eaefd3465
     permissions:
       contents: read
 
@@ -85,7 +85,7 @@ jobs:
   # and the pinned attestation action.
   attest:
     needs: [build, sign-macos, audit]
-    uses: brianluby/momus-review/.github/workflows/attest.yml@f3569937b4e75dc3d73ece062394ddcccd4dbbe9
+    uses: brianluby/momus-review/.github/workflows/attest.yml@290feb94f125b7525302a46e1a37ff5eaefd3465
     permissions:
       id-token: write
       attestations: write
@@ -126,7 +126,7 @@ jobs:
               "sbom": {"tool": "cargo-cyclonedx", "spec": "CycloneDX 1.5 JSON",
                        "scope": "momus binary, per-target resolved graph, dev dependencies excluded"},
               "provenance": {"signer_workflow": ".github/workflows/attest.yml",
-                             "signer_digest": "f3569937b4e75dc3d73ece062394ddcccd4dbbe9",
+                             "signer_digest": "290feb94f125b7525302a46e1a37ff5eaefd3465",
                              "verify_with": "scripts/verify-release.sh",
                              "docs": "docs/slsa.md"},
               "targets": targets,
@@ -172,7 +172,7 @@ jobs:
         run: |
           ls -l dist
           scripts/verify-release.sh --dir dist --source-sha "$GITHUB_SHA" \
-            --signer-digest f3569937b4e75dc3d73ece062394ddcccd4dbbe9
+            --signer-digest 290feb94f125b7525302a46e1a37ff5eaefd3465
 
   publish:
     needs: verify
@@ -215,7 +215,7 @@ jobs:
           for t in targets:
               expected |= {
                   f"momus-{t}.tar.gz", f"momus-{t}.tar.gz.sha256", f"momus-{t}.cdx.json",
-                  f"momus-{t}.provenance.bundle", f"momus-{t}.sbom-attestation.bundle",
+                  f"momus-{t}.provenance.bundle.json", f"momus-{t}.sbom-attestation.bundle.json",
                   f"momus-{t}.fragment.json",
               }
           actual = set(os.listdir("dist"))
@@ -271,7 +271,7 @@ jobs:
           for t in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu aarch64-apple-darwin; do
             assets+=(
               "dist/momus-$t.tar.gz" "dist/momus-$t.tar.gz.sha256" "dist/momus-$t.cdx.json"
-              "dist/momus-$t.provenance.bundle" "dist/momus-$t.sbom-attestation.bundle"
+              "dist/momus-$t.provenance.bundle.json" "dist/momus-$t.sbom-attestation.bundle.json"
             )
           done
           assets+=(dist/release-manifest.json dist/release-manifest.json.sha256)
@@ -288,7 +288,7 @@ jobs:
           gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
             --dir "$RUNNER_TEMP/from-draft" --clobber
           scripts/verify-release.sh --dir "$RUNNER_TEMP/from-draft" --source-sha "$GITHUB_SHA" \
-            --signer-digest f3569937b4e75dc3d73ece062394ddcccd4dbbe9
+            --signer-digest 290feb94f125b7525302a46e1a37ff5eaefd3465
 
       - name: Publish
         env:
