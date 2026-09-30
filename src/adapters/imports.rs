@@ -32,7 +32,10 @@ fn rust_use_target(path: &str) -> Option<String> {
         rest
     } else {
         let mut rest = path;
-        while let Some(stripped) = rest.strip_prefix("super::").or_else(|| rest.strip_prefix("self::")) {
+        while let Some(stripped) = rest
+            .strip_prefix("super::")
+            .or_else(|| rest.strip_prefix("self::"))
+        {
             rest = stripped;
         }
         if rest == path {
@@ -47,26 +50,27 @@ fn rust_use_target(path: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join("/");
-    if joined.is_empty() { None } else { Some(joined) }
+    if joined.is_empty() {
+        None
+    } else {
+        Some(joined)
+    }
 }
 
 static MOD_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?m)^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?mod[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]*;")
         .expect("valid regex")
 });
-static USE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?m)^[ \t]*use[ \t]+([^;\n]*);").expect("valid regex")
-});
+static USE_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?m)^[ \t]*use[ \t]+([^;\n]*);").expect("valid regex"));
 static JS_IMPORT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        concat!(
-            r#"(?m)"#,
-            r#"import\s+[^'"]*?\s+from\s+['"]([^'"]+)['"]"#,
-            r#"|import\s+['"]([^'"]+)['"]"#,
-            r#"|export\s+[^'"]*?\s+from\s+['"]([^'"]+)['"]"#,
-            r#"|require\s*\(\s*['"]([^'"]+)['"]"#,
-        ),
-    )
+    Regex::new(concat!(
+        r#"(?m)"#,
+        r#"import\s+[^'"]*?\s+from\s+['"]([^'"]+)['"]"#,
+        r#"|import\s+['"]([^'"]+)['"]"#,
+        r#"|export\s+[^'"]*?\s+from\s+['"]([^'"]+)['"]"#,
+        r#"|require\s*\(\s*['"]([^'"]+)['"]"#,
+    ))
     .expect("valid regex")
 });
 
@@ -86,7 +90,12 @@ fn extract_rust_imports(content: &str) -> Vec<String> {
 fn extract_js_imports(content: &str) -> Vec<String> {
     JS_IMPORT_REGEX
         .captures_iter(content)
-        .filter_map(|c| c.iter().skip(1).find_map(|g| g).map(|m| m.as_str().to_string()))
+        .filter_map(|c| {
+            c.iter()
+                .skip(1)
+                .find_map(|g| g)
+                .map(|m| m.as_str().to_string())
+        })
         .filter(|s| s.starts_with("./") || s.starts_with("../"))
         .collect()
 }
@@ -125,7 +134,10 @@ fn normalize_path(path: &str) -> Vec<String> {
     {
         last.truncate(dot);
     }
-    if matches!(segments.last().map(String::as_str), Some("mod") | Some("index")) {
+    if matches!(
+        segments.last().map(String::as_str),
+        Some("mod") | Some("index")
+    ) {
         segments.pop();
     }
     segments
@@ -148,7 +160,10 @@ fn candidate_segments(candidate: &str) -> Vec<String> {
     {
         last.truncate(dot);
     }
-    if matches!(segments.last().map(String::as_str), Some("mod") | Some("index")) {
+    if matches!(
+        segments.last().map(String::as_str),
+        Some("mod") | Some("index")
+    ) {
         segments.pop();
     }
     segments
@@ -239,18 +254,27 @@ pub struct ImportGraph {
 
 impl ImportGraph {
     pub fn build(files: &[SourceFile]) -> ImportGraph {
-        let mut adjacency: HashMap<String, Vec<String>> = files
-            .iter()
-            .map(|f| (f.path.clone(), Vec::new()))
-            .collect();
+        Self::from_candidates(files, |f| extract_imports(&f.path, &f.content))
+    }
+
+    /// Builds edges from blob-cached import candidates without re-parsing source.
+    pub fn from_candidates(
+        files: &[SourceFile],
+        candidates: impl Fn(&SourceFile) -> Vec<String>,
+    ) -> ImportGraph {
+        let mut adjacency: HashMap<String, Vec<String>> =
+            files.iter().map(|f| (f.path.clone(), Vec::new())).collect();
 
         let resolver = Resolver::new(files);
         for f in files {
             let importer = normalize_path(&f.path);
             let is_rust = Language::from_path(&f.path) == Some(Language::Rust);
-            for target in extract_imports(&f.path, &f.content) {
+            for target in candidates(f) {
                 if let Some(resolved) = resolver.resolve(&target, &importer, is_rust) {
-                    adjacency.entry(f.path.clone()).or_default().push(resolved.clone());
+                    adjacency
+                        .entry(f.path.clone())
+                        .or_default()
+                        .push(resolved.clone());
                     adjacency.entry(resolved).or_default().push(f.path.clone());
                 }
             }
@@ -280,7 +304,10 @@ mod tests {
     use super::*;
 
     fn file(path: &str, content: &str) -> SourceFile {
-        SourceFile { path: path.to_string(), content: content.to_string() }
+        SourceFile {
+            path: path.to_string(),
+            content: content.to_string(),
+        }
     }
 
     #[test]

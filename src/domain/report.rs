@@ -281,6 +281,14 @@ pub struct CacheSummary {
     pub misses: u64,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct IndexStats {
+    pub computed: usize,
+    pub reused: usize,
+    pub fallbacks: usize,
+}
+
 /// The full review report. `#[serde(default)]` keeps reads deliberately
 /// tolerant: a report saved by an older version stays viewable.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -297,6 +305,7 @@ pub struct ReviewReport {
     pub profiles: Vec<FileProfile>,
     pub workflow: WorkflowCounts,
     pub usage: UsageSummary,
+    pub index: IndexStats,
     /// Distinct secret values redacted from outgoing requests, per rule
     /// (`domain::redact`); empty when nothing matched or redaction was off.
     pub redactions: BTreeMap<String, usize>,

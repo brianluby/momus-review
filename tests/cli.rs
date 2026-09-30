@@ -8,7 +8,12 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 fn git(repo: &Path, args: &[&str]) {
-    let status = Command::new("git").arg("-C").arg(repo).args(args).status().expect("git runs");
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .status()
+        .expect("git runs");
     assert!(status.success(), "git {args:?} failed");
 }
 
@@ -26,7 +31,11 @@ fn config_only_branch() -> tempfile::TempDir {
     git(repo, &["branch", "base"]);
     git(repo, &["checkout", "-q", "-b", "feature"]);
     fs::create_dir_all(repo.join(".github/workflows")).unwrap();
-    fs::write(repo.join(".github/workflows/ci.yml"), "name: ci\non: push\n").unwrap();
+    fs::write(
+        repo.join(".github/workflows/ci.yml"),
+        "name: ci\non: push\n",
+    )
+    .unwrap();
     git(repo, &["add", "-A"]);
     git(repo, &["commit", "-q", "-m", "config only"]);
     dir
@@ -51,8 +60,15 @@ fn allow_empty_turns_nothing_to_review_into_an_empty_report() {
 
     let out = momus(repo, &["review", "--base", "base", "--allow-empty"]);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(out.status.success(), "exit {:?}: {stderr}", out.status.code());
-    assert!(stderr.contains("No changed source files to review"), "{stderr}");
+    assert!(
+        out.status.success(),
+        "exit {:?}: {stderr}",
+        out.status.code()
+    );
+    assert!(
+        stderr.contains("No changed source files to review"),
+        "{stderr}"
+    );
 
     let report: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(repo.join("report.json")).unwrap()).unwrap();
@@ -86,11 +102,19 @@ async fn stub_server() -> String {
             let about_b = body["state"]["file"]["path"] == "b.rs";
             let all_noul = questions.values().all(|q| q["type"] == "noul");
             if about_b || !all_noul {
-                return (StatusCode::BAD_REQUEST, Json(json!({ "detail": { "error_type": "max_tokens_exceeded" } })));
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "detail": { "error_type": "max_tokens_exceeded" } })),
+                );
             }
-            let answers: serde_json::Map<String, Value> =
-                questions.keys().map(|k| (k.clone(), json!({ "noul": 0.1 }))).collect();
-            (StatusCode::OK, Json(json!({ "model": "stub", "answers": answers })))
+            let answers: serde_json::Map<String, Value> = questions
+                .keys()
+                .map(|k| (k.clone(), json!({ "noul": 0.1 })))
+                .collect();
+            (
+                StatusCode::OK,
+                Json(json!({ "model": "stub", "answers": answers })),
+            )
         }),
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -129,7 +153,11 @@ async fn failed_requests_are_skipped_reported_and_recorded() {
     .await
     .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(out.status.success(), "exit {:?}: {stderr}", out.status.code());
+    assert!(
+        out.status.success(),
+        "exit {:?}: {stderr}",
+        out.status.code()
+    );
     assert!(stderr.contains("screen b.rs failed, skipped"), "{stderr}");
     assert!(stderr.contains("skipped 2 failed request(s)"), "{stderr}");
 
@@ -140,23 +168,39 @@ async fn failed_requests_are_skipped_reported_and_recorded() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|s| (s["file"].as_str().unwrap().to_string(), s["stage"].as_str().unwrap().to_string()))
+        .map(|s| {
+            (
+                s["file"].as_str().unwrap().to_string(),
+                s["stage"].as_str().unwrap().to_string(),
+            )
+        })
         .collect();
     assert_eq!(
         skipped,
-        [("b.rs".to_string(), "screen".to_string()), ("a.rs".to_string(), "profile".to_string())],
+        [
+            ("b.rs".to_string(), "screen".to_string()),
+            ("a.rs".to_string(), "profile".to_string())
+        ],
         "the failed screen and the failed (non-gating) profile are recorded"
     );
-    assert!(report["skipped"][0]["reason"].as_str().unwrap().contains("max_tokens_exceeded"));
+    assert!(
+        report["skipped"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("max_tokens_exceeded")
+    );
 }
 /// A stub System One server that records every request body: answers `noul`
 /// questions with a low probability, fails non-`noul` ones (profiles).
-async fn capturing_stub_server() -> (String, std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>) {
-    use std::sync::{Arc, Mutex};
+async fn capturing_stub_server() -> (
+    String,
+    std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+) {
     use axum::http::StatusCode;
     use axum::routing::post;
     use axum::{Json, Router};
     use serde_json::{Value, json};
+    use std::sync::{Arc, Mutex};
 
     let bodies: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
     let seen = bodies.clone();
@@ -178,7 +222,10 @@ async fn capturing_stub_server() -> (String, std::sync::Arc<std::sync::Mutex<Vec
                     .keys()
                     .map(|k| (k.clone(), json!({ "noul": 0.1 })))
                     .collect();
-                (StatusCode::OK, Json(json!({ "model": "stub", "answers": answers })))
+                (
+                    StatusCode::OK,
+                    Json(json!({ "model": "stub", "answers": answers })),
+                )
             }
         }),
     );
@@ -248,7 +295,11 @@ async fn hundreds_of_changed_test_files_stay_under_the_context_budget() {
         .await
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(out.status.success(), "exit {:?}: {stderr}", out.status.code());
+    assert!(
+        out.status.success(),
+        "exit {:?}: {stderr}",
+        out.status.code()
+    );
 
     let bodies = bodies.lock().unwrap().clone();
     let screens = screen_states(&bodies);
@@ -259,15 +310,21 @@ async fn hundreds_of_changed_test_files_stay_under_the_context_budget() {
         // The budget bounds context characters; JSON keys, paths, and
         // escaping add a little structure around them.
         let state = serde_json::to_string(&body["state"]).unwrap();
-        assert!(state.len() <= 8000 + 1000, "state was {} chars", state.len());
+        assert!(
+            state.len() <= 8000 + 1000,
+            "state was {} chars",
+            state.len()
+        );
     }
 
     let report: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(dir.path().join("report.json")).unwrap()).unwrap();
-    assert_eq!(report["screenedFiles"], 1, "the one source file was screened");
     assert_eq!(
-        report["workflow"]["droppedContextChars"],
-        0,
+        report["screenedFiles"], 1,
+        "the one source file was screened"
+    );
+    assert_eq!(
+        report["workflow"]["droppedContextChars"], 0,
         "nothing needed dropping under the tight budget"
     );
 }
@@ -287,12 +344,19 @@ async fn context_over_the_budget_is_trimmed_and_counted() {
     let bodies = bodies.lock().unwrap().clone();
     for body in &screen_states(&bodies) {
         let state = serde_json::to_string(&body["state"]).unwrap();
-        assert!(state.len() <= 5000 + 1000, "state was {} chars", state.len());
+        assert!(
+            state.len() <= 5000 + 1000,
+            "state was {} chars",
+            state.len()
+        );
     }
     let report: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(dir.path().join("report.json")).unwrap()).unwrap();
     assert!(
-        report["workflow"]["droppedContextChars"].as_u64().unwrap_or(0) > 100_000,
+        report["workflow"]["droppedContextChars"]
+            .as_u64()
+            .unwrap_or(0)
+            > 100_000,
         "the trimmed patch is counted: {}",
         report["workflow"]["droppedContextChars"]
     );
@@ -327,4 +391,111 @@ async fn a_small_diff_sends_equivalent_context_with_nothing_dropped() {
         serde_json::from_str(&fs::read_to_string(dir.path().join("report.json")).unwrap()).unwrap();
     assert_eq!(report["workflow"]["droppedContextChars"], 0);
     assert_eq!(report["workflow"]["droppedContextItems"], 0);
+}
+
+/// Actual CLI reruns prove both request identity and cache accounting across processes.
+#[tokio::test(flavor = "multi_thread")]
+async fn cold_and_warm_indexes_send_identical_requests_and_cached_reruns_make_no_calls() {
+    use axum::{Json, Router, routing::post};
+    use serde_json::{Value, json};
+    use std::sync::{Arc, Mutex};
+    let bodies: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let seen = bodies.clone();
+    let app = Router::new().route("/v1/systemone", post(move |Json(body): Json<Value>| {
+        let seen = seen.clone();
+        async move {
+            let answers: serde_json::Map<String, Value> = body["questions"].as_object().unwrap().iter().map(|(id, q)| {
+                let answer = match q["type"].as_str().unwrap() {
+                    "noul" => json!({ "noul": 0.1 }),
+                    "score" => json!({ "score": 1.0, "confidence": 0.9 }),
+                    "choice" => json!({ "choice": q["criteria"].as_object().unwrap().keys().next().unwrap(), "confidence": 0.9 }),
+                    _ => panic!("unexpected question"),
+                };
+                (id.clone(), answer)
+            }).collect();
+            seen.lock().unwrap().push(body);
+            Json(json!({ "model": "stub-v1", "answers": answers, "usage": { "input_tokens": 10, "output_tokens": 2 } }))
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    for mode in ["scan", "review"] {
+        let dir = widget_branch(2, 3, 2);
+        let repo = dir.path().to_path_buf();
+        // Include an import neighbor to exercise graph-derived context.
+        fs::write(
+            repo.join("src/neighbor.rs"),
+            "use crate::widget;\npub fn neighbor() {}\n",
+        )
+        .unwrap();
+        git(&repo, &["add", "src/neighbor.rs"]);
+        git(&repo, &["commit", "-q", "-m", "neighbor"]);
+        let run = |no_cache: bool| {
+            let repo = repo.clone();
+            let url = url.clone();
+            tokio::task::spawn_blocking(move || {
+                let mut cmd = Command::new(env!("CARGO_BIN_EXE_momus"));
+                cmd.arg(mode).arg("--no-refine");
+                if mode == "review" {
+                    cmd.args(["--base", "base"]);
+                }
+                if no_cache {
+                    cmd.arg("--no-cache");
+                }
+                cmd.current_dir(&repo)
+                    .env_remove("TYPESAFE_API_KEY")
+                    .env("TYPESAFE_BASE_URL", url)
+                    .env("TYPESAFE_DEFAULT_MODEL", "stub-v1")
+                    .env("MOMUS_CONCURRENCY", "1")
+                    .env("MOMUS_REPORT", repo.join("report.json"))
+                    .env("MOMUS_CACHE_DIR", repo.join("reviews/cache"))
+                    .env("MOMUS_INDEX_DIR", repo.join("reviews/index"))
+                    .env_remove("MOMUS_CONTEXT_BUDGET_CHARS");
+                let out = cmd.output().unwrap();
+                assert!(
+                    out.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+                serde_json::from_slice::<Value>(&fs::read(repo.join("report.json")).unwrap())
+                    .unwrap()
+            })
+        };
+        bodies.lock().unwrap().clear();
+        let cold = run(true).await.unwrap();
+        let cold_requests = bodies.lock().unwrap().clone();
+        assert!(cold["index"]["computed"].as_u64().unwrap() > 0);
+        bodies.lock().unwrap().clear();
+        let warm = run(true).await.unwrap();
+        assert!(warm["index"]["reused"].as_u64().unwrap() > 0);
+        assert_eq!(warm["index"]["computed"], 0);
+        assert_eq!(
+            cold_requests,
+            *bodies.lock().unwrap(),
+            "{mode}: index changed the requests"
+        );
+        // Populate all request units, then restart the CLI with the pinned model.
+        run(false).await.unwrap();
+        bodies.lock().unwrap().clear();
+        let cached = run(false).await.unwrap();
+        assert!(
+            bodies.lock().unwrap().is_empty(),
+            "{mode}: warm cache made HTTP calls"
+        );
+        assert_eq!(cached["usage"]["calls"], 0);
+        assert_eq!(cached["usage"]["inputTokens"], 0);
+        assert!(cached["usage"]["cache"]["hits"].as_u64().unwrap() > 0);
+        assert_eq!(cached["usage"]["cache"]["misses"], 0);
+        assert_eq!(cold["matrix"], cached["matrix"]);
+        assert_eq!(cold["profiles"], cached["profiles"]);
+        assert_eq!(cold["findings"], cached["findings"]);
+        // One changed source should invalidate only its blob metadata, and
+        // requests depending on it, while retaining other work units.
+        fs::write(repo.join("src/widget.rs"), "pub fn widget_changed() {}\n").unwrap();
+        let changed = run(false).await.unwrap();
+        assert_eq!(changed["index"]["computed"], 1);
+        assert!(changed["usage"]["cache"]["misses"].as_u64().unwrap() > 0);
+        assert!(changed["usage"]["cache"]["hits"].as_u64().unwrap() > 0);
+    }
 }

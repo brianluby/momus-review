@@ -2,20 +2,22 @@
 //! These ask whether an issue exists in complete source, rather than whether
 //! a patch introduced one.
 
-
 use anyhow::Result;
 use serde_json::{Map, Value, json};
 
-use crate::review::context::{ContextBudget, ContextDrops, select_related_tests};
 use crate::domain::policy::{
-    BLOCKING_SEVERITY, DIMENSIONS, MIN_LOCATION_CONFIDENCE, MIN_META_JUDGE_CONFIDENCE, Probabilities,
-    REVIEW_PRIORITY_RUBRIC, ROUTE_SEVERITY, SEVERITY_RUBRIC, Dimension,
+    BLOCKING_SEVERITY, DIMENSIONS, Dimension, MIN_LOCATION_CONFIDENCE, MIN_META_JUDGE_CONFIDENCE,
+    Probabilities, REVIEW_PRIORITY_RUBRIC, ROUTE_SEVERITY, SEVERITY_RUBRIC,
 };
 use crate::domain::report::{Action, FileProfile, Finding, SourceFile};
+use crate::review::context::{ContextBudget, ContextDrops, select_related_tests};
 use crate::review::regions::function_regions;
-use crate::review::{meta, strategy::{Screening, Signal}};
 use crate::review::typesafe::{
     TypeSafeClient, choice, choice_criteria, mechanism_criteria, noul, score, score_criteria,
+};
+use crate::review::{
+    meta,
+    strategy::{Screening, Signal},
 };
 
 const REGION_LINES: usize = 80;
@@ -25,12 +27,30 @@ const MAX_NEIGHBOR_CHARS: usize = 1_800;
 
 /// `fileRoles` — the source-file role vocabulary.
 const FILE_ROLES: [(&str, &str); 6] = [
-    ("entrypoint", "Application, command, route, or public package entry point"),
-    ("boundary", "Authentication, validation, serialization, or external-system boundary"),
-    ("domain", "Core business rules, state transitions, or domain behavior"),
-    ("persistence", "Database, cache, filesystem, migration, or durable state"),
-    ("infrastructure", "Runtime, scheduling, networking, build, or operational plumbing"),
-    ("utility", "Shared helper, adapter, formatting, or low-level utility"),
+    (
+        "entrypoint",
+        "Application, command, route, or public package entry point",
+    ),
+    (
+        "boundary",
+        "Authentication, validation, serialization, or external-system boundary",
+    ),
+    (
+        "domain",
+        "Core business rules, state transitions, or domain behavior",
+    ),
+    (
+        "persistence",
+        "Database, cache, filesystem, migration, or durable state",
+    ),
+    (
+        "infrastructure",
+        "Runtime, scheduling, networking, build, or operational plumbing",
+    ),
+    (
+        "utility",
+        "Shared helper, adapter, formatting, or low-level utility",
+    ),
 ];
 
 /// Screens one source file per function-aware region (declaration-aligned,
@@ -41,12 +61,29 @@ pub async fn screen_source_file(
     test_files: &[SourceFile],
     neighbors: &[SourceFile],
 ) -> Result<Screening<SourceFile>> {
-    let related_tests = select_related_tests(file, test_files);
+    screen_source_file_indexed(client, file, test_files, neighbors, None).await
+}
+
+pub async fn screen_source_file_indexed(
+    client: &TypeSafeClient,
+    file: &SourceFile,
+    test_files: &[SourceFile],
+    neighbors: &[SourceFile],
+    index: Option<&crate::review::index::RepoIndex>,
+) -> Result<Screening<SourceFile>> {
+    let related_tests = index
+        .and_then(|i| i.related_tests(&file.path))
+        .map(<[SourceFile]>::to_vec)
+        .unwrap_or_else(|| select_related_tests(file, test_files));
+
     let compact_neighbors: Vec<SourceFile> = neighbors.iter().map(compact_neighbor).collect();
     let mut results: Vec<Probabilities> = Vec::new();
     let mut drops = ContextDrops::default();
 
-    for region in function_regions(&file.content, &file.path, SCREEN_REGION_LINES) {
+    let regions = index
+        .map(|i| i.regions(file, SCREEN_REGION_LINES))
+        .unwrap_or_else(|| function_regions(&file.content, &file.path, SCREEN_REGION_LINES));
+    for region in regions {
         // One budget per request: the region under review first, then
         // related tests, then neighbors; whatever does not fit is trimmed
         // and counted.
@@ -54,17 +91,28 @@ pub async fn screen_source_file(
         let content = budget.take(&region.content);
         let tests: Vec<SourceFile> = related_tests
             .iter()
-            .map(|t| SourceFile { path: t.path.clone(), content: budget.take(&t.content) })
+            .map(|t| SourceFile {
+                path: t.path.clone(),
+                content: budget.take(&t.content),
+            })
             .collect();
         let context_neighbors: Vec<SourceFile> = compact_neighbors
             .iter()
-            .map(|n| SourceFile { path: n.path.clone(), content: budget.take(&n.content) })
+            .map(|n| SourceFile {
+                path: n.path.clone(),
+                content: budget.take(&n.content),
+            })
             .collect();
+        let signatures = budget.take(&index.map_or_else(
+            || crate::review::regions::export_signatures(&file.content, &file.path),
+            |i| i.source_signatures(file),
+        ));
         drops = drops + budget.drops;
         let state = json!({
             "file": { "path": file.path, "startLine": region.start_line, "content": content },
             "relatedTests": tests,
             "neighbors": context_neighbors,
+            "exportSignatures": signatures,
         });
         let questions = json!({
             "correctness": noul(
@@ -173,7 +221,11 @@ pub async fn screen_source_file(
         })
         .collect();
 
-    Ok(Screening { file: file.clone(), probabilities, dropped: drops })
+    Ok(Screening {
+        file: file.clone(),
+        probabilities,
+        dropped: drops,
+    })
 }
 
 /// Profiles a source file: role + review priority.
@@ -215,7 +267,18 @@ pub async fn locate_source_signal(
     signal: &Signal<SourceFile>,
     neighbors: &[SourceFile],
 ) -> Result<Option<Finding>> {
-    let regions = function_regions(&signal.file.content, &signal.file.path, REGION_LINES);
+    locate_source_signal_indexed(client, signal, neighbors, None).await
+}
+
+pub async fn locate_source_signal_indexed(
+    client: &TypeSafeClient,
+    signal: &Signal<SourceFile>,
+    neighbors: &[SourceFile],
+    index: Option<&crate::review::index::RepoIndex>,
+) -> Result<Option<Finding>> {
+    let regions = index
+        .map(|i| i.regions(&signal.file, REGION_LINES))
+        .unwrap_or_else(|| function_regions(&signal.file.content, &signal.file.path, REGION_LINES));
     if regions.is_empty() {
         return Ok(None);
     }
@@ -371,7 +434,6 @@ pub async fn locate_source_signal(
 
 // ---- Helpers ---------------------------------------------------------
 
-
 pub(crate) fn compact_neighbor(f: &SourceFile) -> SourceFile {
     let content: String = f
         .content
@@ -385,5 +447,8 @@ pub(crate) fn compact_neighbor(f: &SourceFile) -> SourceFile {
         content
     };
 
-    SourceFile { path: f.path.clone(), content }
+    SourceFile {
+        path: f.path.clone(),
+        content,
+    }
 }

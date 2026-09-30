@@ -6,6 +6,7 @@ pub mod codebase;
 pub mod codebase_judgments;
 pub mod context;
 pub mod explain;
+pub mod index;
 pub mod judgments;
 pub mod merge_confidence;
 pub mod meta;

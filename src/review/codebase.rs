@@ -9,11 +9,12 @@ use anyhow::Result;
 
 use crate::adapters::exclude::Exclude;
 use crate::adapters::git;
-use crate::adapters::imports::ImportGraph;
+use crate::adapters::index_store::IndexStore;
 use crate::domain::language::is_test_path;
 use crate::domain::policy::Probabilities;
 use crate::domain::report::{FileProfile, Finding, ReviewMode, SourceFile};
 use crate::review::codebase_judgments;
+use crate::review::index::{IndexStats, RepoIndex};
 use crate::review::strategy::{Discovery, ReviewStrategy, Screening, Signal};
 use crate::review::typesafe::TypeSafeClient;
 
@@ -23,7 +24,7 @@ const MAX_NEIGHBORS: usize = 4;
 pub struct CodebaseStrategy {
     client: TypeSafeClient,
     exclude: Exclude,
-    imports: OnceLock<ImportGraph>,
+    index: OnceLock<RepoIndex>,
     file_map: OnceLock<HashMap<String, SourceFile>>,
 }
 
@@ -32,7 +33,7 @@ impl CodebaseStrategy {
         Self {
             client,
             exclude,
-            imports: OnceLock::new(),
+            index: OnceLock::new(),
             file_map: OnceLock::new(),
         }
     }
@@ -40,7 +41,7 @@ impl CodebaseStrategy {
     /// Resolves `path`'s 1-hop import neighbors to compact `SourceFile`s
     /// (capped at `MAX_NEIGHBORS`, missing files skipped).
     fn neighbor_files(&self, path: &str) -> Vec<SourceFile> {
-        let (Some(graph), Some(file_map)) = (self.imports.get(), self.file_map.get()) else {
+        let (Some(graph), Some(file_map)) = (self.index.get(), self.file_map.get()) else {
             return Vec::new();
         };
         graph
@@ -91,7 +92,6 @@ impl ReviewStrategy for CodebaseStrategy {
                 files.push(f);
             }
         }
-        let _ = self.imports.set(ImportGraph::build(&files));
         // Store only a compact excerpt per neighbor, not the full file contents
         // (which `discover` already returns for screening).
         let _ = self.file_map.set(
@@ -100,7 +100,24 @@ impl ReviewStrategy for CodebaseStrategy {
                 .map(|f| (f.path.clone(), codebase_judgments::compact_neighbor(f)))
                 .collect(),
         );
-        Ok(Discovery { files, context_files })
+        Ok(Discovery {
+            files,
+            context_files,
+        })
+    }
+
+    fn prepass(&self, _scopes: &[PathBuf], discovery: &Discovery<SourceFile>) -> Result<()> {
+        let _ = self.index.set(RepoIndex::build(
+            &discovery.files,
+            &discovery.context_files,
+            &IndexStore::from_env(),
+        ));
+        Ok(())
+    }
+    fn index_stats(&self) -> IndexStats {
+        self.index
+            .get()
+            .map_or_else(IndexStats::default, |i| i.stats)
     }
 
     async fn screen(
@@ -109,16 +126,33 @@ impl ReviewStrategy for CodebaseStrategy {
         context: &[SourceFile],
     ) -> Result<Screening<SourceFile>> {
         let neighbors = self.neighbor_files(&file.path);
-        codebase_judgments::screen_source_file(&self.client, file, context, &neighbors).await
+        codebase_judgments::screen_source_file_indexed(
+            &self.client,
+            file,
+            context,
+            &neighbors,
+            self.index.get(),
+        )
+        .await
     }
 
-    async fn profile(&self, file: &SourceFile, probabilities: &Probabilities) -> Result<FileProfile> {
+    async fn profile(
+        &self,
+        file: &SourceFile,
+        probabilities: &Probabilities,
+    ) -> Result<FileProfile> {
         codebase_judgments::profile_source_file(&self.client, file, probabilities).await
     }
 
     async fn locate(&self, signal: &Signal<SourceFile>) -> Result<Option<Finding>> {
         let neighbors = self.neighbor_files(&signal.file.path);
-        codebase_judgments::locate_source_signal(&self.client, signal, &neighbors).await
+        codebase_judgments::locate_source_signal_indexed(
+            &self.client,
+            signal,
+            &neighbors,
+            self.index.get(),
+        )
+        .await
     }
 
     async fn suggestions(&self, finding: &Finding) -> Result<(Option<String>, Option<String>)> {
