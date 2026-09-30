@@ -94,8 +94,24 @@ builds an index of the tree:
 - the source-to-test mapping (today's `select_related_tests`),
 - short export signatures per file (declaration lines, no bodies).
 
-Context packs (1) draw from the index. The index is local and keyed by blob
-id, so it too is incremental.
+Context packs (1) draw from the index in both modes, including bounded
+export signatures. `review/index.rs` builds the pre-pass once; scan screens
+and evidence location rehydrate source regions from stored line spans, while
+diff screens reuse preselected compact changed-test patches and import neighbors.
+
+Metadata lives under `reviews/index/` (`MOMUS_INDEX_DIR` overrides it), keyed
+by the Git SHA-1 blob address of the exact bytes reviewed plus the language,
+region dialect, and schema version. Dirty content therefore invalidates its
+entry without a commit. Only spans, candidate imports, and short declaration
+signatures are persisted, not full source bodies. The tree-dependent import
+graph and source-to-test maps are resolved anew from the current inventory,
+so added/removed/renamed files cannot leave stale links.
+
+`index.computed`, `index.reused`, and `index.fallbacks` report the pre-pass.
+Corrupt/missing metadata is recomputed; storage errors never abort a review.
+Oversized or NUL-containing inputs fall back to the ordinary region splitter;
+Git discovery retains its existing guarded-read exclusions for unreadable and
+binary files. Index files are local context metadata and must stay out of Git.
 
 ### 4. Shards and merge
 

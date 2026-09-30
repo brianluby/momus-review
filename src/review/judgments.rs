@@ -6,25 +6,43 @@ use serde_json::{Map, Value, json};
 
 use crate::domain::patch::{first_added_line, parse_hunks, split_hunk};
 use crate::domain::policy::{
-    BLOCKING_SEVERITY, MIN_LOCATION_CONFIDENCE, MIN_META_JUDGE_CONFIDENCE, Probabilities,
-    REVIEW_PRIORITY_RUBRIC, ROUTE_SEVERITY, SEVERITY_RUBRIC, Dimension,
+    BLOCKING_SEVERITY, Dimension, MIN_LOCATION_CONFIDENCE, MIN_META_JUDGE_CONFIDENCE,
+    Probabilities, REVIEW_PRIORITY_RUBRIC, ROUTE_SEVERITY, SEVERITY_RUBRIC,
 };
 use crate::domain::report::{Action, ChangedFile, FileProfile, Finding, Hunk};
 use crate::review::context::{self, ContextBudget};
 use crate::review::regions::function_regions;
-use crate::review::{meta, strategy::{Screening, Signal}};
 use crate::review::typesafe::{
     TypeSafeClient, choice, choice_criteria, mechanism_criteria, noul, score, score_criteria,
+};
+use crate::review::{
+    meta,
+    strategy::{Screening, Signal},
 };
 
 /// `changeTypes` — the diff-file category vocabulary.
 const CHANGE_TYPES: [(&str, &str); 6] = [
     ("behavior", "Adds or changes runtime behavior"),
-    ("interface", "Changes an exported API, type, protocol, or data shape"),
-    ("infrastructure", "Changes execution, scheduling, build, or operational plumbing"),
-    ("observability", "Changes events, logging, monitoring, or diagnostics"),
-    ("refactor", "Restructures implementation without intending behavior changes"),
-    ("routine", "A small routine change that fits none of the other categories"),
+    (
+        "interface",
+        "Changes an exported API, type, protocol, or data shape",
+    ),
+    (
+        "infrastructure",
+        "Changes execution, scheduling, build, or operational plumbing",
+    ),
+    (
+        "observability",
+        "Changes events, logging, monitoring, or diagnostics",
+    ),
+    (
+        "refactor",
+        "Restructures implementation without intending behavior changes",
+    ),
+    (
+        "routine",
+        "A small routine change that fits none of the other categories",
+    ),
 ];
 
 /// Screens one changed file: five `noul` questions, one per dimension.
@@ -33,9 +51,22 @@ pub async fn screen_file(
     file: &ChangedFile,
     changed_tests: &[ChangedFile],
 ) -> Result<Screening<ChangedFile>> {
+    screen_file_indexed(client, file, changed_tests, None, json!([])).await
+}
+
+pub async fn screen_file_indexed(
+    client: &TypeSafeClient,
+    file: &ChangedFile,
+    changed_tests: &[ChangedFile],
+    index: Option<&crate::review::index::RepoIndex>,
+    neighbors: Value,
+) -> Result<Screening<ChangedFile>> {
     // Same related-test selection as scan mode (`context`): at most 4
     // changed tests, each compacted to its marker lines, never all of them.
-    let related_tests = context::select_related_changed_tests(file, changed_tests);
+    let related_tests = index
+        .and_then(|i| i.related_changed_tests(&file.path))
+        .map(<[ChangedFile]>::to_vec)
+        .unwrap_or_else(|| context::select_related_changed_tests(file, changed_tests));
     // One budget per request: the patch under review first, then its base,
     // then the related tests; whatever does not fit is trimmed and counted.
     let mut budget = ContextBudget::from_env()?;
@@ -52,7 +83,17 @@ pub async fn screen_file(
             base: String::new(),
         })
         .collect();
-    let state = json!({ "file": unit, "changedTests": tests });
+    let neighbors: Vec<crate::domain::report::SourceFile> =
+        serde_json::from_value(neighbors).unwrap_or_default();
+    let neighbors: Vec<_> = neighbors
+        .into_iter()
+        .map(|f| crate::domain::report::SourceFile {
+            path: f.path,
+            content: budget.take(&f.content),
+        })
+        .collect();
+    let signatures = budget.take(index.map_or("", |i| i.signatures(&file.path)));
+    let state = json!({ "file": unit, "changedTests": tests, "neighbors": neighbors, "exportSignatures": signatures });
 
     let questions = json!({
         "correctness": noul(
@@ -184,7 +225,11 @@ pub async fn screen_file(
         (Dimension::TestGap, response.noul("testGap")?),
     ]);
 
-    Ok(Screening { file: file.clone(), probabilities, dropped: budget.drops })
+    Ok(Screening {
+        file: file.clone(),
+        probabilities,
+        dropped: budget.drops,
+    })
 }
 
 /// Profiles a changed file: category + review priority.
@@ -243,11 +288,12 @@ fn candidate_hunks(file: &ChangedFile) -> Vec<Hunk> {
             candidates.push(hunk);
             continue;
         }
-        let cuts: Vec<usize> = function_regions(&new_side.join("\n"), &file.path, MAX_EVIDENCE_LINES)
-            .iter()
-            .skip(1)
-            .map(|region| hunk.start_line + region.start_line - 1)
-            .collect();
+        let cuts: Vec<usize> =
+            function_regions(&new_side.join("\n"), &file.path, MAX_EVIDENCE_LINES)
+                .iter()
+                .skip(1)
+                .map(|region| hunk.start_line + region.start_line - 1)
+                .collect();
         candidates.extend(split_hunk(&hunk, &cuts));
     }
     for (index, hunk) in candidates.iter_mut().enumerate() {
@@ -276,7 +322,10 @@ pub async fn locate_signal(
     for hunk in &hunks {
         criteria.insert(
             hunk.id.clone(),
-            Value::String(format!("Candidate beginning at changed-file line {}", hunk.start_line)),
+            Value::String(format!(
+                "Candidate beginning at changed-file line {}",
+                hunk.start_line
+            )),
         );
     }
     criteria.insert(
@@ -435,18 +484,35 @@ mod tests {
             let body: String = (0..58).map(|i| format!("    let _{i} = {i};\n")).collect();
             format!("fn {name}() {{\n{body}}}")
         };
-        let file = new_file("src/lib.rs", &format!("{}\n{}", func("alpha"), func("beta")));
+        let file = new_file(
+            "src/lib.rs",
+            &format!("{}\n{}", func("alpha"), func("beta")),
+        );
         let candidates = candidate_hunks(&file);
         let anchors: Vec<usize> = candidates.iter().map(first_added_line).collect();
-        assert_eq!(anchors, [1, 61], "one piece per function, anchored on its fn line");
-        assert!(candidates[1].patch.lines().nth(1).unwrap().starts_with("+fn beta"));
+        assert_eq!(
+            anchors,
+            [1, 61],
+            "one piece per function, anchored on its fn line"
+        );
+        assert!(
+            candidates[1]
+                .patch
+                .lines()
+                .nth(1)
+                .unwrap()
+                .starts_with("+fn beta")
+        );
         let ids: Vec<&str> = candidates.iter().map(|h| h.id.as_str()).collect();
         assert_eq!(ids, ["hunk_1", "hunk_2"]);
     }
 
     #[test]
     fn a_large_declaration_free_file_splits_into_windows() {
-        let content: String = (1..=200).map(|i| format!("echo {i}")).collect::<Vec<_>>().join("\n");
+        let content: String = (1..=200)
+            .map(|i| format!("echo {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let candidates = candidate_hunks(&new_file("deploy.sh", &content));
         let anchors: Vec<usize> = candidates.iter().map(first_added_line).collect();
         assert_eq!(anchors, [1, 81, 161]);

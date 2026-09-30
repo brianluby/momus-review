@@ -8,6 +8,86 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+/// A region's position, persisted without its source body.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegionSpan {
+    pub id: String,
+    pub start_line: usize,
+    pub lines: usize,
+}
+
+pub fn region_spans(content: &str, path: &str, max_lines: usize) -> Vec<RegionSpan> {
+    function_regions(content, path, max_lines)
+        .into_iter()
+        .map(|r| RegionSpan {
+            id: r.id,
+            start_line: r.start_line,
+            lines: r.content.split('\n').count(),
+        })
+        .collect()
+}
+
+/// Rehydrates only valid spans; corrupt metadata falls back to recomputation.
+pub fn materialize_regions(
+    content: &str,
+    spans: &[RegionSpan],
+    max_lines: usize,
+) -> Option<Vec<Region>> {
+    let lines: Vec<_> = content.split('\n').collect();
+    let mut previous_end = 0;
+    let mut out = Vec::new();
+    if spans.is_empty() {
+        return None;
+    }
+    for (i, span) in spans.iter().enumerate() {
+        let start = span.start_line.checked_sub(1)?;
+        let end = start.checked_add(span.lines)?;
+        if span.id != format!("R{}", i + 1)
+            || span.lines == 0
+            || span.lines > max_lines
+            || start < previous_end
+            || end > lines.len()
+        {
+            return None;
+        }
+        // Only a blank preamble may be omitted by the splitter.
+        if lines[previous_end..start]
+            .iter()
+            .any(|l| !l.trim().is_empty())
+        {
+            return None;
+        }
+        out.push(Region {
+            id: span.id.clone(),
+            start_line: span.start_line,
+            content: lines[start..end].join("\n"),
+        });
+        previous_end = end;
+    }
+    if previous_end != lines.len() {
+        return None;
+    }
+    Some(out)
+}
+
+/// Short declaration signatures, without bodies, for bounded context packs.
+pub fn export_signatures(content: &str, path: &str) -> String {
+    let decl = if is_rust(path) { &RUST_DECL } else { &TS_DECL };
+    content
+        .lines()
+        .filter(|line| {
+            decl.is_match(line) && (line.starts_with("pub") || line.starts_with("export"))
+        })
+        .take(40)
+        .map(|line| line.split(['{', '=']).next().unwrap_or(line).trim())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .chars()
+        .take(1800)
+        .collect()
+}
+
 /// A source-region window: `{ id, startLine, content }`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -80,11 +160,19 @@ pub fn function_regions(content: &str, path: &str, max_region_lines: usize) -> V
     }
 
     for (position, &start) in decl_starts.iter().enumerate() {
-        let end = decl_starts.get(position + 1).copied().unwrap_or(lines.len());
+        let end = decl_starts
+            .get(position + 1)
+            .copied()
+            .unwrap_or(lines.len());
         let mut chunk_start = start;
         while chunk_start < end {
             let chunk_end = (chunk_start + max_region_lines).min(end);
-            regions.push(build_region(&lines, regions.len() + 1, chunk_start, chunk_end));
+            regions.push(build_region(
+                &lines,
+                regions.len() + 1,
+                chunk_start,
+                chunk_end,
+            ));
             chunk_start = chunk_end;
         }
     }
@@ -136,6 +224,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn persisted_spans_preserve_every_region_byte() {
+        for (path, text) in [
+            (
+                "a.rs",
+                "\n\n#[cfg(test)]\n/// ünicode\npub fn a() {}\n\nfn b() {}\n",
+            ),
+            ("a.ts", "export class A {\n  b() {}\n}\n"),
+            ("a.py", "# preamble\n\ndef f():\n    pass"),
+            ("a.rs", ""),
+        ] {
+            for size in [1, 3, 80, 160] {
+                let spans = region_spans(text, path, size);
+                assert_eq!(
+                    serde_json::to_value(materialize_regions(text, &spans, size).unwrap()).unwrap(),
+                    serde_json::to_value(function_regions(text, path, size)).unwrap()
+                );
+            }
+        }
+        let corrupt = vec![RegionSpan {
+            id: "R1".into(),
+            start_line: usize::MAX,
+            lines: 2,
+        }];
+        assert!(materialize_regions("line", &corrupt, 80).is_none());
+    }
+
+    #[test]
     fn rust_declarations_split_but_nested_methods_do_not() {
         let src = "use std::io;\n\n// module comment\n\nfn alpha() {\n    body();\n}\n\nfn beta() {\n    other();\n}\n\nimpl Foo {\n    fn method(&self) {}\n}\n";
         let regions = function_regions(src, "src/lib.rs", 80);
@@ -151,7 +266,10 @@ mod tests {
         assert_eq!(regions[2].content, "fn beta() {\n    other();\n}\n");
 
         assert_eq!(regions[3].start_line, 13);
-        assert_eq!(regions[3].content, "impl Foo {\n    fn method(&self) {}\n}\n");
+        assert_eq!(
+            regions[3].content,
+            "impl Foo {\n    fn method(&self) {}\n}\n"
+        );
     }
 
     #[test]
@@ -162,7 +280,10 @@ mod tests {
 
         assert_eq!(regions[0].start_line, 1);
         assert_eq!(regions[0].content, "import x from \"./x\";\n");
-        assert_eq!(regions[1].content, "class Foo {\n  method() {}\n  other() {}\n}\n");
+        assert_eq!(
+            regions[1].content,
+            "class Foo {\n  method() {}\n  other() {}\n}\n"
+        );
         assert_eq!(regions[2].content, "function bar() {}\n");
         assert_eq!(regions[3].content, "const baz = () => {};\n");
     }
@@ -197,7 +318,10 @@ mod tests {
         let regions = function_regions(src, "src/lib.rs", 80);
         assert_eq!(regions.len(), 3);
         assert_eq!(regions[1].start_line, 3);
-        assert_eq!(regions[1].content, "macro_rules! my_macro {\n    () => {};\n}\n");
+        assert_eq!(
+            regions[1].content,
+            "macro_rules! my_macro {\n    () => {};\n}\n"
+        );
         assert_eq!(regions[2].start_line, 7);
     }
 

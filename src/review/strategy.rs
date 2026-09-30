@@ -109,11 +109,25 @@ pub trait ReviewStrategy: Send + Sync {
         Value::Null
     }
 
+    /// Precompute incremental context once, before concurrent requests.
+    fn prepass(&self, _scopes: &[PathBuf], _discovery: &Discovery<Self::File>) -> Result<()> {
+        Ok(())
+    }
+    fn index_stats(&self) -> crate::review::index::IndexStats {
+        Default::default()
+    }
+
     fn discover(&self, scopes: &[PathBuf]) -> Result<Discovery<Self::File>>;
-    async fn screen(&self, file: &Self::File, context: &[Self::File])
-        -> Result<Screening<Self::File>>;
-    async fn profile(&self, file: &Self::File, probabilities: &Probabilities)
-        -> Result<FileProfile>;
+    async fn screen(
+        &self,
+        file: &Self::File,
+        context: &[Self::File],
+    ) -> Result<Screening<Self::File>>;
+    async fn profile(
+        &self,
+        file: &Self::File,
+        probabilities: &Probabilities,
+    ) -> Result<FileProfile>;
     async fn locate(&self, signal: &Signal<Self::File>) -> Result<Option<Finding>>;
     /// Enrich a located finding with a suggested fix and test strategy.
     async fn suggestions(&self, finding: &Finding) -> Result<(Option<String>, Option<String>)>;
@@ -124,7 +138,10 @@ mod tests {
 
     #[test]
     fn window_clamps_to_the_file() {
-        let text = (1..=10).map(|i| format!("l{i}")).collect::<Vec<_>>().join("\n");
+        let text = (1..=10)
+            .map(|i| format!("l{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         assert_eq!(window(&text, 5, 2), (3, "l3\nl4\nl5\nl6\nl7".to_string()));
         assert_eq!(window(&text, 1, 2), (1, "l1\nl2\nl3".to_string()));
         assert_eq!(window(&text, 99, 1), (9, "l9\nl10".to_string()));

@@ -181,10 +181,12 @@ pub async fn run_review<S: ReviewStrategy>(
         .join(" ");
 
     let concurrency = concurrency_from_env()?;
+    let discovery = strategy.discover(scopes)?;
+    strategy.prepass(scopes, &discovery)?;
     let Discovery {
         files,
         context_files,
-    } = strategy.discover(scopes)?;
+    } = discovery;
     if files.is_empty() && allow_empty {
         log(&format!(
             "No {} files to review under {scope_label}",
@@ -470,6 +472,7 @@ pub async fn run_review<S: ReviewStrategy>(
             dropped_context_items: context_drops.items,
         },
         usage: strategy.client().usage_summary(),
+        index: strategy.index_stats(),
         redactions: strategy.client().redaction_summary(),
         skipped,
         findings,
