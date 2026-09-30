@@ -274,6 +274,44 @@ locate); judgments in
 in [`src/domain/policy.rs`](src/domain/policy.rs). Full judgment graph:
 [`docs/jev-pipeline.md`](docs/jev-pipeline.md).
 
+### The same benchmark as a worst-case pull request
+
+[momus-juice-shop-test](https://github.com/brianluby/momus-juice-shop-test)
+replays this benchmark as a review: PR
+[#3](https://github.com/brianluby/momus-juice-shop-test/pull/3) adds all of
+Juice Shop — 300 source files, 253 test files — to a workflow-only `baseline`
+branch, and the pinned reusable workflow (v0.1.3) reviews it on a
+GitHub-hosted runner.
+
+Before v0.1.3 that PR was the crash case: every screen request carried every
+changed test file (~490k tokens) and the run died in two minutes with
+`400 max_tokens_exceeded`. With bounded context packs — every request under
+the 96k-character budget — it completes:
+
+| metric | value |
+|---|---|
+| review wall time | ~52 s (79 s job wall, binary download to posted summary) |
+| Jev calls | 1,196 — 300 screens, 230 followed signals, 5 profiles, plus their evidence/mechanism/severity/owner chains and refinement |
+| tokens | 2,236,598 in / 90,877 out |
+| throughput | ~23 calls/s at concurrency 3, no 429s |
+| skipped files | 0 |
+| secrets redacted before sending | 18 values (10 generic, 4 high-entropy, 3 JWT, 1 private key) |
+
+**120 findings, 39 blocking** — 10 posted inline, 110 in the summary comment.
+Three of the scan benchmark's top five reproduce file for file:
+`routes/checkKeys.ts` `sensitiveDataExposure` (2.8 vs 2.81),
+`routes/profileImageUrlUpload.ts` `ssrf` (2.5 vs 2.66), and
+`routes/orderHistory.ts` `brokenAccessControl` (2.7 vs 2.59); `routes/search.ts`
+`sqlInjection` (2.4) leads the summary tail. The rest of the inline band is the
+same OWASP vocabulary — `pathTraversal` on `fileUpload.ts` and `dataErasure.ts`,
+`brokenAuthentication`, `dynamicCodeExecution`, `xss` — and the long tail is
+dominated by test gaps on the sparsely tested frontend. The check exits red by
+design (`fail-on-blocking`: 39 findings request changes), the correct verdict
+for a repository of intentional vulnerabilities.
+
+Conditions: `momus` v0.1.3 release binary, `jev-latest`, concurrency 3,
+GitHub-hosted Linux runner, 2026-09-29.
+
 ## Non-Goals (for now)
 
 - Not a prose explainer: findings are structured (evidence, mechanism,

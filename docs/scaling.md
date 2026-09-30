@@ -12,15 +12,18 @@ the run.
   trimmed to 40 lines, and files split into function-aware regions. It
   scanned all of Juice Shop (299 files, 1,495 screen cells, 357 followed
   signals) in about 46 seconds (README "Validation").
-- `momus review` (diff mode) does not. `screen_file` sends **every** changed
-  test file in full with each screen. On a pull request that adds all of
-  Juice Shop (300 source files, 253 test files) that is about 2 MB, roughly
-  490k tokens, per request, and every screen failed with
-  `400 max_tokens_exceeded`
-  ([example PR](https://github.com/brianluby/momus-juice-shop-test/pull/1)).
-- A single failed screen aborts the whole run, and only after every screen
-  has been sent: `run_review` collects all results before surfacing the
-  first error (`review/workflow.rs`).
+- `momus review` (diff mode) did not, until #33 (v0.1.3): `screen_file` sent
+  **every** changed test file in full with each screen — on a pull request
+  that adds all of Juice Shop, ~2 MB (~490k tokens) per request, and every
+  screen failed `400 max_tokens_exceeded`
+  ([the old run](https://github.com/brianluby/momus-juice-shop-test/pull/1)).
+  Both modes now select at most 4 related tests and cap every request's state
+  at 96k characters (§1); the same PR reviews end to end — 120 findings,
+  1,196 Jev calls, ~52 s of review on a hosted runner
+  ([PR #3](https://github.com/brianluby/momus-juice-shop-test/pull/3)).
+- A single failed screen used to abort the whole run, and only after every
+  screen had been sent; #34 added failure isolation — failed units are
+  skipped and recorded, with a circuit breaker (`review/workflow.rs`).
 - Everything runs in one process at a fixed concurrency (3, or
   `MOMUS_CONCURRENCY`), with no caching: a re-scan resends every request.
 - Each Jev `system_one` call is stateless, so context cannot be "stored" in
@@ -119,10 +122,10 @@ Epic #31 in the project tracker (Vikunja, not GitHub); each step is a ticket.
 
 | step | ticket | work | depends on |
 |---|---|---|---|
-| 0 | #32 | Measure: model input limit, TypeSafe rate limits, answer stability on repeated identical requests | — |
-| 1 | #33 | Bounded context packs: diff-mode related tests + one per-request budget | 0 |
-| 2 | #34 | Failure isolation: skip and record failed units, circuit breaker | — |
-| 3 | #35 | Release v0.1.1; re-run the Juice Shop example PR | 1, 2 |
+| 0 | #32 ✅ | Measure: model input limit, TypeSafe rate limits, answer stability on repeated identical requests | — |
+| 1 | #33 ✅ | Bounded context packs: diff-mode related tests + one per-request budget | 0 |
+| 2 | #34 ✅ | Failure isolation: skip and record failed units, circuit breaker | — |
+| 3 | #35 ✅ | Release v0.1.1; re-run the Juice Shop example PR | 1, 2 |
 | 4 | #36 | Work units + content-addressed result cache (incremental, resumable, CI cache) | 0, 1 |
 | 5 | #37 | Repo index feeding the context packs | 1 |
 | 6 | #38 | Shards + `momus merge` + Actions matrix | 4 |
