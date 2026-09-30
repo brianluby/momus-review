@@ -75,11 +75,16 @@ jobs:
 
   sign-macos:
     needs: build
-    uses: brianluby/apple-signing/.github/workflows/sign-macos.yml@03551e3e4fd154c45415d6fb1d924c4e47929546
+    uses: brianluby/apple-signing/.github/workflows/sign-macos.yml@bac7bb3123e4a1b1d6f89fc928914a20f21386d6
     with:
       artifact-name: momus-aarch64-apple-darwin
       archive-name: momus-aarch64-apple-darwin.tar.gz
       binary-path: momus-aarch64-apple-darwin/momus
+    secrets:
+      APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
 
   publish:
     needs: [build, sign-macos]
