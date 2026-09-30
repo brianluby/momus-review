@@ -1,0 +1,295 @@
+# Isolated momus builder: the fixed-command build, SBOM and attestation
+# machinery, called by release.yml at a pinned commit SHA. Caller inputs are
+# a closed enum (mode) — no caller-controlled shell, paths, flags or
+# versions reach these jobs. The target allowlist lives here, not in the
+# caller.
+#
+# Modes (release.yml orchestrates the order around them):
+#   build  — test, build, generate+validate the target SBOM, package, emit
+#            build metadata artifacts
+#   attest — freeze final-byte checksums and create the provenance and SBOM
+#            attestations with the repository's only id-token grant
+#
+# Apple signing deliberately stays OUT of this workflow: it runs between the
+# two modes as a separate reusable-workflow call with its own credential
+# boundary, and attest runs only after it has replaced the macOS archive.
+#
+# Because attestations are signed here, this file is the signer whose
+# identity consumers pin (scripts/verify-release.sh --signer-workflow).
+# Changes require the same review bar as the release workflow; release.yml
+# references this file by commit SHA and that pin is bumped deliberately.
+name: momus builder
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: build | attest
+        type: string
+        required: true
+
+jobs:
+  build:
+    if: inputs.mode == 'build'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 22.04 builds link an older glibc, so they run on more hosts.
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04-arm
+          - target: aarch64-apple-darwin
+            os: macos-14
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      TARGET: ${{ matrix.target }}
+      CARGO_CYCLONEDX_VERSION: "0.5.9"
+      CYCLONEDX_SPEC_SHA: 55343ba19dee1785acf1ce9191540d5fd7b590db
+      JSONSCHEMA_VERSION: "4.25.0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the tag matches Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
+            exit 1
+          fi
+
+      # rust-toolchain.toml pins the exact channel for every build here and
+      # for `cargo install --path` source installs.
+      - name: Install the pinned toolchain
+        shell: bash
+        run: rustup toolchain install --profile minimal
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Build
+        run: cargo build --release --locked --bin momus
+
+      - name: Generate the target SBOM
+        shell: bash
+        run: |
+          set -euo pipefail
+          lock_before=$(sha256sum Cargo.lock 2>/dev/null | cut -d' ' -f1 || shasum -a 256 Cargo.lock | cut -d' ' -f1)
+          cargo install cargo-cyclonedx --version "$CARGO_CYCLONEDX_VERSION" --locked --root "$RUNNER_TEMP/tools"
+          mkdir -p dist
+          # Same feature configuration as the release build (defaults), the
+          # resolved graph for THIS target, dev dependencies excluded, build
+          # dependencies kept, deterministic timestamps.
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" \
+            "$RUNNER_TEMP/tools/bin/cargo-cyclonedx" cyclonedx \
+            --format json --spec-version 1.5 --describe binaries --target "$TARGET"
+          # momus-eval is an in-repo evaluation harness that is not shipped;
+          # the momus binary SBOM is the release SBOM.
+          mv momus_bin.cdx.json "dist/momus-$TARGET.cdx.json"
+          lock_after=$(sha256sum Cargo.lock 2>/dev/null | cut -d' ' -f1 || shasum -a 256 Cargo.lock | cut -d' ' -f1)
+          if [ "$lock_before" != "$lock_after" ]; then
+            echo "::error::Cargo.lock changed during SBOM generation"
+            exit 1
+          fi
+
+      - name: Validate the SBOM
+        shell: bash
+        run: |
+          set -euo pipefail
+          schema="$RUNNER_TEMP/cdx-schema"
+          mkdir -p "$schema"
+          for f in bom-1.5.schema.json spdx.schema.json jsf-0.82.schema.json; do
+            curl -fsSL --retry 3 \
+              "https://raw.githubusercontent.com/CycloneDX/specification/$CYCLONEDX_SPEC_SHA/schema/$f" \
+              -o "$schema/$f"
+          done
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet "jsonschema==$JSONSCHEMA_VERSION"
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          # The three release graphs resolve to the same crate names
+          # (libc/getrandom carry the per-target sources), so the honest
+          # target-specificity checks are: platform crates present, and the
+          # union graph (windows crates) plus dev-only crates (tempfile,
+          # and rustix/fastrand which only reach it via tempfile) absent.
+          expect=(--expect-crate libc --expect-crate getrandom)
+          forbid=(--forbid-crate tempfile --forbid-crate windows-sys \
+                  --forbid-crate rustix --forbid-crate linux-raw-sys)
+          "$RUNNER_TEMP/venv/bin/python" scripts/validate-sbom.py \
+            --sbom "dist/momus-$TARGET.cdx.json" --schema "$schema/bom-1.5.schema.json" \
+            --version "$version" "${expect[@]}" "${forbid[@]}"
+
+      - name: Package
+        shell: bash
+        run: |
+          name="momus-$TARGET"
+          mkdir -p "dist/$name"
+          cp target/release/momus LICENSE README.md "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          (cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
+          cat "dist/$name.tar.gz.sha256"
+
+      # Build evidence travels in its own artifact so sign-macos's overwrite
+      # of the momus-<target> artifact cannot clobber it. The unsigned
+      # archive digest recorded here is the input side of the signing
+      # transformation captured in the release manifest.
+      - name: Record build metadata
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/meta"
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          python3 - "$RUNNER_TEMP/meta/metadata.json" <<PY
+          import hashlib, json, os, subprocess, sys
+          def sha(path):
+              return hashlib.sha256(open(path, "rb").read()).hexdigest()
+          out = {
+              "target": os.environ["TARGET"],
+              "version": "$version",
+              "source_sha": os.environ["GITHUB_SHA"],
+              "runner": {"os": "${{ matrix.os }}",
+                         "image": os.environ.get("ImageOS", "") + " " + os.environ.get("ImageVersion", "")},
+              "toolchain": {"rustc": subprocess.run(["rustc", "-V"], capture_output=True, text=True).stdout.strip(),
+                            "cargo": subprocess.run(["cargo", "-V"], capture_output=True, text=True).stdout.strip(),
+                            "pin": open("rust-toolchain.toml").read().split('channel = "')[1].split('"')[0]},
+              "features": "default",
+              "cargo_lock_sha256": sha("Cargo.lock"),
+              "generators": {"cargo_cyclonedx": os.environ["CARGO_CYCLONEDX_VERSION"]},
+              "archive": {"name": f"momus-{os.environ['TARGET']}.tar.gz",
+                          "unsigned_sha256": sha(f"dist/momus-{os.environ['TARGET']}.tar.gz")},
+              "sbom": {"name": f"momus-{os.environ['TARGET']}.cdx.json",
+                       "sha256": sha(f"dist/momus-{os.environ['TARGET']}.cdx.json")},
+          }
+          json.dump(out, open(sys.argv[1], "w"), indent=2)
+          print(json.dumps(out, indent=2))
+          PY
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: momus-${{ matrix.target }}
+          path: |
+            dist/momus-${{ matrix.target }}.tar.gz
+            dist/momus-${{ matrix.target }}.tar.gz.sha256
+            dist/momus-${{ matrix.target }}.cdx.json
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: momus-${{ matrix.target }}-build
+          path: ${{ runner.temp }}/meta/metadata.json
+          if-no-files-found: error
+
+  attest:
+    if: inputs.mode == 'attest'
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, aarch64-apple-darwin]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Granted by the caller on this job only: this workflow's only place
+    # where signing material is reachable, and it executes no repository
+    # code — artifact downloads, hashing, and the pinned attestation action.
+    permissions:
+      id-token: write
+      attestations: write
+      contents: read
+    env:
+      TARGET: ${{ matrix.target }}
+      APPLE_SIGNING_REF: brianluby/apple-signing/.github/workflows/sign-macos.yml@bac7bb3123e4a1b1d6f89fc928914a20f21386d6
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: momus-${{ matrix.target }}
+          path: dist
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: momus-${{ matrix.target }}-build
+          path: meta
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: matrix.target == 'aarch64-apple-darwin'
+        with:
+          name: apple-notarization-momus-aarch64-apple-darwin
+          path: notes
+
+      # Freeze the final bytes: checksums are recomputed here from what will
+      # be published, never carried over from pre-signing artifacts.
+      - name: Freeze checksums
+        run: |
+          cd dist
+          shasum -a 256 "momus-$TARGET.tar.gz" > "momus-$TARGET.tar.gz.sha256"
+          cat "momus-$TARGET.tar.gz.sha256"
+
+      - name: Attest build provenance (archive + SBOM as subjects)
+        id: provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          # Explicit subjects, never automatic discovery.
+          subject-path: |
+            dist/momus-${{ matrix.target }}.tar.gz
+            dist/momus-${{ matrix.target }}.cdx.json
+
+      - name: "Attest the SBOM (subject: archive, predicate: CycloneDX)"
+        id: sbom
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/momus-${{ matrix.target }}.tar.gz
+          sbom-path: dist/momus-${{ matrix.target }}.cdx.json
+
+      - name: Collect bundles and the target manifest fragment
+        run: |
+          cp "${{ steps.provenance.outputs.bundle-path }}" "dist/momus-$TARGET.provenance.bundle"
+          cp "${{ steps.sbom.outputs.bundle-path }}" "dist/momus-$TARGET.sbom-attestation.bundle"
+          python3 - <<'PY'
+          import hashlib, json, os
+          target = os.environ["TARGET"]
+          def sha(name):
+              return hashlib.sha256(open(f"dist/{name}", "rb").read()).hexdigest()
+          fragment = json.load(open("meta/metadata.json"))
+          archive = f"momus-{target}.tar.gz"
+          sbom = f"momus-{target}.cdx.json"
+          fragment["archive"].update({"sha256": sha(archive), "bytes": os.path.getsize(f"dist/{archive}")})
+          fragment["sbom"]["sha256"] = sha(sbom)
+          fragment["attestations"] = {
+              "provenance_bundle": f"momus-{target}.provenance.bundle",
+              "sbom_bundle": f"momus-{target}.sbom-attestation.bundle",
+          }
+          if target == "aarch64-apple-darwin":
+              # Record the finalization transformation honestly: input
+              # digest (unsigned), output digest (signed), signer workflow,
+              # notarization evidence from Apple.
+              submission = {}
+              try:
+                  submission = json.load(open("notes/submission.json"))
+              except FileNotFoundError:
+                  pass
+              fragment["signing"] = {
+                  "signer": os.environ["APPLE_SIGNING_REF"],
+                  "input_sha256": fragment["archive"].pop("unsigned_sha256"),
+                  "output_sha256": fragment["archive"]["sha256"],
+                  "notarization": {"id": submission.get("id"), "status": submission.get("status")},
+              }
+          json.dump(fragment, open(f"dist/momus-{target}.fragment.json", "w"), indent=2)
+          PY
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: momus-${{ matrix.target }}-attested
+          path: |
+            dist/momus-${{ matrix.target }}.tar.gz
+            dist/momus-${{ matrix.target }}.tar.gz.sha256
+            dist/momus-${{ matrix.target }}.cdx.json
+            dist/momus-${{ matrix.target }}.provenance.bundle
+            dist/momus-${{ matrix.target }}.sbom-attestation.bundle
+            dist/momus-${{ matrix.target }}.fragment.json
+          if-no-files-found: error

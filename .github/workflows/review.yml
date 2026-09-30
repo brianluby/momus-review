@@ -32,6 +32,13 @@ on:
           commit, else a build of that commit), `latest`, a tag, or `source`
         type: string
         default: auto
+      verify-attestations:
+        description: >-
+          Passed to the action: `required` verifies provenance and SBOM
+          attestations before using a downloaded binary; `legacy` allows
+          pre-attestation releases.
+        type: string
+        default: required
     secrets:
       TYPESAFE_API_KEY:
         required: false
@@ -89,3 +96,4 @@ jobs:
           version: ${{ steps.version.outputs.version }}
           # A local-path action cannot see its own repository.
           release-repo: ${{ job.workflow_repository }}
+          verify-attestations: ${{ inputs.verify-attestations }}

@@ -1,0 +1,10 @@
+# Exact toolchain pin for every build of this repository: release builds,
+# CI, and `cargo install --path` source installs all resolve this file, so
+# release binaries are built with a known, auditable compiler.
+#
+# Bump deliberately: the release manifest (docs/slsa.md) records the version
+# each release was built with. Cargo.toml's `rust-version` stays the broader
+# MSRV for consumers; this pin is >= that.
+[toolchain]
+channel = "1.98.1"
+profile = "minimal"

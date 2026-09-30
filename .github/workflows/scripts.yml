@@ -1,12 +1,17 @@
-# Lint and test the shell scripts (scripts/rollout.sh against a stub gh).
+# Lint and test the shell scripts (scripts/rollout.sh and
+# scripts/verify-release.sh against stub gh binaries) plus workflow and
+# dependency gates.
 name: scripts
 
 on:
   pull_request:
-    paths: ["scripts/**", "examples/**", ".github/workflows/scripts.yml"]
+    paths: ["scripts/**", "examples/**", ".github/workflows/**", "Cargo.lock"]
   push:
     branches: [main]
-    paths: ["scripts/**", "examples/**", ".github/workflows/scripts.yml"]
+    paths: ["scripts/**", "examples/**", ".github/workflows/**", "Cargo.lock"]
+  schedule:
+    # Weekly RustSec sweep of the locked dependency set on main.
+    - cron: "17 4 * * 1"
 
 permissions:
   contents: read
@@ -24,3 +29,50 @@ jobs:
 
       - name: Test rollout.sh
         run: scripts/test-rollout.sh
+
+      # Release verification failure modes (stubbed gh): tampered archive,
+      # altered SBOM, missing bundle/target, manifest digest mismatch, and
+      # the attestation policy flags handed to gh.
+      - name: Test verify-release.sh
+        run: scripts/test-verify-release.sh
+
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: actionlint (pinned)
+        run: |
+          set -euo pipefail
+          t="$RUNNER_TEMP/actionlint"
+          curl -fsSL --retry 3 -o "$t.tar.gz" \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $t.tar.gz" | sha256sum -c -
+          tar -C "$RUNNER_TEMP" -xzf "$t.tar.gz" actionlint
+          # job.workflow_repository/workflow_sha are newer contexts the
+          # actionlint schema lags on (used by review.yml/scan.yml on main).
+          "$t" -oneline -shellcheck= \
+            -ignore 'property "workflow_(repository|sha)" is not defined'
+
+  audit:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned toolchain
+        run: rustup toolchain install --profile minimal
+
+      - name: Install cargo-audit (pinned, locked)
+        run: cargo install cargo-audit --version 0.22.2 --locked --root "$RUNNER_TEMP/tools"
+
+      # PR and scheduled runs degrade to a warning on an advisory-database
+      # outage so an upstream outage cannot block unrelated work; the
+      # release workflow runs the same script in fail mode.
+      - name: RustSec audit
+        run: |
+          export PATH="$RUNNER_TEMP/tools/bin:$PATH"
+          scripts/audit.sh --advisory-db-outage warn
