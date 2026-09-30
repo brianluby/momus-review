@@ -70,12 +70,11 @@ while [ $# -gt 0 ]; do
 done
 need dir "$DIR"
 need source-sha "$SOURCE_SHA"
-# Optionally require the source ref as well as its commit.
-ref_args=()
-[ -n "$SOURCE_REF" ] && ref_args=(--source-ref "$SOURCE_REF")
-# An array so the digest flag is simply absent when not pinned.
-digest_args=()
-[ -n "$SIGNER_DIGEST" ] && digest_args=(--signer-digest "$SIGNER_DIGEST")
+# Keep the policy array nonempty: macOS Bash 3.2 treats empty array
+# expansion as unbound under nounset. Optional pins remain absent unless set.
+policy_args=(--source-digest "$SOURCE_SHA")
+[ -n "$SOURCE_REF" ] && policy_args+=(--source-ref "$SOURCE_REF")
+[ -n "$SIGNER_DIGEST" ] && policy_args+=(--signer-digest "$SIGNER_DIGEST")
 for cmd in gh jq python3; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "verify-release.sh: needs $cmd on PATH" >&2; exit 2; }
 done
@@ -117,8 +116,7 @@ for target in ${TARGETS//,/ }; do
         --repo "$REPO" \
         --predicate-type "https://slsa.dev/provenance/v1" \
         --signer-workflow "$SIGNER_WORKFLOW" \
-        "${digest_args[@]}" \
-        --source-digest "$SOURCE_SHA" "${ref_args[@]}" \
+        "${policy_args[@]}" \
         --deny-self-hosted-runners >/dev/null; then
       fail "$subject: SLSA provenance verification failed ($provenance)"
       continue
@@ -132,8 +130,7 @@ for target in ${TARGETS//,/ }; do
       --repo "$REPO" \
       --predicate-type "https://cyclonedx.org/bom" \
       --signer-workflow "$SIGNER_WORKFLOW" \
-      "${digest_args[@]}" \
-      --source-digest "$SOURCE_SHA" "${ref_args[@]}" \
+      "${policy_args[@]}" \
       --deny-self-hosted-runners --format=json); then
     if ! diff <(printf '%s' "$gh_json" | jq -Sjc '.[0].verificationResult.statement.predicate') \
               <(jq -Sjc . "$sbom"); then
