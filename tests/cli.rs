@@ -465,6 +465,32 @@ async fn cold_and_warm_indexes_send_identical_requests_and_cached_reruns_make_no
         bodies.lock().unwrap().clear();
         let cold = run(true).await.unwrap();
         let cold_requests = bodies.lock().unwrap().clone();
+        if mode == "review" {
+            let widget = cold_requests
+                .iter()
+                .find(|body| {
+                    body["state"]["file"]["path"] == "src/widget.rs"
+                        && body["questions"].get("correctness").is_some()
+                })
+                .expect("widget screen request");
+            let state = &widget["state"];
+            assert!(
+                state["exportSignatures"]
+                    .as_str()
+                    .unwrap()
+                    .contains("pub fn widget_0")
+            );
+            let neighbors = state["neighbors"].as_array().unwrap();
+            assert!(neighbors.iter().any(|f| f["path"] == "src/neighbor.rs"
+                && f["content"].as_str().unwrap().contains("use crate::widget")));
+            let tests = state["changedTests"].as_array().unwrap();
+            assert_eq!(tests.len(), 2);
+            assert!(
+                tests
+                    .iter()
+                    .all(|f| f["patch"].as_str().unwrap().contains("assert.ok(widget_0)"))
+            );
+        }
         assert!(cold["index"]["computed"].as_u64().unwrap() > 0);
         bodies.lock().unwrap().clear();
         let warm = run(true).await.unwrap();
