@@ -1,6 +1,6 @@
 # Scaling bundle validation
 
-Veans #36, #37, #38, #39, #40, #42, #47. Local evaluation on 2026-09-29.
+Veans #36, #37, #38, #39, #40, #42, #47. Local evaluation on 2026-09-29 at `b7e4c44` (before the Tier-0 concurrency review fix).
 
 ## Public benchmark
 
@@ -56,3 +56,18 @@ These are local measurements, not promised hosted performance.
 Whole-repository formatting has pre-existing failures in untouched source.
 New hosted matrix execution remains a post-publication check; this local
 validation does not claim it already ran on GitHub.
+
+## PR #29 review fixes
+
+All 201 all-target/all-feature tests pass after the review fixes; strict Clippy,
+scoped formatting and workflow lint pass. New regressions cover concurrent
+ordered Tier-0 dismissal, early-return redaction totals and partial summaries,
+malformed/failed Tier-0 answers, oversized-source fallback, and corrupt/missing/
+schema-incompatible or unwritable index storage. Tier-0 requests now use ordered
+bounded concurrency; the measurements above describe the original implementation.
+
+Only the merge job receives PR-write permission. Cache seeding documentation now
+requires a custom trusted job with the action's exact key prefix and paths;
+the sharded scan workflow uses a separate cache. A local inventory of production
+functions in the changed Rust files finds doc comments on 199/199 functions;
+CodeRabbit's own coverage recomputation remains a hosted check.

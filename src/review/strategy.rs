@@ -18,6 +18,7 @@ const MAX_CONTEXT_PATCH_CHARS: usize = 6_000;
 
 /// A file payload discovered by a mode: anything with a repo-relative path.
 pub trait FileEntry: std::fmt::Debug + Clone + serde::Serialize {
+    /// Return the repository-relative identity used for context, cache and shard selection.
     fn path(&self) -> &str;
     /// Tier 0 never dismisses a unit too large to inspect in full.
     fn tier_state(&self) -> Option<Value> {
@@ -30,6 +31,7 @@ pub trait FileEntry: std::fmt::Debug + Clone + serde::Serialize {
 }
 
 impl FileEntry for ChangedFile {
+    /// Return the repository-relative identity used for context, cache and shard selection.
     fn path(&self) -> &str {
         &self.path
     }
@@ -44,10 +46,12 @@ impl FileEntry for ChangedFile {
 }
 
 impl FileEntry for SourceFile {
+    /// Return the repository-relative identity used for context, cache and shard selection.
     fn path(&self) -> &str {
         &self.path
     }
 
+    /// Return complete source content only when it fits the configured Tier-0 budget.
     fn tier_state(&self) -> Option<Value> {
         let mut budget = crate::review::context::ContextBudget::from_env().ok()?;
         let content = budget.take(&self.content);
@@ -57,6 +61,7 @@ impl FileEntry for SourceFile {
         Some(json!({ "file": { "path": self.path, "content": content } }))
     }
 
+    /// Return a bounded source-line window centered on the finding.
     fn context_around(&self, line: usize) -> Value {
         let (start_line, content) = window(&self.content, line, CONTEXT_RADIUS);
         json!({ "path": self.path, "startLine": start_line, "content": content })
@@ -111,8 +116,11 @@ pub struct Signal<F> {
 pub trait ReviewStrategy: Send + Sync {
     type File: FileEntry + Send + Sync + 'static;
 
+    /// Identify whether the strategy reviews diffs or complete source files.
     fn mode(&self) -> ReviewMode;
+    /// Name the review subjects in workflow progress messages.
     fn subject(&self) -> &'static str;
+    /// Name the accompanying test-context inventory in progress messages.
     fn context_label(&self) -> &'static str;
 
     /// The System One client, for mode-agnostic refinement judgments.
@@ -127,21 +135,26 @@ pub trait ReviewStrategy: Send + Sync {
     fn prepass(&self, _scopes: &[PathBuf], _discovery: &Discovery<Self::File>) -> Result<()> {
         Ok(())
     }
+    /// Report metadata computations, reuse and fallbacks from the pre-pass.
     fn index_stats(&self) -> crate::review::index::IndexStats {
         Default::default()
     }
 
+    /// Discover review subjects and their test-context files under the requested scopes.
     fn discover(&self, scopes: &[PathBuf]) -> Result<Discovery<Self::File>>;
+    /// Estimate per-dimension concern probabilities using bounded context.
     async fn screen(
         &self,
         file: &Self::File,
         context: &[Self::File],
     ) -> Result<Screening<Self::File>>;
+    /// Produce non-gating file-role and review-priority metadata.
     async fn profile(
         &self,
         file: &Self::File,
         probabilities: &Probabilities,
     ) -> Result<FileProfile>;
+    /// Locate concrete evidence for one threshold signal, or return no finding.
     async fn locate(&self, signal: &Signal<Self::File>) -> Result<Option<Finding>>;
     /// Enrich a located finding with a suggested fix and test strategy.
     async fn suggestions(&self, finding: &Finding) -> Result<(Option<String>, Option<String>)>;

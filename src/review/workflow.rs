@@ -144,6 +144,7 @@ pub struct ReviewOptions {
 }
 
 impl Default for ReviewOptions {
+    /// Enable ordinary refinement and unlimited follow-ups, without tiering or sharding.
     fn default() -> Self {
         Self {
             max_follow_ups: None,
@@ -242,21 +243,39 @@ pub async fn run_review<S: ReviewStrategy>(
 
     let mut tier = crate::domain::report::TierSummary::default();
     if tiered {
-        let mut retained = Vec::new();
-        for file in files {
-            let Some(state) = file.tier_state() else {
-                retained.push(file);
-                continue;
-            };
-            tier.screened += 1;
-            let answer = strategy.client().system_one(state, json!({ "concern": crate::review::typesafe::noul(
-                json!("Does this file contain any correctness, security, reliability, compatibility, or test-coverage concern worth a detailed review? Inspect all behavior; favor review when uncertain."),
-                json!({"true": "Any plausible concern needing detailed review", "false": "No concern warrants review"})) })).await;
-            match answer.and_then(|a| a.noul("concern")) {
-                Ok(probability) if probability < 0.05 => {
-                    tier.dismissed.push(file.path().to_string())
+        let question = json!({ "concern": crate::review::typesafe::noul(
+            json!("Does this file contain any correctness, security, reliability, compatibility, or test-coverage concern worth a detailed review? Inspect all behavior; favor review when uncertain."),
+            json!({"true": "Any plausible concern needing detailed review", "false": "No concern warrants review"})) });
+        let answers: Vec<_> = stream::iter(files)
+            .map(|file| {
+                let strategy = &strategy;
+                let question = question.clone();
+                async move {
+                    let Some(state) = file.tier_state() else {
+                        return (file, None);
+                    };
+                    let answer = strategy
+                        .client()
+                        .system_one(state, question)
+                        .await
+                        .and_then(|a| a.noul("concern"));
+                    (file, Some(answer))
                 }
-                _ => retained.push(file), // uncertainty/errors always retain full screening
+            })
+            .buffered(concurrency)
+            .collect()
+            .await;
+        let mut retained = Vec::new();
+        for (file, answer) in answers {
+            match answer {
+                None => retained.push(file),
+                Some(answer) => {
+                    tier.screened += 1;
+                    match answer {
+                        Ok(p) if p < 0.05 => tier.dismissed.push(file.path().to_string()),
+                        _ => retained.push(file), // uncertainty/errors always retain full screening
+                    }
+                }
             }
         }
         files = retained;
@@ -281,6 +300,8 @@ pub async fn run_review<S: ReviewStrategy>(
                 max_profiles: MAX_PROFILES,
             },
             index: strategy.index_stats(),
+            redactions: strategy.client().redaction_summary(),
+            context_files: context_files.iter().map(|f| f.path().to_string()).collect(),
             partial: true,
             ..Default::default()
         });
@@ -593,6 +614,7 @@ pub async fn finish_findings<S: ReviewStrategy>(
     (findings, refine_counts)
 }
 
+/// Return the highest dimension probability for profile candidate ranking.
 fn max_probability<F: crate::review::strategy::FileEntry>(s: &Screening<F>) -> f64 {
     s.probabilities
         .values()

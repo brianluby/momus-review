@@ -8,6 +8,7 @@ use anyhow::{Result, bail};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+/// Validate a complete shard set against this checkout and run global finalization once.
 pub async fn merge_reports(
     parts: Vec<ReviewReport>,
     scopes: &[PathBuf],
@@ -195,6 +196,7 @@ type Validation = (
     String,
     crate::domain::report::ConfigSnapshot,
 );
+/// Reject missing, duplicate, or incompatible shard metadata before discovery or API calls.
 fn validate(parts: &[ReviewReport]) -> Result<Validation> {
     let Some(first) = parts.first() else {
         bail!("merge needs at least one partial report");

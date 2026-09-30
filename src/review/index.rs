@@ -36,6 +36,7 @@ pub struct RepoIndex {
 }
 
 impl RepoIndex {
+    /// Reuse valid blob metadata and rebuild path-dependent graph/test mappings for this tree.
     pub fn build(files: &[SourceFile], tests: &[SourceFile], store: &IndexStore) -> Self {
         let mut entries = BTreeMap::new();
         let mut stats = IndexStats::default();
@@ -100,6 +101,7 @@ impl RepoIndex {
         }
     }
 
+    /// Replace diff-mode related-test selections using the current changed-file inventory.
     pub fn map_changed_tests(&mut self, files: &[ChangedFile], tests: &[ChangedFile]) {
         self.changed_tests = files
             .iter()
@@ -111,24 +113,30 @@ impl RepoIndex {
             })
             .collect();
     }
+    /// Return bounded source-test context selected for this repository path.
     pub fn related_tests(&self, path: &str) -> Option<&[SourceFile]> {
         self.tests.get(path).map(Vec::as_slice)
     }
+    /// Return bounded changed-test context selected for this diff path.
     pub fn related_changed_tests(&self, path: &str) -> Option<&[ChangedFile]> {
         self.changed_tests.get(path).map(Vec::as_slice)
     }
+    /// Return one-hop importers and dependencies resolved against the current inventory.
     pub fn neighbors(&self, path: &str) -> Vec<&str> {
         self.graph.neighbors(path)
     }
+    /// Return persisted declaration signatures, or an empty string when no entry exists.
     pub fn signatures(&self, path: &str) -> &str {
         self.entries.get(path).map_or("", |e| e.signatures.as_str())
     }
+    /// Use cached signatures when available, otherwise extract them from this source.
     pub fn source_signatures(&self, file: &SourceFile) -> String {
         self.entries.get(&file.path).map_or_else(
             || regions::export_signatures(&file.content, &file.path),
             |e| e.signatures.clone(),
         )
     }
+    /// Materialize matching blob spans, falling back to source splitting for invalid/missing metadata.
     pub fn regions(&self, file: &SourceFile, lines: usize) -> Vec<Region> {
         self.entries
             .get(&file.path)

@@ -71,6 +71,7 @@ pub struct DimensionMeta {
     pub short: String,
 }
 
+/// Expose each screening dimension's label and definition in the report.
 pub fn dimension_metadata() -> Vec<DimensionMeta> {
     vec![
         DimensionMeta { key: Dimension::Correctness, label: "Correctness".into(), short: "Corr".into() },

@@ -29,6 +29,7 @@ pub struct CodebaseStrategy {
 }
 
 impl CodebaseStrategy {
+    /// Configure codebase discovery and a shared client with a lazy index pre-pass.
     pub fn new(client: TypeSafeClient, exclude: Exclude) -> Self {
         Self {
             client,
@@ -56,10 +57,12 @@ impl CodebaseStrategy {
 impl ReviewStrategy for CodebaseStrategy {
     type File = SourceFile;
 
+    /// Return the shared request client used by judgments and global refinement.
     fn client(&self) -> &TypeSafeClient {
         &self.client
     }
 
+    /// Return bounded one-hop source dependencies/importers for refinement.
     fn neighbor_context(&self, path: &str) -> serde_json::Value {
         let neighbors: Vec<SourceFile> = self
             .neighbor_files(path)
@@ -69,18 +72,22 @@ impl ReviewStrategy for CodebaseStrategy {
         serde_json::json!(neighbors)
     }
 
+    /// Identify the review mode represented by this strategy.
     fn mode(&self) -> ReviewMode {
         ReviewMode::Codebase
     }
 
+    /// Name the review subjects for progress output.
     fn subject(&self) -> &'static str {
         "codebase source"
     }
 
+    /// Name the test context accompanying the review subjects.
     fn context_label(&self) -> &'static str {
         "repository test"
     }
 
+    /// Discover review subjects and test-context files after exclusions.
     fn discover(&self, scopes: &[PathBuf]) -> Result<Discovery<SourceFile>> {
         let repository = git::repository_files(scopes, &self.exclude)?;
         let mut files = Vec::new();
@@ -106,6 +113,7 @@ impl ReviewStrategy for CodebaseStrategy {
         })
     }
 
+    /// Build reusable source metadata and fresh tree-dependent context before screening.
     fn prepass(&self, _scopes: &[PathBuf], discovery: &Discovery<SourceFile>) -> Result<()> {
         let _ = self.index.set(RepoIndex::build(
             &discovery.files,
@@ -114,12 +122,14 @@ impl ReviewStrategy for CodebaseStrategy {
         ));
         Ok(())
     }
+    /// Snapshot computed, reused and fallback metadata counts from the pre-pass.
     fn index_stats(&self) -> IndexStats {
         self.index
             .get()
             .map_or_else(IndexStats::default, |i| i.stats)
     }
 
+    /// Screen this file using indexed metadata and bounded related-test context.
     async fn screen(
         &self,
         file: &SourceFile,
@@ -136,6 +146,7 @@ impl ReviewStrategy for CodebaseStrategy {
         .await
     }
 
+    /// Classify file role and review priority without gating findings.
     async fn profile(
         &self,
         file: &SourceFile,
@@ -144,6 +155,7 @@ impl ReviewStrategy for CodebaseStrategy {
         codebase_judgments::profile_source_file(&self.client, file, probabilities).await
     }
 
+    /// Locate concrete evidence for a threshold signal, or return no finding.
     async fn locate(&self, signal: &Signal<SourceFile>) -> Result<Option<Finding>> {
         let neighbors = self.neighbor_files(&signal.file.path);
         codebase_judgments::locate_source_signal_indexed(
@@ -155,6 +167,7 @@ impl ReviewStrategy for CodebaseStrategy {
         .await
     }
 
+    /// Choose supported fix/test strategies for the located finding.
     async fn suggestions(&self, finding: &Finding) -> Result<(Option<String>, Option<String>)> {
         crate::review::explain::enrich_suggestions(&self.client, finding).await
     }

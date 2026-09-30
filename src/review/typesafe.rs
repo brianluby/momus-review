@@ -50,6 +50,7 @@ pub struct SystemOneResponse {
 }
 
 impl SystemOneResponse {
+    /// Return the named typed answer or report that the server omitted it.
     fn answer(&self, id: &str) -> Result<&Value> {
         self.answers
             .get(id)
@@ -204,6 +205,7 @@ impl TypeSafeClient {
         )
     }
 
+    /// Construct the HTTP client, shared meters and default cache/gate/budget controls.
     fn from_config(config: ClientConfig) -> Result<Self> {
         let ClientConfig {
             api_key,
@@ -231,13 +233,16 @@ impl TypeSafeClient {
         })
     }
 
+    /// Replace the HTTP-attempt budget; subsequent clones share its counters.
     pub fn with_budget(mut self, limit: Option<u64>) -> Self {
         self.budget = Arc::new(crate::review::budget::CallBudget::new(limit));
         self
     }
+    /// Snapshot reserved and deferred HTTP attempts across every client clone.
     pub fn budget_summary(&self) -> crate::domain::report::BudgetSummary {
         self.budget.summary()
     }
+    /// Identify the API endpoint and currently resolved model for compatible shard merging.
     pub fn model_identity(&self) -> String {
         format!(
             "{}:{}",
@@ -246,6 +251,7 @@ impl TypeSafeClient {
         )
     }
 
+    /// Replace the shared adaptive gate with one using this maximum capacity.
     pub fn with_concurrency_cap(mut self, cap: usize) -> Self {
         self.limiter = crate::review::limiter::AdaptiveLimiter::new(cap);
         self
@@ -262,6 +268,7 @@ impl TypeSafeClient {
         self.with_cache(ResultCache::disabled())
     }
 
+    /// Snapshot cache hits and misses across every stage and client clone.
     pub fn cache_summary(&self) -> CacheSummary {
         CacheSummary {
             hits: self.cache_hits.load(Ordering::Relaxed),
@@ -449,6 +456,7 @@ impl UsageMeter {
         }
     }
 
+    /// Snapshot accumulated successful calls and server-reported token totals.
     fn summary(&self) -> UsageSummary {
         UsageSummary {
             calls: self.calls.load(Ordering::Relaxed),
@@ -470,6 +478,7 @@ fn is_retryable_transport(e: &reqwest::Error) -> bool {
     e.is_connect() || e.is_timeout()
 }
 
+/// Sleep for the bounded exponential delay between transient HTTP retries.
 async fn backoff(attempt: usize) {
     tokio::time::sleep(Duration::from_millis(500 * (1 << attempt))).await;
 }

@@ -76,8 +76,9 @@ change observed during a run invalidates subsequent alias lookups.
   about its diff to re-review.
 - The cache doubles as a checkpoint: an interrupted scan resumes.
 - In CI, the action restores the most recent cache for the base branch and
-  saves a unique run key, including after a blocking-findings failure. A scan
-  job can seed the same `momus-work-v1-<OS>-<branch>-` prefix. PR caches are
+  saves a unique run key, including after a blocking-findings failure. Seeding the base branch requires a custom trusted job using the same
+  `momus-work-v1-<OS>-<branch>-` prefix and exact cache paths below. The shipped
+  `scan.yml` uses separate per-shard keys and paths, so it cannot seed this cache. PR caches are
   scoped by GitHub: sibling PRs cannot read each other's caches. The action stores work under
   `RUNNER_TEMP/momus-work/{cache,index}`, outside the reviewed checkout; raw
   reports are excluded.

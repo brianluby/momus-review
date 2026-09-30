@@ -107,8 +107,10 @@ The CI action caches only work under `RUNNER_TEMP/momus-work`, outside the
 reviewed checkout, so tracked files in a PR cannot prepopulate the cache.
 Restore keys use the base branch; each run saves a unique key. GitHub's cache
 scope still applies: caches created by a PR belong to its merge ref and cannot
-warm the default branch or sibling PRs. A trusted base-branch scan can seed
-that branch's cache. Raw review reports are never part of the work cache.
+warm the default branch or sibling PRs. A custom trusted base-branch job can seed
+that cache only with the action's exact `momus-work-v1-<OS>-<branch>-` key
+prefix and `RUNNER_TEMP/momus-work/{cache,index}` paths. The shipped sharded
+`scan.yml` uses incompatible keys and paths and cannot seed the action cache. Raw review reports are never part of the work cache.
 
 ## Residual Risks
 
