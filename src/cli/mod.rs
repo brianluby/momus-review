@@ -9,7 +9,9 @@ use crate::adapters::exclude::Exclude;
 use crate::adapters::feedback_store::{feedback_path, read_feedback};
 use crate::adapters::git;
 use crate::adapters::github::{GitHubClient, PullRequest};
-use crate::adapters::report_store::{StoredReport, read_report, report_path, save_history, save_json, save_report};
+use crate::adapters::report_store::{
+    StoredReport, read_report, report_path, save_history, save_json, save_report,
+};
 use crate::adapters::sarif;
 use crate::domain::redact::{Redactions, redact_value};
 use crate::domain::report::{Action, ReviewReport};
@@ -21,7 +23,11 @@ use crate::review::typesafe::TypeSafeClient;
 use crate::review::workflow::{ReviewOptions, run_review};
 
 #[derive(Parser)]
-#[command(name = "momus", version, about = "Fast, calibrated, staged code review")]
+#[command(
+    name = "momus",
+    version,
+    about = "Fast, calibrated, staged code review"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -73,6 +79,10 @@ pub enum Command {
         /// `MOMUS_REDACT=off`); redaction is on by default
         #[arg(long)]
         no_redact: bool,
+
+        /// Bypass the local result cache (reads and writes)
+        #[arg(long)]
+        no_cache: bool,
     },
 
     /// Scan every non-ignored source file under a scope
@@ -107,6 +117,10 @@ pub enum Command {
         /// `MOMUS_REDACT=off`); redaction is on by default
         #[arg(long)]
         no_redact: bool,
+
+        /// Bypass the local result cache (reads and writes)
+        #[arg(long)]
+        no_cache: bool,
     },
 
     /// Publish the saved report to its pull request (inside GitHub Actions):
@@ -150,19 +164,72 @@ pub enum Command {
 
 pub async fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        Command::Review { paths, fail_on_blocking, exclude, allow_empty, base, follow_ups, sarif, no_refine, no_redact } => {
-            let strategy = ChangesStrategy::new(client(no_redact)?, Exclude::new(&exclude)?, base);
+        Command::Review {
+            paths,
+            fail_on_blocking,
+            exclude,
+            allow_empty,
+            base,
+            follow_ups,
+            sarif,
+            no_refine,
+            no_redact,
+            no_cache,
+        } => {
+            let strategy =
+                ChangesStrategy::new(client(no_redact, no_cache)?, Exclude::new(&exclude)?, base);
             let sarif = sarif.map(PathBuf::from);
-            run_mode(paths, fail_on_blocking, options(follow_ups, no_refine, allow_empty), sarif, strategy).await
+            run_mode(
+                paths,
+                fail_on_blocking,
+                options(follow_ups, no_refine, allow_empty),
+                sarif,
+                strategy,
+            )
+            .await
         }
-        Command::Scan { paths, fail_on_blocking, exclude, follow_ups, sarif, no_refine, no_redact } => {
-            let strategy = CodebaseStrategy::new(client(no_redact)?, Exclude::new(&exclude)?);
+        Command::Scan {
+            paths,
+            fail_on_blocking,
+            exclude,
+            follow_ups,
+            sarif,
+            no_refine,
+            no_redact,
+            no_cache,
+        } => {
+            let strategy =
+                CodebaseStrategy::new(client(no_redact, no_cache)?, Exclude::new(&exclude)?);
             let sarif = sarif.map(PathBuf::from);
-            run_mode(paths, fail_on_blocking, options(follow_ups, no_refine, false), sarif, strategy).await
+            run_mode(
+                paths,
+                fail_on_blocking,
+                options(follow_ups, no_refine, false),
+                sarif,
+                strategy,
+            )
+            .await
         }
-        Command::GithubReview { report, max_comments, event, fail_on_blocking, dry_run, sanitized_report } => {
-            let options = PublishOptions { max_comments, event: event.into(), dry_run };
-            github_review(report.map(PathBuf::from), sanitized_report.map(PathBuf::from), options, fail_on_blocking).await
+        Command::GithubReview {
+            report,
+            max_comments,
+            event,
+            fail_on_blocking,
+            dry_run,
+            sanitized_report,
+        } => {
+            let options = PublishOptions {
+                max_comments,
+                event: event.into(),
+                dry_run,
+            };
+            github_review(
+                report.map(PathBuf::from),
+                sanitized_report.map(PathBuf::from),
+                options,
+                fail_on_blocking,
+            )
+            .await
         }
         Command::Dashboard { port } => crate::dashboard::serve(port).await,
     }
@@ -195,7 +262,9 @@ async fn github_review(
     let path = report.unwrap_or_else(report_path);
     let report = match read_report(&path) {
         StoredReport::Ok { report, .. } => report,
-        StoredReport::Empty => anyhow::bail!("no report at {} (run `momus review` first)", path.display()),
+        StoredReport::Empty => {
+            anyhow::bail!("no report at {} (run `momus review` first)", path.display())
+        }
         StoredReport::Error(e) => anyhow::bail!("{}: {e}", path.display()),
     };
     // Before publishing, so a posting failure still leaves the artifact.
@@ -217,11 +286,20 @@ async fn github_review(
         pr.number,
         outcome.already_posted,
         outcome.summary_only,
-        if outcome.review_rejected { ", review rejected" } else { "" },
+        if outcome.review_rejected {
+            ", review rejected"
+        } else {
+            ""
+        },
         outcome.summary_action,
     );
 
-    if fail_on_blocking && report.findings.iter().any(|f| f.action == Action::RequestChanges) {
+    if fail_on_blocking
+        && report
+            .findings
+            .iter()
+            .any(|f| f.action == Action::RequestChanges)
+    {
         std::process::exit(1);
     }
     Ok(())
@@ -240,9 +318,18 @@ fn write_sanitized_report(report: &ReviewReport, path: &Path) -> Result<()> {
 
 /// The System One client from the environment; `--no-redact` overrides
 /// `MOMUS_REDACT`.
-fn client(no_redact: bool) -> Result<TypeSafeClient> {
+fn client(no_redact: bool, no_cache: bool) -> Result<TypeSafeClient> {
     let client = TypeSafeClient::from_env()?;
-    Ok(if no_redact { client.without_redaction() } else { client })
+    let client = if no_redact {
+        client.without_redaction()
+    } else {
+        client
+    };
+    Ok(if no_cache {
+        client.without_cache()
+    } else {
+        client
+    })
 }
 
 /// Review options from CLI flags plus the saved feedback log. Feedback is
@@ -253,7 +340,12 @@ fn options(max_follow_ups: Option<usize>, no_refine: bool, allow_empty: bool) ->
         eprintln!("feedback ignored: {e:#}");
         Default::default()
     });
-    ReviewOptions { max_follow_ups, refine: !no_refine, feedback, allow_empty }
+    ReviewOptions {
+        max_follow_ups,
+        refine: !no_refine,
+        feedback,
+        allow_empty,
+    }
 }
 
 /// Runs a review, saves the report, prints JSON to stdout, and applies the
@@ -274,8 +366,11 @@ async fn run_mode<S: ReviewStrategy>(
     let report = run_review(&scopes, &log, options, strategy).await?;
 
     if !report.redactions.is_empty() {
-        let rules: Vec<String> =
-            report.redactions.iter().map(|(rule, n)| format!("{rule} ×{n}")).collect();
+        let rules: Vec<String> = report
+            .redactions
+            .iter()
+            .map(|(rule, n)| format!("{rule} ×{n}"))
+            .collect();
         eprintln!("redacted secrets before sending: {}", rules.join(", "));
     }
 
@@ -304,7 +399,12 @@ async fn run_mode<S: ReviewStrategy>(
 
     println!("{}", serde_json::to_string_pretty(&report)?);
 
-    if fail_on_blocking && report.findings.iter().any(|f| f.action == Action::RequestChanges) {
+    if fail_on_blocking
+        && report
+            .findings
+            .iter()
+            .any(|f| f.action == Action::RequestChanges)
+    {
         std::process::exit(1);
     }
     Ok(())

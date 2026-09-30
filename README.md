@@ -31,7 +31,7 @@ Both accept one or more scope directories (unioned into one run) plus
 `--exclude GLOB` (skip vendored/third-party subtrees), `--follow-ups N`
 (opt into a follow-up budget; unlimited by default),
 `--fail-on-blocking` (CI exit contract), `--no-refine` (skip the
-refinement stage below), and `--no-redact` (send code without secret
+refinement stage below), `--no-cache` (bypass saved answers), and `--no-redact` (send code without secret
 redaction; see below).
 
 `momus review --base REV` diffs against the merge base of `REV` and `HEAD`
@@ -89,7 +89,16 @@ Read from the environment (or `.env`):
 | `TYPESAFE_TIMEOUT_SECS` | `60` | per-request timeout |
 | `MOMUS_CONCURRENCY` | `3` | parallel `system_one` requests |
 | `MOMUS_REDACT` | `on` | redact secrets before sending (`off` or `--no-redact` disables) |
+| `MOMUS_CACHE_DIR` | `reviews/cache` | content-addressed answers; `--no-cache` bypasses reads and writes |
+| `MOMUS_INDEX_DIR` | `reviews/index` | blob-keyed context metadata for the pre-pass |
 | `MOMUS_CONTEXT_BUDGET_CHARS` | `96000` | per-request context budget; sources beyond it are trimmed and counted |
+
+Unchanged requests reuse cached answers in both modes; the JSON report records
+`usage.cache.hits` and `usage.cache.misses`, and cached answers add no API calls
+or token usage. `index` reports computed/reused metadata and fallbacks. Pin a
+versioned model ID for a warm run with zero API calls: `jev-latest` resolves
+from a live response anew each run before reusing that model's entries.
+See [Scaling](docs/scaling.md) for cache invalidation and CI cache scope.
 
 To run against a local System One server such as
 [Winnow-12B](https://github.com/EldanRing/winnow-inference), point the base

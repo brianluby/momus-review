@@ -35,7 +35,7 @@ Momus implements each fix itself:
 ## Verified Non-Issues
 
 - No secrets in the repo: `.env`/`.env.*` are gitignored (except
-  `.env.example`), and `reviews/` (reports, feedback, history) is ignored.
+  `.env.example`), and `reviews/` (reports, feedback, history, cache, index) is ignored.
 - No XSS sinks: the dashboard client renders untrusted text through text
   nodes only, never `innerHTML`.
 - Git runs through `std::process::Command` with argument vectors: no shell,
@@ -94,6 +94,21 @@ request content with a write token, so:
 - **Same-repo PRs**: anyone who can push a branch can change `action.yml` or
   the code `version: source` builds, and so can reach the step's secrets.
   That is already true of push access; the dogfood workflow accepts it.
+
+## Local review work
+
+The result cache contains model IDs and answers, not request state or question
+text. Answers may still be sensitive, and the repo index persists candidate
+imports and short declaration signatures. Keep both directories out of Git
+and restrict access like other review artifacts. `--no-cache` bypasses answer
+reads and writes; `MOMUS_CACHE_DIR` and `MOMUS_INDEX_DIR` relocate the stores.
+
+The CI action caches only work under `RUNNER_TEMP/momus-work`, outside the
+reviewed checkout, so tracked files in a PR cannot prepopulate the cache.
+Restore keys use the base branch; each run saves a unique key. GitHub's cache
+scope still applies: caches created by a PR belong to its merge ref and cannot
+warm the default branch or sibling PRs. A trusted base-branch scan can seed
+that branch's cache. Raw review reports are never part of the work cache.
 
 ## Residual Risks
 

@@ -44,8 +44,9 @@ pub fn posted_fingerprints<'a>(bodies: impl IntoIterator<Item = &'a str>) -> Has
         .collect()
 }
 
-static TOPIC_MARKER: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"<!-- momus:topic=([A-Za-z]+/[A-Za-z0-9_]+) -->").expect("valid marker regex"));
+static TOPIC_MARKER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"<!-- momus:topic=([A-Za-z]+/[A-Za-z0-9_]+) -->").expect("valid marker regex")
+});
 
 /// A bot comment within this many lines, on the same file with the same
 /// dimension and mechanism, means the finding is probably already posted even
@@ -83,7 +84,11 @@ pub fn posted_topics<'a>(
         .into_iter()
         .filter_map(|(path, line, body)| {
             let caps = TOPIC_MARKER.captures(body)?;
-            Some(PostedTopic { path: path.to_string(), line: line?, topic: caps[1].to_string() })
+            Some(PostedTopic {
+                path: path.to_string(),
+                line: line?,
+                topic: caps[1].to_string(),
+            })
         })
         .collect()
 }
@@ -202,7 +207,9 @@ impl Plan<'_> {
 /// Fix-first order: ranked findings by rank, then the rest by severity.
 fn fix_first(a: &Finding, b: &Finding) -> std::cmp::Ordering {
     let rank = |f: &Finding| f.rank.unwrap_or(usize::MAX);
-    rank(a).cmp(&rank(b)).then(b.severity.total_cmp(&a.severity))
+    rank(a)
+        .cmp(&rank(b))
+        .then(b.severity.total_cmp(&a.severity))
 }
 
 /// Splits `report`'s findings into at most `max_inline` new inline comments
@@ -217,7 +224,11 @@ pub fn plan<'a>(
 ) -> Plan<'a> {
     let commentable: HashMap<&str, BTreeSet<usize>> = files
         .iter()
-        .filter_map(|f| f.patch.as_deref().map(|p| (f.filename.as_str(), commentable_lines(p))))
+        .filter_map(|f| {
+            f.patch
+                .as_deref()
+                .map(|p| (f.filename.as_str(), commentable_lines(p)))
+        })
         .collect();
 
     let mut findings: Vec<&Finding> = report.findings.iter().collect();
@@ -274,7 +285,10 @@ fn dimension_label(dimension: Dimension) -> String {
 fn heading(finding: &Finding) -> String {
     let dimension = dimension_label(finding.dimension);
     let title = finding.title.as_deref().unwrap_or(&dimension);
-    format!("**{title}** ({dimension}, severity {:.1})", finding.severity)
+    format!(
+        "**{title}** ({dimension}, severity {:.1})",
+        finding.severity
+    )
 }
 
 fn redacted(text: &str) -> String {
@@ -314,7 +328,11 @@ pub fn comment_body(finding: &Finding) -> String {
 /// and the findings not posted inline. Starts with `SUMMARY_MARKER`.
 pub fn summary_body(report: &ReviewReport, plan: &Plan, head_sha: &str) -> String {
     let total = report.findings.len();
-    let blocking = report.findings.iter().filter(|f| f.action == Action::RequestChanges).count();
+    let blocking = report
+        .findings
+        .iter()
+        .filter(|f| f.action == Action::RequestChanges)
+        .count();
     let mut out = vec!["### momus review".to_string(), String::new()];
 
     if total == 0 && report.screened_files == 0 && report.skipped.is_empty() {
@@ -337,7 +355,12 @@ pub fn summary_body(report: &ReviewReport, plan: &Plan, head_sha: &str) -> Strin
         ));
         out.push(format!(
             "findings on {} of {} screened file{}",
-            report.findings.iter().map(|f| f.file.as_str()).collect::<BTreeSet<_>>().len(),
+            report
+                .findings
+                .iter()
+                .map(|f| f.file.as_str())
+                .collect::<BTreeSet<_>>()
+                .len(),
             report.screened_files,
             if report.screened_files == 1 { "" } else { "s" }
         ));
@@ -357,7 +380,10 @@ pub fn summary_body(report: &ReviewReport, plan: &Plan, head_sha: &str) -> Strin
             ));
         }
         if plan.summary_only.len() > SUMMARY_LIST_MAX {
-            out.push(format!("- … and {} more", plan.summary_only.len() - SUMMARY_LIST_MAX));
+            out.push(format!(
+                "- … and {} more",
+                plan.summary_only.len() - SUMMARY_LIST_MAX
+            ));
         }
         out.push(String::new());
         out.push("</details>".to_string());
@@ -369,14 +395,26 @@ pub fn summary_body(report: &ReviewReport, plan: &Plan, head_sha: &str) -> Strin
             "<details><summary>{} request{} failed and {} skipped (not reviewed)</summary>",
             report.skipped.len(),
             if report.skipped.len() == 1 { "" } else { "s" },
-            if report.skipped.len() == 1 { "was" } else { "were" }
+            if report.skipped.len() == 1 {
+                "was"
+            } else {
+                "were"
+            }
         ));
         out.push(String::new());
         for skip in report.skipped.iter().take(SUMMARY_LIST_MAX) {
-            out.push(format!("- `{}` · {}: {}", skip.file, skip.stage.key(), skip.reason));
+            out.push(format!(
+                "- `{}` · {}: {}",
+                skip.file,
+                skip.stage.key(),
+                skip.reason
+            ));
         }
         if report.skipped.len() > SUMMARY_LIST_MAX {
-            out.push(format!("- … and {} more", report.skipped.len() - SUMMARY_LIST_MAX));
+            out.push(format!(
+                "- … and {} more",
+                report.skipped.len() - SUMMARY_LIST_MAX
+            ));
         }
         out.push(String::new());
         out.push("</details>".to_string());
@@ -390,8 +428,11 @@ pub fn summary_body(report: &ReviewReport, plan: &Plan, head_sha: &str) -> Strin
         ));
     }
     if !report.redactions.is_empty() {
-        let rules: Vec<String> =
-            report.redactions.iter().map(|(rule, n)| format!("{rule} ×{n}")).collect();
+        let rules: Vec<String> = report
+            .redactions
+            .iter()
+            .map(|(rule, n)| format!("{rule} ×{n}"))
+            .collect();
         footer.push(format!("redacted before sending: {}", rules.join(", ")));
     }
     let short_sha: String = head_sha.chars().take(7).collect();
@@ -421,7 +462,10 @@ mod tests {
     }
 
     fn pr_file(filename: &str, patch: &str) -> PrFile {
-        PrFile { filename: filename.into(), patch: Some(patch.into()) }
+        PrFile {
+            filename: filename.into(),
+            patch: Some(patch.into()),
+        }
     }
 
     #[test]
@@ -436,7 +480,9 @@ mod tests {
     fn deleted_file_and_no_newline_marker_have_no_extra_lines() {
         assert!(commentable_lines("@@ -1,2 +0,0 @@\n-a\n-b").is_empty());
         let lines: Vec<usize> =
-            commentable_lines("@@ -1 +1 @@\n-a\n+b\n\\ No newline at end of file").into_iter().collect();
+            commentable_lines("@@ -1 +1 @@\n-a\n+b\n\\ No newline at end of file")
+                .into_iter()
+                .collect();
         assert_eq!(lines, vec![1]);
     }
 
@@ -457,8 +503,18 @@ mod tests {
         assert_eq!(plan.inline[0].1.path, "src/a.rs");
         assert_eq!(plan.inline[0].1.line, 11);
         assert_eq!(plan.inline[0].1.side, "RIGHT");
-        let reasons: Vec<_> = plan.summary_only.iter().map(|(f, r)| (f.line, *r)).collect();
-        assert_eq!(reasons, vec![(90, SummaryReason::OutsideDiff), (1, SummaryReason::OutsideDiff)]);
+        let reasons: Vec<_> = plan
+            .summary_only
+            .iter()
+            .map(|(f, r)| (f.line, *r))
+            .collect();
+        assert_eq!(
+            reasons,
+            vec![
+                (90, SummaryReason::OutsideDiff),
+                (1, SummaryReason::OutsideDiff)
+            ]
+        );
     }
 
     #[test]
@@ -485,15 +541,25 @@ mod tests {
 
     #[test]
     fn a_posted_topic_nearby_moves_a_changed_fingerprint_to_the_summary() {
-        let at = |line, mechanism: &str, fp: &str| Finding { mechanism: mechanism.into(), ..finding("src/a.rs", line, 2.0, fp) };
+        let at = |line, mechanism: &str, fp: &str| Finding {
+            mechanism: mechanism.into(),
+            ..finding("src/a.rs", line, 2.0, fp)
+        };
         let report = ReviewReport {
-            findings: vec![at(12, "boundary", "new1"), at(40, "boundary", "new2"), at(12, "nullDeref", "new3")],
+            findings: vec![
+                at(12, "boundary", "new1"),
+                at(40, "boundary", "new2"),
+                at(12, "nullDeref", "new3"),
+            ],
             ..Default::default()
         };
         let files = [pr_file("src/a.rs", "@@ -0,0 +1,50 @@\n+x")];
         let body = comment_body(&at(10, "boundary", "old"));
         let posted = Posted {
-            topics: posted_topics([("src/a.rs", Some(10), body.as_str()), ("src/b.rs", Some(12), body.as_str())]),
+            topics: posted_topics([
+                ("src/a.rs", Some(10), body.as_str()),
+                ("src/b.rs", Some(12), body.as_str()),
+            ]),
             ..Default::default()
         };
         assert_eq!(posted.topics.len(), 2);
@@ -502,7 +568,10 @@ mod tests {
         // again, but listed, since it could be a second defect. 40 is too far,
         // and nullDeref is another concern: both are new (outside this
         // one-line diff, so summary too, but not as NearPosted).
-        assert_eq!(plan.already_posted, 0, "a topic match never silently drops a finding");
+        assert_eq!(
+            plan.already_posted, 0,
+            "a topic match never silently drops a finding"
+        );
         let near: Vec<(usize, &str)> = plan
             .summary_only
             .iter()
@@ -510,19 +579,35 @@ mod tests {
             .map(|(f, _)| (f.line, f.mechanism.as_str()))
             .collect();
         assert_eq!(near, [(12, "boundary")]);
-        assert_eq!(plan.inline.len() + plan.summary_only.len(), 3, "all three findings are kept");
+        assert_eq!(
+            plan.inline.len() + plan.summary_only.len(),
+            3,
+            "all three findings are kept"
+        );
     }
 
     #[test]
     fn a_comment_without_a_line_or_marker_records_no_topic() {
-        let body = comment_body(&Finding { mechanism: "boundary".into(), ..finding("src/a.rs", 1, 2.0, "f") });
-        assert!(posted_topics([("src/a.rs", None, body.as_str()), ("src/a.rs", Some(3), "plain text")]).is_empty());
+        let body = comment_body(&Finding {
+            mechanism: "boundary".into(),
+            ..finding("src/a.rs", 1, 2.0, "f")
+        });
+        assert!(
+            posted_topics([
+                ("src/a.rs", None, body.as_str()),
+                ("src/a.rs", Some(3), "plain text")
+            ])
+            .is_empty()
+        );
     }
 
     #[test]
     fn already_posted_fingerprints_are_skipped() {
         let report = ReviewReport {
-            findings: vec![finding("src/a.rs", 1, 2.0, "0123abcd"), finding("src/a.rs", 2, 2.0, "ffff")],
+            findings: vec![
+                finding("src/a.rs", 1, 2.0, "0123abcd"),
+                finding("src/a.rs", 2, 2.0, "ffff"),
+            ],
             ..Default::default()
         };
         let files = [pr_file("src/a.rs", "@@ -0,0 +1,2 @@\n+a\n+b")];
@@ -530,7 +615,10 @@ mod tests {
         let posted = posted_fingerprints(bodies);
         assert_eq!(posted, HashSet::from(["0123abcd".to_string()]));
 
-        let posted = Posted { fingerprints: posted, ..Default::default() };
+        let posted = Posted {
+            fingerprints: posted,
+            ..Default::default()
+        };
         let plan = plan(&report, &files, &posted, 10);
         assert_eq!(plan.already_posted, 1);
         assert_eq!(plan.inline.len(), 1);
@@ -572,7 +660,11 @@ mod tests {
 
         // No title: the dimension label heads the comment; no fingerprint or
         // mechanism, no markers.
-        let bare = Finding { dimension: Dimension::TestGap, severity: 1.0, ..Default::default() };
+        let bare = Finding {
+            dimension: Dimension::TestGap,
+            severity: 1.0,
+            ..Default::default()
+        };
         assert_eq!(comment_body(&bare), "**Test gap** (Test gap, severity 1.0)");
     }
 
@@ -589,9 +681,13 @@ mod tests {
 
         let mut leaky = finding;
         leaky.title = Some("Hardcoded AKIAIOSFODNN7EXAMPLE".into());
-        let report = ReviewReport { findings: vec![leaky], ..Default::default() };
+        let report = ReviewReport {
+            findings: vec![leaky],
+            ..Default::default()
+        };
         let mut plan = Plan::default();
-        plan.summary_only.push((&report.findings[0], SummaryReason::OutsideDiff));
+        plan.summary_only
+            .push((&report.findings[0], SummaryReason::OutsideDiff));
         let summary = summary_body(&report, &plan, "");
         assert!(!summary.contains("AKIAIOSFODNN7EXAMPLE"), "{summary}");
     }
@@ -604,7 +700,12 @@ mod tests {
             findings: vec![blocking, finding("src/b.rs", 7, 1.0, "bbbb")],
             p_revert: 0.123,
             screened_files: 5,
-            usage: crate::domain::report::UsageSummary { calls: 12, input_tokens: 0, output_tokens: 0 },
+            usage: crate::domain::report::UsageSummary {
+                calls: 12,
+                input_tokens: 0,
+                output_tokens: 0,
+                ..Default::default()
+            },
             redactions: [("aws-access-key".to_string(), 1)].into(),
             ..Default::default()
         };
@@ -613,18 +714,41 @@ mod tests {
         let summary = summary_body(&report, &plan, "0123456789abcdef");
 
         assert!(summary.starts_with(SUMMARY_MARKER), "{summary}");
-        assert!(summary.contains("**2 findings** · 1 blocking · P(revert) 0.12"), "{summary}");
-        assert!(summary.contains("1 posted inline · 1 in this summary"), "{summary}");
-        assert!(summary.contains("findings on 2 of 5 screened files"), "{summary}");
-        assert!(summary.contains("- **Issue at 7** (Security, severity 1.0) `src/b.rs:7` · outside the diff"));
-        assert!(summary.contains("Jev calls: 12 · redacted before sending: aws-access-key ×1 · head 0123456"));
-        assert!(!summary.contains("tokens:"), "no token totals when the server reports none");
+        assert!(
+            summary.contains("**2 findings** · 1 blocking · P(revert) 0.12"),
+            "{summary}"
+        );
+        assert!(
+            summary.contains("1 posted inline · 1 in this summary"),
+            "{summary}"
+        );
+        assert!(
+            summary.contains("findings on 2 of 5 screened files"),
+            "{summary}"
+        );
+        assert!(
+            summary.contains(
+                "- **Issue at 7** (Security, severity 1.0) `src/b.rs:7` · outside the diff"
+            )
+        );
+        assert!(
+            summary.contains(
+                "Jev calls: 12 · redacted before sending: aws-access-key ×1 · head 0123456"
+            )
+        );
+        assert!(
+            !summary.contains("tokens:"),
+            "no token totals when the server reports none"
+        );
     }
 
     #[test]
     fn nothing_to_review_says_so() {
         let summary = summary_body(&ReviewReport::default(), &Plan::default(), "abc");
-        assert!(summary.contains("No source files to review in this pull request."), "{summary}");
+        assert!(
+            summary.contains("No source files to review in this pull request."),
+            "{summary}"
+        );
         assert!(!summary.contains("No findings."));
     }
 
@@ -641,13 +765,22 @@ mod tests {
             ..Default::default()
         };
         let summary = summary_body(&report, &Plan::default(), "");
-        assert!(summary.contains("1 request failed and was skipped (not reviewed)"), "{summary}");
-        assert!(summary.contains("- `app.ts` · screen: system_one failed (400 Bad Request)"), "{summary}");
+        assert!(
+            summary.contains("1 request failed and was skipped (not reviewed)"),
+            "{summary}"
+        );
+        assert!(
+            summary.contains("- `app.ts` · screen: system_one failed (400 Bad Request)"),
+            "{summary}"
+        );
     }
 
     #[test]
     fn empty_report_summary() {
-        let report = ReviewReport { screened_files: 3, ..Default::default() };
+        let report = ReviewReport {
+            screened_files: 3,
+            ..Default::default()
+        };
         let summary = summary_body(&report, &Plan::default(), "abc");
         assert!(summary.contains("No findings."));
         assert!(!summary.contains("<details>"));

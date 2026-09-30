@@ -155,10 +155,26 @@ runs:
         echo "$root/bin" >> "$GITHUB_PATH"
         "$root/bin/momus" --version
 
+    # Restore by target branch, then save a unique run key even when the
+    # blocking-findings gate fails. Only answers/index metadata are cached.
+    - name: Restore review work
+      id: work-cache
+      if: steps.gate.outputs.skip != 'true'
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: |
+          ${{ runner.temp }}/momus-work/cache
+          ${{ runner.temp }}/momus-work/index
+        key: momus-work-v1-${{ runner.os }}-${{ github.event.pull_request.base.ref }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          momus-work-v1-${{ runner.os }}-${{ github.event.pull_request.base.ref }}-
+
     - id: review
       if: steps.gate.outputs.skip != 'true'
       shell: bash
       env:
+        MOMUS_CACHE_DIR: ${{ runner.temp }}/momus-work/cache
+        MOMUS_INDEX_DIR: ${{ runner.temp }}/momus-work/index
         TYPESAFE_API_KEY: ${{ inputs.api-key }}
         TYPESAFE_BASE_URL: ${{ inputs.base-url }}
         TYPESAFE_DEFAULT_MODEL: ${{ inputs.model }}
@@ -216,3 +232,12 @@ runs:
         path: ${{ runner.temp }}/momus/report.sanitized.json
         if-no-files-found: ignore
         retention-days: 7
+
+    - name: Save review work
+      if: always() && steps.gate.outputs.skip != 'true' && steps.review.outcome != 'skipped'
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: |
+          ${{ runner.temp }}/momus-work/cache
+          ${{ runner.temp }}/momus-work/index
+        key: ${{ steps.work-cache.outputs.cache-primary-key }}

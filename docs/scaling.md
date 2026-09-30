@@ -25,7 +25,7 @@ the run.
   screen had been sent; #34 added failure isolation — failed units are
   skipped and recorded, with a circuit breaker (`review/workflow.rs`).
 - Everything runs in one process at a fixed concurrency (3, or
-  `MOMUS_CONCURRENCY`), with no caching: a re-scan resends every request.
+  `MOMUS_CONCURRENCY`), with a local content-addressed answer cache: unchanged requests reuse results.
 - Each Jev `system_one` call is stateless, so context cannot be "stored" in
   the model between calls; it has to be rebuilt, compactly, per request.
 
@@ -59,14 +59,28 @@ key = sha256(base_url, model, questions JSON, redacted state JSON)
 
 The key covers the policy (the question text), the code actually sent (after
 redaction, so the setting is part of the key), and the model. Results live in
-a local cache (`reviews/cache/`; SQLite or one file per key). It stores keys
-and answers only, never code, so it is not sensitive the way the report is.
+a local cache (`reviews/cache/`; SQLite or one file per key). It stores model IDs and answers only, never request code or question text.
+Answers may still contain sensitive data; keep the directory local and out of Git.
+`MOMUS_CACHE_DIR` overrides the directory; `--no-cache` bypasses reads and writes
+in both modes. `usage.cache.hits` and `usage.cache.misses` accompany call/token totals; cached answers
+add no calls or token usage. Corrupt entries and failed writes are misses,
+and failures or malformed answers are never stored.
+
+The model reported by a live response determines the stored key. Mutable aliases
+such as `jev-latest` resolve anew from live responses each run (initial concurrent
+requests may all miss); the alias map is never trusted from disk. Set
+`TYPESAFE_DEFAULT_MODEL` to a versioned ID for a fully cached warm run. A model
+change observed during a run invalidates subsequent alias lookups.
 
 - A re-scan re-sends only units whose inputs changed; a large repo costs
   about its diff to re-review.
 - The cache doubles as a checkpoint: an interrupted scan resumes.
-- In CI, `actions/cache` keyed on the base branch warms a PR's run from
-  `main`'s scan.
+- In CI, the action restores the most recent cache for the base branch and
+  saves a unique run key, including after a blocking-findings failure. A scan
+  job can seed the same `momus-work-v1-<OS>-<branch>-` prefix. PR caches are
+  scoped by GitHub: sibling PRs cannot read each other's caches. The action stores work under
+  `RUNNER_TEMP/momus-work/{cache,index}`, outside the reviewed checkout; raw
+  reports are excluded.
 - Diff mode and scan mode keep their own question sets but share the unit,
   budget, and cache machinery.
 
