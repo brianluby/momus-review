@@ -258,9 +258,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/v" > "$RUNNER_TEMP/tag-refs.json"
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases" > "$RUNNER_TEMP/published-releases.json"
           python3 scripts/release-policy.py version --tag "$GITHUB_REF_NAME" \
-            --refs "$RUNNER_TEMP/tag-refs.json" > "$RUNNER_TEMP/version-policy.json"
+            --releases "$RUNNER_TEMP/published-releases.json" > "$RUNNER_TEMP/version-policy.json"
 
       - name: Create the draft release with the explicit asset set
         env:
@@ -313,9 +313,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/v" > "$RUNNER_TEMP/tag-refs.json"
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases" > "$RUNNER_TEMP/published-releases.json"
           policy=$(python3 scripts/release-policy.py version --tag "$GITHUB_REF_NAME" \
-            --refs "$RUNNER_TEMP/tag-refs.json")
+            --releases "$RUNNER_TEMP/published-releases.json")
           if [ "$(jq -r .advance_major <<<"$policy")" != true ]; then
             echo "backport or prerelease: leaving the major tag unchanged"
             exit 0

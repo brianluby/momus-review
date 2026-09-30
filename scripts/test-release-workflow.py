@@ -39,8 +39,10 @@ if args[0]=='api':
             print(json.dumps({'draft':False,'immutable':os.environ.get('PUBLISHED_MUTABLE')!='1','assets':[{'name':n} for n in names]}))
         elif os.environ.get('EXISTS'): print('{}')
         else: print('HTTP '+os.environ.get('LOOKUP_ERROR','404'),file=sys.stderr); sys.exit(1)
-    elif '/matching-refs/' in endpoint:
-        print(json.dumps([{'ref':'refs/tags/'+t} for t in json.loads(os.environ['TAGS'])]))
+    elif endpoint.endswith('/releases'):
+        releases=[{'tag_name':t,'draft':False,'prerelease':False} for t in json.loads(os.environ['TAGS'])]
+        if os.environ.get('DRAFT_TAG'): releases.append({'tag_name':os.environ['DRAFT_TAG'],'draft':True,'prerelease':False})
+        print(json.dumps([releases]))
     elif '/git/ref/tags/' in endpoint: print('{}')
     elif '/git/refs/' in endpoint: print('{}')
     else: sys.exit(9)
@@ -126,15 +128,21 @@ class ReleaseTests(unittest.TestCase):
                     self.assertFalse(self.moved()); create=next(a for a in self.calls() if a[:2]==['release','create'])
                     self.assertIn('--latest=false',create); self.assertEqual('--prerelease' in create,'-rc' in tag)
     def test_numeric_version_order_and_other_major_latest(self):
-        refs=[{'ref':'refs/tags/v0.9.0'},{'ref':'refs/tags/v0.10.0'},{'ref':'refs/tags/v1.0.0'}]
+        refs=[{'tag_name':v,'draft':False,'prerelease':False} for v in ['v0.9.0','v0.10.0','v1.0.0']]
         self.assertFalse(policy.version('v0.9.0',refs)['advance_major'])
         self.assertTrue(policy.version('v0.10.0',refs)['advance_major'])
         self.assertFalse(policy.version('v0.10.0',refs)['latest'])
+    def test_draft_and_unpublished_future_tags_cannot_hold_back_stable_release(self):
+        # Raw future git tags are absent from this API, and drafts are ignored.
+        name,run=self.execute(TAGS=json.dumps(['v0.2.0']),DRAFT_TAG='v0.4.0')
+        self.assertIsNone(name,run.stderr); self.assertTrue(self.moved())
+        create=next(a for a in self.calls() if a[:2]==['release','create'])
+        self.assertIn('--latest=true',create)
     def test_invalid_version_and_nonregular_inventory_rejected(self):
         with self.assertRaises(ValueError): policy.version('v0.3', [])
         refs=self.base/'refs.json'; refs.write_text('[]')
         run=subprocess.run(['python3',str(ROOT/'scripts/release-policy.py'),'version',
-            '--tag','v00.3.0','--refs',str(refs)],capture_output=True,text=True)
+            '--tag','v00.3.0','--releases',str(refs)],capture_output=True,text=True)
         self.assertNotEqual(run.returncode,0); self.assertIn('invalid release tag',run.stderr)
         path=self.base/'dist/release-manifest.json'; path.unlink(); path.symlink_to(self.base/'refs.json')
         name,run=self.execute(); self.assertEqual(name,'Check the asset inventory')
