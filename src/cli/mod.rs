@@ -83,6 +83,10 @@ pub enum Command {
         /// Bypass the local result cache (reads and writes)
         #[arg(long)]
         no_cache: bool,
+
+        /// Maximum HTTP attempts; cached units cost no budget (calls=N)
+        #[arg(long, value_parser = crate::review::planner::parse_budget)]
+        budget: Option<u64>,
     },
 
     /// Scan every non-ignored source file under a scope
@@ -121,6 +125,41 @@ pub enum Command {
         /// Bypass the local result cache (reads and writes)
         #[arg(long)]
         no_cache: bool,
+
+        /// Maximum HTTP attempts; cached units cost no budget (calls=N)
+        #[arg(long, value_parser = crate::review::planner::parse_budget)]
+        budget: Option<u64>,
+
+        /// Experimental cheap pre-screen; disabled until the evaluation gate passes
+        #[arg(long)]
+        tiered: bool,
+
+        /// Write a redacted copy for CI artifact exchange
+        #[arg(long)]
+        sanitized_report: Option<PathBuf>,
+
+        /// Emit a partial scan for stable path partition i/N (1-based)
+        #[arg(long)]
+        shard: Option<crate::review::planner::Shard>,
+    },
+
+    /// Combine every partial scan, then refine/rank the combined findings
+    Merge {
+        #[arg(required = true, value_name = "REPORT")]
+        reports: Vec<PathBuf>,
+        /// Checkout scope used by the shards (repeatable)
+        #[arg(long, default_value = ".")]
+        scope: Vec<PathBuf>,
+        #[arg(long)]
+        sarif: Option<PathBuf>,
+        #[arg(long)]
+        fail_on_blocking: bool,
+        #[arg(long)]
+        no_cache: bool,
+        #[arg(long)]
+        no_redact: bool,
+        #[arg(long)]
+        exclude: Vec<String>,
     },
 
     /// Publish the saved report to its pull request (inside GitHub Actions):
@@ -175,16 +214,21 @@ pub async fn run(cli: Cli) -> Result<()> {
             no_refine,
             no_redact,
             no_cache,
+            budget,
         } => {
-            let strategy =
-                ChangesStrategy::new(client(no_redact, no_cache)?, Exclude::new(&exclude)?, base);
+            let strategy = ChangesStrategy::new(
+                client(no_redact, no_cache)?.with_budget(budget),
+                Exclude::new(&exclude)?,
+                base,
+            );
             let sarif = sarif.map(PathBuf::from);
             run_mode(
                 paths,
                 fail_on_blocking,
-                options(follow_ups, no_refine, allow_empty),
+                options(follow_ups, no_refine, allow_empty, false),
                 sarif,
                 strategy,
+                None,
             )
             .await
         }
@@ -197,18 +241,65 @@ pub async fn run(cli: Cli) -> Result<()> {
             no_refine,
             no_redact,
             no_cache,
+            budget,
+            tiered,
+            shard,
+            sanitized_report,
         } => {
-            let strategy =
-                CodebaseStrategy::new(client(no_redact, no_cache)?, Exclude::new(&exclude)?);
+            if shard.is_some() && follow_ups.is_some() {
+                anyhow::bail!(
+                    "--shard cannot use --follow-ups: a per-shard cap changes global selection"
+                );
+            }
+            let strategy = CodebaseStrategy::new(
+                client(no_redact, no_cache)?.with_budget(budget),
+                Exclude::new(&exclude)?,
+            );
             let sarif = sarif.map(PathBuf::from);
             run_mode(
                 paths,
                 fail_on_blocking,
-                options(follow_ups, no_refine, false),
+                ReviewOptions {
+                    shard,
+                    ..options(follow_ups, no_refine, false, tiered)
+                },
                 sarif,
                 strategy,
+                sanitized_report,
             )
             .await
+        }
+        Command::Merge {
+            reports,
+            scope,
+            sarif,
+            fail_on_blocking,
+            no_cache,
+            no_redact,
+            exclude,
+        } => {
+            let started = std::time::Instant::now();
+            let parts = reports
+                .iter()
+                .map(|path| {
+                    let text = std::fs::read_to_string(path)?;
+                    Ok(serde_json::from_str::<ReviewReport>(&text)?)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let scope = scope
+                .iter()
+                .map(std::path::absolute)
+                .collect::<std::io::Result<Vec<_>>>()?;
+            let strategy =
+                CodebaseStrategy::new(client(no_redact, no_cache)?, Exclude::new(&exclude)?);
+            let mut report =
+                crate::review::shard_merge::merge_reports(parts, &scope, strategy, &|s| {
+                    eprintln!("{s}")
+                })
+                .await?;
+            report.wall_time_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+            eprintln!("{}", metrics_summary(&report));
+            persist_report(&report, &scope, sarif.as_ref(), fail_on_blocking)
         }
         Command::GithubReview {
             report,
@@ -267,6 +358,9 @@ async fn github_review(
         }
         StoredReport::Error(e) => anyhow::bail!("{}: {e}", path.display()),
     };
+    if report.shard.is_some() {
+        anyhow::bail!("partial shard reports must be merged before publication");
+    }
     // Before publishing, so a posting failure still leaves the artifact.
     if let Some(path) = &sanitized_report {
         write_sanitized_report(&report, path)?;
@@ -334,7 +428,12 @@ fn client(no_redact: bool, no_cache: bool) -> Result<TypeSafeClient> {
 
 /// Review options from CLI flags plus the saved feedback log. Feedback is
 /// best-effort: an unreadable log is reported and ignored, not fatal.
-fn options(max_follow_ups: Option<usize>, no_refine: bool, allow_empty: bool) -> ReviewOptions {
+fn options(
+    max_follow_ups: Option<usize>,
+    no_refine: bool,
+    allow_empty: bool,
+    tiered: bool,
+) -> ReviewOptions {
     let path = feedback_path();
     let feedback = read_feedback(&path).unwrap_or_else(|e| {
         eprintln!("feedback ignored: {e:#}");
@@ -345,6 +444,8 @@ fn options(max_follow_ups: Option<usize>, no_refine: bool, allow_empty: bool) ->
         refine: !no_refine,
         feedback,
         allow_empty,
+        tiered,
+        shard: None,
     }
 }
 
@@ -381,6 +482,7 @@ async fn run_mode<S: ReviewStrategy>(
     options: ReviewOptions,
     sarif: Option<PathBuf>,
     strategy: S,
+    sanitized_report: Option<PathBuf>,
 ) -> Result<()> {
     let scopes: Vec<std::path::PathBuf> = paths
         .iter()
@@ -409,18 +511,45 @@ async fn run_mode<S: ReviewStrategy>(
         );
     }
 
+    if let Some(path) = sanitized_report {
+        write_sanitized_report(&report, &path)?;
+    }
+    persist_report(&report, &scopes, sarif.as_ref(), fail_on_blocking)
+}
+
+fn persist_report(
+    report: &ReviewReport,
+    scopes: &[PathBuf],
+    sarif: Option<&PathBuf>,
+    fail_on_blocking: bool,
+) -> Result<()> {
+    if report.partial {
+        eprintln!(
+            "partial review: coverage is incomplete; see budget, tier, skipped and shard fields"
+        );
+    }
+    if report.shard.is_some() {
+        let out = report_path();
+        save_report(report, &out)?;
+        eprintln!(
+            "saved partial shard {} (global stages deferred to merge)",
+            out.display()
+        );
+        println!("{}", serde_json::to_string_pretty(report)?);
+        return Ok(());
+    }
     let out = report_path();
-    save_report(&report, &out)?;
+    save_report(report, &out)?;
     eprintln!("saved {}", out.display());
 
-    if let Some(path) = &sarif {
-        save_json(&sarif::to_sarif(&report), path)?;
+    if let Some(path) = sarif {
+        save_json(&sarif::to_sarif(report), path)?;
         eprintln!("saved {}", path.display());
     }
 
     // History is best-effort: an unborn repo or an I/O failure must not
     // discard an already-produced report.
-    match git::head_sha(&scopes[0]).and_then(|sha| save_history(&report, &sha)) {
+    match git::head_sha(&scopes[0]).and_then(|sha| save_history(report, &sha)) {
         Ok(path) => eprintln!("saved {}", path.display()),
         Err(e) => eprintln!("history not saved: {e:#}"),
     }

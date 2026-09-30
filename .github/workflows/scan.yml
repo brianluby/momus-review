@@ -1,0 +1,162 @@
+# One immutable inventory, parallel screens/locates, one global merge.
+name: momus sharded scan
+on:
+  workflow_dispatch:
+    inputs:
+      shards:
+        type: number
+        default: 4
+      paths:
+        type: string
+        default: "."
+      model:
+        type: string
+        default: jev-1.13.0
+  workflow_call:
+    inputs:
+      shards:
+        type: number
+        default: 4
+      paths:
+        type: string
+        default: "."
+      model:
+        type: string
+        default: jev-1.13.0
+    secrets:
+      TYPESAFE_API_KEY:
+        required: false
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      enabled: ${{ steps.plan.outputs.enabled }}
+      sha: ${{ steps.plan.outputs.sha }}
+    steps:
+      - id: plan
+        env:
+          COUNT: ${{ inputs.shards }}
+          API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          python3 - <<'PYCODE'
+          import json, os
+          n = int(os.environ['COUNT'])
+          if not 1 <= n <= 32:
+              raise SystemExit('shards must be 1..32')
+          enabled = bool(os.environ['API_KEY']) and os.environ['PR_REPO'] in ('', os.environ['GITHUB_REPOSITORY'])
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write('matrix=' + json.dumps({'index': list(range(1, n + 1))}) + '\n')
+              out.write('enabled=' + str(enabled).lower() + '\n')
+              out.write('sha=' + os.environ['HEAD_SHA'] + '\n')
+          if not enabled:
+              print('::notice::Scan skipped: missing key or fork pull request')
+          PYCODE
+  build:
+    needs: plan
+    if: needs.plan.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          persist-credentials: false
+      - run: cargo build --release --locked --bin momus
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: momus-scan-binary
+          path: target/release/momus
+          retention-days: 1
+  scan:
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+      TYPESAFE_DEFAULT_MODEL: ${{ inputs.model }}
+      MOMUS_CONCURRENCY: 4
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: momus-scan-binary
+          path: ${{ runner.temp }}/momus-bin
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ${{ runner.temp }}/momus-cache
+            ${{ runner.temp }}/momus-index
+          key: momus-scan-${{ github.repository_id }}-${{ github.ref_name }}-${{ matrix.index }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            momus-scan-${{ github.repository_id }}-${{ github.ref_name }}-${{ matrix.index }}-
+      - env:
+          SCOPES: ${{ inputs.paths }}
+          SHARD: ${{ matrix.index }}/${{ inputs.shards }}
+          PARTIAL: ${{ runner.temp }}/shard-${{ matrix.index }}.json
+        run: |
+          export MOMUS_CACHE_DIR="$RUNNER_TEMP/momus-cache" MOMUS_INDEX_DIR="$RUNNER_TEMP/momus-index" MOMUS_REPORT="$RUNNER_TEMP/raw-partial.json"
+          chmod +x "$RUNNER_TEMP/momus-bin/momus"
+          read -r -a paths <<< "$SCOPES"
+          "$RUNNER_TEMP/momus-bin/momus" scan "${paths[@]}" --shard "$SHARD" --sanitized-report "$PARTIAL" > /dev/null
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: momus-shard-${{ matrix.index }}
+          path: ${{ runner.temp }}/shard-${{ matrix.index }}.json
+          if-no-files-found: error
+          retention-days: 1
+  merge:
+    needs: [plan, scan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+      TYPESAFE_DEFAULT_MODEL: ${{ inputs.model }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: momus-scan-binary
+          path: ${{ runner.temp }}/momus-bin
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: momus-shard-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/partials
+      - env:
+          SCOPES: ${{ inputs.paths }}
+        run: |
+          chmod +x "$RUNNER_TEMP/momus-bin/momus"
+          read -r -a paths <<< "$SCOPES"
+          export MOMUS_REPORT="$RUNNER_TEMP/merged.json"
+          scopes=()
+          for path in "${paths[@]}"; do scopes+=(--scope "$path"); done
+          "$RUNNER_TEMP/momus-bin/momus" merge "$RUNNER_TEMP/partials/"*.json "${scopes[@]}" --sarif "$RUNNER_TEMP/merged.sarif" > /dev/null
+      - if: github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MOMUS_REPORT: ${{ runner.temp }}/merged.json
+        run: '"$RUNNER_TEMP/momus-bin/momus" github-review --sanitized-report "$RUNNER_TEMP/merged.sanitized.json"'
+      # The merged input/evidence is already sanitized. Never upload raw shards.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: momus-merged-scan
+          path: ${{ runner.temp }}/merged.sarif
+          retention-days: 7

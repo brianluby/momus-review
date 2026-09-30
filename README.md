@@ -77,6 +77,27 @@ human, and ranks the top findings pairwise. Results land in a quiet local
 dashboard and machine-readable JSON; 👍/👎/Hide in the dashboard tunes
 per-dimension thresholds and suppresses findings on the next run.
 
+
+Budgeted and parallel scans use the same cached request units:
+
+```bash
+momus scan . --budget calls=500                 # rerun to resume; cache hits are free
+TYPESAFE_DEFAULT_MODEL=jev-1.13.0 momus scan . --shard 1/4
+# Repeat 2/4, 3/4, 4/4 in the same immutable checkout, with separate MOMUS_REPORT paths.
+TYPESAFE_DEFAULT_MODEL=jev-1.13.0 momus merge shard-*.json --scope . --sarif merged.sarif
+```
+
+Shard reports defer global refinement, ranking, confidence, history, SARIF and PR
+publication to the merge. Merge requires all shards and matching source/test bytes,
+configuration and pinned model/server. `--follow-ups` cannot be combined with
+`--shard`. The reusable `.github/workflows/scan.yml` runs a matrix and one merge
+job; [scaling.md](docs/scaling.md) describes limits and secret-safe artifacts.
+`--tiered` is an experimental opt-in pre-screen, with dismissals marked as partial
+coverage. It stays off by default until the Juice Shop evaluation gate passes.
+Completed runs emit one `momus_metrics` line to stderr using report counters;
+stdout remains report JSON. A budget-limited report explicitly records deferred
+requests and `partial: true`; rerun against the same checkout to resume.
+
 ## Configuration
 
 Read from the environment (or `.env`):
@@ -87,7 +108,7 @@ Read from the environment (or `.env`):
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | any server speaking `POST /v1/systemone` |
 | `TYPESAFE_DEFAULT_MODEL` | `jev-latest` | model id sent with each request |
 | `TYPESAFE_TIMEOUT_SECS` | `60` | per-request timeout |
-| `MOMUS_CONCURRENCY` | `3` | parallel `system_one` requests |
+| `MOMUS_CONCURRENCY` | `16` | maximum parallel HTTP requests; adaptive gate starts at 3, ramps after healthy responses, and backs off on 429/529 |
 | `MOMUS_REDACT` | `on` | redact secrets before sending (`off` or `--no-redact` disables) |
 | `MOMUS_CACHE_DIR` | `reviews/cache` | content-addressed answers; `--no-cache` bypasses reads and writes |
 | `MOMUS_INDEX_DIR` | `reviews/index` | blob-keyed context metadata for the pre-pass |

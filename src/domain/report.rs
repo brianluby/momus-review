@@ -289,6 +289,31 @@ pub struct IndexStats {
     pub fallbacks: usize,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct BudgetSummary {
+    pub limit: Option<u64>,
+    pub reserved: u64,
+    pub deferred: u64,
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TierSummary {
+    pub screened: usize,
+    pub dismissed: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShardMetadata {
+    pub index: usize,
+    pub count: usize,
+    pub inventory_key: String,
+    pub expected_paths: Vec<String>,
+    pub refine: bool,
+    pub model: String,
+}
+
 /// The full review report. `#[serde(default)]` keeps reads deliberately
 /// tolerant: a report saved by an older version stays viewable.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -308,6 +333,11 @@ pub struct ReviewReport {
     pub workflow: WorkflowCounts,
     pub usage: UsageSummary,
     pub index: IndexStats,
+    pub budget: BudgetSummary,
+    /// Deferred/failed work means absence of findings is not a complete review.
+    pub partial: bool,
+    pub tier: TierSummary,
+    pub shard: Option<ShardMetadata>,
     /// Distinct secret values redacted from outgoing requests, per rule
     /// (`domain::redact`); empty when nothing matched or redaction was off.
     pub redactions: BTreeMap<String, usize>,

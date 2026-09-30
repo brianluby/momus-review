@@ -181,6 +181,8 @@ pub struct TypeSafeClient {
     model: String,
     usage: Arc<UsageMeter>,
     cache: Arc<ResultCache>,
+    limiter: Arc<crate::review::limiter::AdaptiveLimiter>,
+    budget: Arc<crate::review::budget::CallBudget>,
     cache_hits: Arc<AtomicU64>,
     cache_misses: Arc<AtomicU64>,
     redact: bool,
@@ -194,7 +196,11 @@ impl TypeSafeClient {
     pub fn from_env() -> Result<Self> {
         Ok(
             Self::from_config(ClientConfig::from_lookup(|name| std::env::var(name).ok())?)?
-                .with_cache(ResultCache::from_env()),
+                .with_cache(ResultCache::from_env())
+                .with_concurrency_cap(match std::env::var("MOMUS_CONCURRENCY") {
+                    Ok(s) if !s.trim().is_empty() => parse_positive("MOMUS_CONCURRENCY", &s)?,
+                    _ => crate::domain::policy::CONCURRENCY,
+                }),
         )
     }
 
@@ -214,11 +220,35 @@ impl TypeSafeClient {
             model,
             usage: Arc::new(UsageMeter::default()),
             cache: Arc::new(ResultCache::disabled()),
+            limiter: crate::review::limiter::AdaptiveLimiter::new(
+                crate::domain::policy::CONCURRENCY,
+            ),
+            budget: Arc::new(crate::review::budget::CallBudget::new(None)),
             cache_hits: Arc::new(AtomicU64::new(0)),
             cache_misses: Arc::new(AtomicU64::new(0)),
             redact,
             redactions: Arc::new(Mutex::new(RedactionLog::default())),
         })
+    }
+
+    pub fn with_budget(mut self, limit: Option<u64>) -> Self {
+        self.budget = Arc::new(crate::review::budget::CallBudget::new(limit));
+        self
+    }
+    pub fn budget_summary(&self) -> crate::domain::report::BudgetSummary {
+        self.budget.summary()
+    }
+    pub fn model_identity(&self) -> String {
+        format!(
+            "{}:{}",
+            self.base_url,
+            self.cache.resolve_model(&self.model)
+        )
+    }
+
+    pub fn with_concurrency_cap(mut self, cap: usize) -> Self {
+        self.limiter = crate::review::limiter::AdaptiveLimiter::new(cap);
+        self
     }
 
     /// Uses a local cache. Clones share model resolutions and counters.
@@ -298,6 +328,8 @@ impl TypeSafeClient {
         let body = json!({ "state": state, "questions": questions, "model": self.model });
 
         for attempt in 0..=MAX_RETRIES {
+            let permit = self.limiter.acquire().await;
+            self.budget.reserve()?;
             let mut request = self.http.post(&url).json(&body);
             if let Some(key) = &self.api_key {
                 request = request.bearer_auth(key);
@@ -305,6 +337,7 @@ impl TypeSafeClient {
             let resp = match request.send().await {
                 Ok(resp) => resp,
                 Err(e) if is_retryable_transport(&e) && attempt < MAX_RETRIES => {
+                    drop(permit);
                     backoff(attempt).await;
                     continue;
                 }
@@ -314,6 +347,7 @@ impl TypeSafeClient {
             let status = resp.status();
             if status.is_success() {
                 let resp: SystemOneResponse = resp.json().await?;
+                self.limiter.healthy();
                 self.usage.record(resp.usage);
                 if valid_answers(&resp, &questions) {
                     self.cache.record_model(&self.model, &resp.model);
@@ -335,7 +369,18 @@ impl TypeSafeClient {
                 return Ok(resp);
             }
 
+            let retry_after = resp
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok())
+                .map(Duration::from_secs);
             let text = resp.text().await.unwrap_or_default();
+            if matches!(status.as_u16(), 429 | 529) {
+                self.limiter
+                    .throttled(retry_after.unwrap_or(Duration::from_millis(500 * (1 << attempt))));
+            }
+            drop(permit);
             if is_retryable_status(status.as_u16()) && attempt < MAX_RETRIES {
                 backoff(attempt).await;
                 continue;
@@ -747,5 +792,47 @@ mod tests {
         let unknown = keys(&mechanism_criteria("README.md", Dimension::Correctness));
         assert!(unknown.contains(&"condition".to_string()));
         assert!(!unknown.contains(&"unsafeBlock".to_string()));
+    }
+    #[tokio::test]
+    async fn throttled_retries_consume_budget_and_do_not_leak_permits() {
+        use axum::{Json, Router, http::StatusCode, routing::post};
+        let attempts = Arc::new(AtomicU64::new(0));
+        let seen = attempts.clone();
+        let app = Router::new().route(
+            "/v1/systemone",
+            post(move || {
+                let seen = seen.clone();
+                async move {
+                    let n = seen.fetch_add(1, Ordering::Relaxed);
+                    (
+                        if n < 2 {
+                            StatusCode::TOO_MANY_REQUESTS
+                        } else {
+                            StatusCode::OK
+                        },
+                        Json(json!({"model": "stub", "answers": {}})),
+                    )
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = stub_client(&url, true)
+            .with_budget(Some(2))
+            .with_concurrency_cap(1);
+        let err = client.system_one(json!({}), json!({})).await.unwrap_err();
+        assert!(err.is::<crate::review::budget::BudgetExhausted>());
+        assert_eq!(attempts.load(Ordering::Relaxed), 2);
+        assert_eq!(client.budget_summary().reserved, 2);
+        let client = client.with_budget(Some(1));
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            client.system_one(json!({}), json!({})),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(attempts.load(Ordering::Relaxed), 3);
     }
 }

@@ -64,7 +64,10 @@ async fn tolerate<O>(
         match result {
             Ok(value) => kept.push(value),
             Err(error) => {
-                failures += 1;
+                let deferred = error.is::<crate::review::budget::BudgetExhausted>();
+                if !deferred {
+                    failures += 1;
+                }
                 let reason: String = format!("{error:#}")
                     .chars()
                     .take(MAX_SKIP_REASON_CHARS)
@@ -136,6 +139,8 @@ pub struct ReviewOptions {
     /// No files to review is an empty report, not an error (`--allow-empty`):
     /// in CI, a docs- or config-only pull request has nothing to screen.
     pub allow_empty: bool,
+    pub tiered: bool,
+    pub shard: Option<crate::review::planner::Shard>,
 }
 
 impl Default for ReviewOptions {
@@ -145,6 +150,8 @@ impl Default for ReviewOptions {
             refine: true,
             feedback: FeedbackLog::default(),
             allow_empty: false,
+            tiered: false,
+            shard: None,
         }
     }
 }
@@ -162,6 +169,8 @@ pub async fn run_review<S: ReviewStrategy>(
         refine,
         feedback,
         allow_empty,
+        tiered,
+        shard,
     } = options;
     let thresholds = feedback.thresholds();
     let suppressed = feedback.suppressed();
@@ -184,10 +193,24 @@ pub async fn run_review<S: ReviewStrategy>(
     let discovery = strategy.discover(scopes)?;
     strategy.prepass(scopes, &discovery)?;
     let Discovery {
-        files,
+        mut files,
         context_files,
     } = discovery;
-    if files.is_empty() && allow_empty {
+    let shard_metadata = shard.map(|shard| crate::domain::report::ShardMetadata {
+        index: shard.index,
+        count: shard.count,
+        inventory_key: crate::review::planner::inventory_key(&files, &context_files),
+        expected_paths: files.iter().map(|f| f.path().to_string()).collect(),
+        refine,
+        model: strategy.client().model_identity(),
+    });
+    if let Some(shard) = shard {
+        files.retain(|f| shard.contains(f.path()));
+    }
+    if strategy.client().budget_summary().limit.is_some() || tiered {
+        crate::review::planner::prioritize(&mut files, scopes);
+    }
+    if files.is_empty() && (allow_empty || shard.is_some()) {
         log(&format!(
             "No {} files to review under {scope_label}",
             strategy.subject()
@@ -203,6 +226,8 @@ pub async fn run_review<S: ReviewStrategy>(
                 max_follow_ups,
                 max_profiles: MAX_PROFILES,
             },
+            shard: shard_metadata,
+            partial: shard.is_some(),
             context_files: context_files.iter().map(|f| f.path().to_string()).collect(),
             ..Default::default()
         });
@@ -213,6 +238,52 @@ pub async fn run_review<S: ReviewStrategy>(
             strategy.subject(),
             scope_label
         ));
+    }
+
+    let mut tier = crate::domain::report::TierSummary::default();
+    if tiered {
+        let mut retained = Vec::new();
+        for file in files {
+            let Some(state) = file.tier_state() else {
+                retained.push(file);
+                continue;
+            };
+            tier.screened += 1;
+            let answer = strategy.client().system_one(state, json!({ "concern": crate::review::typesafe::noul(
+                json!("Does this file contain any correctness, security, reliability, compatibility, or test-coverage concern worth a detailed review? Inspect all behavior; favor review when uncertain."),
+                json!({"true": "Any plausible concern needing detailed review", "false": "No concern warrants review"})) })).await;
+            match answer.and_then(|a| a.noul("concern")) {
+                Ok(probability) if probability < 0.05 => {
+                    tier.dismissed.push(file.path().to_string())
+                }
+                _ => retained.push(file), // uncertainty/errors always retain full screening
+            }
+        }
+        files = retained;
+    }
+    if files.is_empty() {
+        return Ok(ReviewReport {
+            mode: strategy.mode(),
+            scope: scope_label,
+            tier,
+            shard: shard_metadata.map(|mut meta| {
+                meta.model = strategy.client().model_identity();
+                meta
+            }),
+            usage: strategy.client().usage_summary(),
+            budget: strategy.client().budget_summary(),
+            dimensions: dimension_metadata(),
+            config: ConfigSnapshot {
+                screen_threshold: SCREEN_THRESHOLD,
+                screen_thresholds: thresholds,
+                severity_max: SEVERITY_MAX,
+                max_follow_ups,
+                max_profiles: MAX_PROFILES,
+            },
+            index: strategy.index_stats(),
+            partial: true,
+            ..Default::default()
+        });
     }
 
     log(&format!(
@@ -247,7 +318,7 @@ pub async fn run_review<S: ReviewStrategy>(
     )
     .await
     .map_err(|e| anyhow!("Screening failed: {e:#}"))?;
-    if matrix.is_empty() {
+    if matrix.is_empty() && strategy.client().budget_summary().deferred == 0 {
         let first = skipped.first().map(|s| s.reason.as_str()).unwrap_or("");
         return Err(anyhow!("Screening failed for every file: {first}"));
     }
@@ -275,6 +346,8 @@ pub async fn run_review<S: ReviewStrategy>(
         b.probability
             .partial_cmp(&a.probability)
             .unwrap_or(Ordering::Equal)
+            .then_with(|| a.file.path().cmp(b.file.path()))
+            .then_with(|| a.dimension.key().cmp(b.dimension.key()))
     });
     let threshold_signals = signals.len();
 
@@ -362,11 +435,105 @@ pub async fn run_review<S: ReviewStrategy>(
     findings.retain(|f| !suppressed.contains(&f.fingerprint));
     let suppressed_findings = located_findings - findings.len();
 
+    let files: HashMap<&str, &S::File> = matrix.iter().map(|s| (s.file.path(), &s.file)).collect();
+    let (findings, refine_counts) = if shard.is_none() {
+        finish_findings(&strategy, &files, findings, refine, log, concurrency).await
+    } else {
+        (findings, RefineCounts::default())
+    };
+    let routed_findings = findings.iter().filter(|f| f.owner.is_some()).count();
+
+    let context_drops = matrix
+        .iter()
+        .fold(ContextDrops::default(), |acc, screening| {
+            acc + screening.dropped
+        });
+
+    let matrix_rows: Vec<MatrixRow> = matrix
+        .iter()
+        .map(|s| MatrixRow {
+            file: s.file.path().to_string(),
+            probabilities: s.probabilities.clone(),
+        })
+        .collect();
+    let context_paths = context_files.iter().map(|f| f.path().to_string()).collect();
+
+    let p_revert = if shard.is_some() {
+        0.0
+    } else {
+        merge_confidence::p_revert(&findings, &matrix_rows)
+    };
+
+    Ok(ReviewReport {
+        mode: strategy.mode(),
+        scope: scope_label,
+        dimensions: dimension_metadata(),
+        config: ConfigSnapshot {
+            screen_threshold: SCREEN_THRESHOLD,
+            screen_thresholds: thresholds,
+            severity_max: SEVERITY_MAX,
+            max_follow_ups,
+            max_profiles: MAX_PROFILES,
+        },
+        budget: strategy.client().budget_summary(),
+        shard: shard_metadata.map(|mut meta| {
+            meta.model = strategy.client().model_identity();
+            meta
+        }),
+        partial: shard.is_some()
+            || strategy.client().budget_summary().deferred > 0
+            || !skipped.is_empty()
+            || !tier.dismissed.is_empty(),
+        tier,
+        wall_time_ms: 0,
+        screened_files,
+        context_files: context_paths,
+        matrix: matrix_rows,
+        followed_signals,
+        profiles,
+        workflow: WorkflowCounts {
+            screened_cells: screened_files * DIMENSIONS.len(),
+            threshold_signals,
+            profiled_files,
+            followed_signals,
+            located_findings,
+            routed_findings,
+            suppressed_findings,
+            clustered_findings: refine_counts.clustered,
+            exonerated_findings: refine_counts.exonerated,
+            needs_human_findings: refine_counts.needs_human,
+            dropped_context_chars: context_drops.chars,
+            dropped_context_items: context_drops.items,
+        },
+        usage: strategy.client().usage_summary(),
+        index: strategy.index_stats(),
+        redactions: strategy.client().redaction_summary(),
+        skipped,
+        findings,
+        p_revert,
+    })
+}
+
+/// Whole-review stages are deferred to merge, retaining global top-K semantics.
+pub async fn finish_findings<S: ReviewStrategy>(
+    strategy: &S,
+    files: &HashMap<&str, &S::File>,
+    mut findings: Vec<Finding>,
+    refine: bool,
+    log: &dyn Fn(&str),
+    concurrency: usize,
+) -> (Vec<Finding>, RefineCounts) {
+    // Stable ties make the global caps independent of discovery/shard order.
+    findings.sort_by(|a, b| {
+        a.file
+            .cmp(&b.file)
+            .then(a.line.cmp(&b.line))
+            .then(a.dimension.key().cmp(b.dimension.key()))
+            .then(a.mechanism.cmp(&b.mechanism))
+    });
     // 6. Refine: dedupe, taint, counterfactual, ensemble, pairwise rank.
     let mut refine_counts = RefineCounts::default();
     if refine && !findings.is_empty() {
-        let files: HashMap<&str, &S::File> =
-            matrix.iter().map(|s| (s.file.path(), &s.file)).collect();
         let context = |finding: &Finding| {
             json!({
                 "fileContext": files.get(finding.file.as_str()).map(|f| f.context_around(finding.line)),
@@ -387,7 +554,6 @@ pub async fn run_review<S: ReviewStrategy>(
                 .unwrap_or(Ordering::Equal)
         });
     }
-    let routed_findings = findings.iter().filter(|f| f.owner.is_some()).count();
 
     // 7. Enrich: title/why for every finding (deterministic); fix/test via one
     //    narrow Jev call each, for the first MAX_ENRICH findings in report
@@ -424,61 +590,7 @@ pub async fn run_review<S: ReviewStrategy>(
         }
     }
 
-    let context_drops = matrix
-        .iter()
-        .fold(ContextDrops::default(), |acc, screening| {
-            acc + screening.dropped
-        });
-
-    let matrix_rows: Vec<MatrixRow> = matrix
-        .iter()
-        .map(|s| MatrixRow {
-            file: s.file.path().to_string(),
-            probabilities: s.probabilities.clone(),
-        })
-        .collect();
-    let context_paths = context_files.iter().map(|f| f.path().to_string()).collect();
-
-    let p_revert = merge_confidence::p_revert(&findings, &matrix_rows);
-
-    Ok(ReviewReport {
-        mode: strategy.mode(),
-        scope: scope_label,
-        dimensions: dimension_metadata(),
-        config: ConfigSnapshot {
-            screen_threshold: SCREEN_THRESHOLD,
-            screen_thresholds: thresholds,
-            severity_max: SEVERITY_MAX,
-            max_follow_ups,
-            max_profiles: MAX_PROFILES,
-        },
-        wall_time_ms: 0,
-        screened_files,
-        context_files: context_paths,
-        matrix: matrix_rows,
-        followed_signals,
-        profiles,
-        workflow: WorkflowCounts {
-            screened_cells: screened_files * DIMENSIONS.len(),
-            threshold_signals,
-            profiled_files,
-            followed_signals,
-            located_findings,
-            routed_findings,
-            suppressed_findings,
-            clustered_findings: refine_counts.clustered,
-            exonerated_findings: refine_counts.exonerated,
-            needs_human_findings: refine_counts.needs_human,
-            dropped_context_chars: context_drops.chars,
-            dropped_context_items: context_drops.items,
-        },
-        usage: strategy.client().usage_summary(),
-        index: strategy.index_stats(),
-        redactions: strategy.client().redaction_summary(),
-        skipped,
-        findings,
-        p_revert,
-    })
+    (findings, refine_counts)
 }
 
 fn max_probability<F: crate::review::strategy::FileEntry>(s: &Screening<F>) -> f64 {

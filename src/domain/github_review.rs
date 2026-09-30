@@ -335,6 +335,11 @@ pub fn summary_body(report: &ReviewReport, plan: &Plan, head_sha: &str) -> Strin
         .count();
     let mut out = vec!["### momus review".to_string(), String::new()];
 
+    if report.partial {
+        out.push(format!("**Partial coverage**: {} deferred requests, {} Tier-0 dismissals, {} skipped requests. Rerun to complete uncached work.",
+            report.budget.deferred, report.tier.dismissed.len(), report.skipped.len()));
+        out.push(String::new());
+    }
     if total == 0 && report.screened_files == 0 && report.skipped.is_empty() {
         out.push("No source files to review in this pull request.".to_string());
     } else if total == 0 {

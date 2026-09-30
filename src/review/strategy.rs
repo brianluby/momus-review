@@ -19,6 +19,11 @@ const MAX_CONTEXT_PATCH_CHARS: usize = 6_000;
 /// A file payload discovered by a mode: anything with a repo-relative path.
 pub trait FileEntry: std::fmt::Debug + Clone + serde::Serialize {
     fn path(&self) -> &str;
+    /// Tier 0 never dismisses a unit too large to inspect in full.
+    fn tier_state(&self) -> Option<Value> {
+        None
+    }
+
     /// The file around `line`, as `fileContext` state for refinement
     /// judgments (dedupe, taint, counterfactual, ensemble).
     fn context_around(&self, line: usize) -> Value;
@@ -41,6 +46,15 @@ impl FileEntry for ChangedFile {
 impl FileEntry for SourceFile {
     fn path(&self) -> &str {
         &self.path
+    }
+
+    fn tier_state(&self) -> Option<Value> {
+        let mut budget = crate::review::context::ContextBudget::from_env().ok()?;
+        let content = budget.take(&self.content);
+        if budget.drops.chars > 0 {
+            return None;
+        }
+        Some(json!({ "file": { "path": self.path, "content": content } }))
     }
 
     fn context_around(&self, line: usize) -> Value {
