@@ -348,6 +348,31 @@ fn options(max_follow_ups: Option<usize>, no_refine: bool, allow_empty: bool) ->
     }
 }
 
+/// A stable, grep-friendly line from the report's own counters (#47).
+fn metrics_summary(r: &ReviewReport) -> String {
+    format!(
+        "momus_metrics wall_ms={} files={} signals={} findings={} blocking={} calls={} tokens_in={} tokens_out={} cache_hits={} cache_misses={} dropped_chars={} dropped_items={} skipped={} index_computed={} index_reused={}",
+        r.wall_time_ms,
+        r.screened_files,
+        r.workflow.threshold_signals,
+        r.findings.len(),
+        r.findings
+            .iter()
+            .filter(|f| f.action == Action::RequestChanges)
+            .count(),
+        r.usage.calls,
+        r.usage.input_tokens,
+        r.usage.output_tokens,
+        r.usage.cache.hits,
+        r.usage.cache.misses,
+        r.workflow.dropped_context_chars,
+        r.workflow.dropped_context_items,
+        r.skipped.len(),
+        r.index.computed,
+        r.index.reused
+    )
+}
+
 /// Runs a review, saves the report, prints JSON to stdout, and applies the
 /// CI exit contract. Also writes history (always) and SARIF (when requested).
 async fn run_mode<S: ReviewStrategy>(
@@ -363,7 +388,10 @@ async fn run_mode<S: ReviewStrategy>(
         .collect::<std::io::Result<_>>()?;
     let log = |msg: &str| eprintln!("{msg}");
 
-    let report = run_review(&scopes, &log, options, strategy).await?;
+    let started = std::time::Instant::now();
+    let mut report = run_review(&scopes, &log, options, strategy).await?;
+    report.wall_time_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+    eprintln!("{}", metrics_summary(&report));
 
     if !report.redactions.is_empty() {
         let rules: Vec<String> = report
@@ -414,6 +442,32 @@ async fn run_mode<S: ReviewStrategy>(
 mod tests {
     use super::*;
     use crate::domain::report::Finding;
+
+    #[test]
+    fn metrics_are_derived_from_report_counters() {
+        let mut r = ReviewReport {
+            wall_time_ms: 42,
+            screened_files: 3,
+            ..Default::default()
+        };
+        r.usage.calls = 7;
+        r.usage.cache.hits = 5;
+        r.findings.push(Finding {
+            action: Action::RequestChanges,
+            ..Default::default()
+        });
+        let line = metrics_summary(&r);
+        for value in [
+            "wall_ms=42",
+            "files=3",
+            "calls=7",
+            "cache_hits=5",
+            "findings=1",
+            "blocking=1",
+        ] {
+            assert!(line.contains(value), "{line}");
+        }
+    }
 
     #[test]
     fn sanitized_report_replaces_secret_values_not_evidence() {

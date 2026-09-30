@@ -452,6 +452,7 @@ pub async fn run_review<S: ReviewStrategy>(
             max_follow_ups,
             max_profiles: MAX_PROFILES,
         },
+        wall_time_ms: 0,
         screened_files,
         context_files: context_paths,
         matrix: matrix_rows,
