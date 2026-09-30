@@ -1,6 +1,6 @@
 # Release provenance and SBOMs (SLSA)
 
-Every momus release is verifiable from source to download. This document
+Releases starting with v0.3.0 are verifiable from source to download. This document
 says exactly what is claimed, how to verify it as a consumer, what SLSA
 Build level the artifacts honestly meet, and which gaps remain. No SLSA
 certification is implied — the levels below are our own assessment against
@@ -87,6 +87,22 @@ Legacy: releases before v0.3.0 have no attestations; the Action's
 (checksum-only). Source builds (`version: source`) are trusted checkouts
 and are not attested.
 
+Installer policies:
+
+- `required` downloads the complete verification set from one resolved
+  release tag, requires immutability, verifies its repository, source commit
+  and source ref, then extracts. Missing assets, network/download failures,
+  or verification failures abort; there is no implicit source fallback.
+- `legacy` downloads only the archive and checksum for historical releases
+  without attestations and explicitly provides checksum-only assurance.
+- `version: source` builds this action's trusted checkout with its pinned
+  toolchain and locked dependencies. Unsupported prebuilt platforms must
+  choose this mode explicitly.
+
+Unknown policy values fail. `latest` is resolved once before downloading;
+that concrete tag is also used for source lookup and verification. Custom
+release repositories apply consistently to downloads and signer identity.
+
 ## Pipeline and enforcement
 
 Order: audit → build+SBOM (pinned builder) → Apple sign/notarize → freeze
@@ -101,11 +117,16 @@ GITHUB_TOKEN cannot be granted, so the workflow warns rather than guesses
 when it gets a 403; the setting itself and the `protect-release-tags`
 ruleset were verified with admin access when enabled).
 The moving `v0` tag is excluded from tag protection and only advances
-after verified publication of the newest stable release.
+after verified publication and exact immutable asset validation of the
+newest stable release. Backports and prereleases do not move it; prereleases
+are explicitly marked and neither becomes the latest release.
 
 Failure modes tested in `scripts/test-verify-release.sh` (each blocks):
 tampered archive, altered SBOM, missing bundle, missing target, manifest
-digest mismatch, unpinned signer digest handling. Signing failure blocks
+digest mismatch, wrong repository/source/ref/signer and pinned digest handling.
+`scripts/test-attestation-policy.sh` adds real signed-bundle rejection checks
+to every rehearsal/release verification job, with a positive control first.
+Installer and publication tests execute the actual helper/workflow commands. Signing failure blocks
 via the workflow graph; a conflicting rerun is blocked by the
 release-exists check and immutable releases. A `workflow_dispatch` run on
 `main` rehearses the full chain — all three targets, signing,
@@ -146,46 +167,25 @@ that commit exists on the default branch the files and the pin cannot
 land atomically, so the pin lands in the immediately following commit of
 the same pull request.
 
-## SLSA v1.2 Build level assessment
+## SLSA Build L2 scope
 
-Per-artifact levels (our assessment, not certification):
+This pipeline targets the SLSA Build L2 baseline: hosted builds, signed
+platform-generated provenance, and verification of the final downloads.
+L3 assessment and hardening are deferred. No L3 or certification claim is
+made for any artifact. SHA-pinned, parameterless builder/attestor workflows
+remain in place as useful controls, without implying a higher level.
 
-| Artifact | Level | Rationale |
-| --- | --- | --- |
-| Linux archives + SBOMs | **L3** for the controls below, with the documented residuals | Built from a pinned toolchain on ephemeral GitHub-hosted runners inside a SHA-pinned reusable builder; provenance is platform-generated (GitHub OIDC/Sigstore), unforgeable by the build itself, and verified before publication. |
-| macOS archive | **L2**, with the signing transformation recorded | Developer ID signing + notarization happen after the build and mutate the artifact; the provenance attests the final bytes and the manifest records input/output digests, signer workflow and notarization evidence, but the transformation step is outside the attestation's build definition. |
+The macOS signing transformation remains recorded separately: Developer ID
+signing/notarization changes the archive after compilation, and the final
+bytes are attested only after that step. The manifest carries the unsigned
+input, signed output, signer workflow and notarization evidence.
 
-Requirement/evidence/gap matrix (SLSA v1.2 Build requirements):
-
-| Requirement | Evidence | Gap |
-| --- | --- | --- |
-| Provenance exists | Bundles shipped as release assets and retained in the GitHub attestations API | — |
-| Authentic (platform-generated) | `actions/attest` with GitHub OIDC; short-lived Sigstore certificates | — |
-| Unforgeable | Signing material only in the builder's attest job; no repo code executes there; `id-token` granted nowhere else | Repository write access can change the builder pin in `release.yml`; mitigated by tag-protection rulesets and review requirements on `main` (see residuals) |
-| Build service verifies provenance before use | Publish job re-verifies from the draft release; installer verifies before extraction | — |
-| Isolated builds | Ephemeral hosted runners, one job per target, no caches between release builds | Shared CI machines are "shared infrastructure" per SLSA's stricter reading; treated as acceptable for hosted runners, as GitHub's own guidance does |
-| Parameterless/Hermetic | `--locked` builds, pinned toolchain, pinned generators, `SOURCE_DATE_EPOCH` for SBOM determinism | Network access exists during build (crates.io via lockfile digests); full hermeticity (vendored deps/offline) not implemented |
-| Ephemeral environment | Hosted runners, fresh VM per job | — |
-| No influence from builds | Attest job consumes artifacts by digest | Inter-job artifacts are downloaded by name within the same run; a compromised build job could try to race the signing artifact replacement. Names are fixed and digests are recomputed post-download, and provenance binds the final bytes, so tampering is detectable, not prevented |
-| Build — reproducible | Manifest records full toolchain/runner/lockfile context | No bit-for-bit reproducibility claim (hosted image and Apple timestamps); macOS signing is inherently non-reproducible |
-
-### Residual gaps to L3 (macOS to full parity)
-
-1. **macOS transformation**: signing/notarization mutates the artifact
-   outside the attested build; we record it honestly rather than claim it
-   away. Closing it would mean attesting in a builder that also signs, or
-   treating the signed artifact as a derived artifact with its own level.
-2. **Builder pin trust**: whoever can merge to `main` can move `BUILDER_PIN`.
-   Tag-protection rulesets (stable `v*` tags: no update/delete, `v0`
-   excluded) plus required review on `main` are the compensating controls;
-   an out-of-repo builder (the `apple-signing` model) would remove this
-   gap at the cost of a second repository to vet.
-3. **Consumer-side digest pinning**: the Action pins the signer workflow
-   path, repository and source commit, but cannot independently know the
-   builder digest used for an old release; release-time verification pins
-   it. A transparency-log-based policy could close this later.
-4. **Inter-job artifact integrity** is detection-based (digests + final
-   provenance), not cryptographic channel protection.
+Stable version tags are protected against updates/deletion and future
+releases are immutable. `main` currently has no required-review protection;
+this document does not treat required reviews as an enforced control.
+Builds retain network access, inter-job artifacts use GitHub's artifact
+transport, and native/system-library inventories are outside the Rust SBOM
+scope. These limitations do not disappear merely because a bundle exists.
 
 ## Operating the pipeline
 
@@ -194,9 +194,9 @@ Requirement/evidence/gap matrix (SLSA v1.2 Build requirements):
   mismatches, existing releases, non- immutable publication, and any
   verification failure.
 - **Bump the builder/attest workflows**: change `builder.yml` and/or
-  `attest.yml`, land them, then update the pinned commit at all five of
+  `attest.yml`, land them, then update the pinned commit at all six of
   its `release.yml` sites (the two reusable-workflow calls, the manifest's
-  `signer_digest`, and the two `--signer-digest` verifications) in the
+  `signer_digest`, the two `--signer-digest` verifications, and the real negative-policy test) in the
   next commit of the same PR.
 - **Toolchain/generators**: `rust-toolchain.toml` pins the channel; the
   workflow env pins `cargo-cyclonedx`, `cargo-audit`, the CycloneDX schema

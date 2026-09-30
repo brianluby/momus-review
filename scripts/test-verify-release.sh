@@ -34,6 +34,15 @@ printf '%s\n' "$*" >> "$GH_ARGS_LOG"
 # Real gh rejects bundles unless the filename ends in .json or .jsonl.
 # Enforce the same file contract instead of accepting every fixture path.
 while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --source-digest) [ "$2" = 0000000000000000000000000000000000000001 ] || exit 1 ;;
+    --source-ref) [ "$2" = refs/heads/main ] || exit 1 ;;
+    --signer-workflow) [ "$2" = brianluby/momus-review/.github/workflows/attest.yml ] || exit 1 ;;
+    --signer-digest) [ "$2" = 0000000000000000000000000000000000000001 ] || exit 1 ;;
+    --repo) [ "$2" = brianluby/momus-review ] || exit 1 ;;
+    --predicate-type)
+      case "$2" in https://slsa.dev/provenance/v1|https://cyclonedx.org/bom) ;; *) exit 1 ;; esac ;;
+  esac
   if [ "$1" = --bundle ]; then
     case "$2" in
       *.json|*.jsonl) ;;
@@ -195,14 +204,21 @@ open(f"{sys.argv[1]}/release-manifest.json.sha256", "w").write(f"{d}  release-ma
 PY
 expect_fail "manifest digest mismatch" "$work/bad-manifest" "manifest says"
 
-# 8. A wrong expectation must be forwarded, not ignored: the caller's
-# source sha and explicit signer digest are what gh enforces for us.
+# 8. Policy rejection must fail the verifier, not merely forward arguments.
 make_fixture "$work/expectations"
-run_verify "$work/expectations" --signer-digest 000000000000000000000000000000000000dead
-if grep -q -- "--signer-digest 000000000000000000000000000000000000dead" "$GH_ARGS_LOG"; then
-  echo "ok   explicit signer digest forwarded to gh"
+for flag in source-sha source-ref signer-workflow signer-digest repo; do
+  if run_verify "$work/expectations" "--$flag" wrong; then
+    echo "FAIL wrong $flag accepted"; FAILED=1
+  elif grep -q "provenance verification failed" "$work/out.txt"; then
+    echo "ok   wrong $flag rejected"
+  else
+    echo "FAIL wrong $flag failed unexpectedly"; cat "$work/out.txt"; FAILED=1
+  fi
+done
+if run_verify "$work/expectations" --source-ref refs/heads/main --signer-digest "$SHA"; then
+  echo "ok   valid source ref and signer pin"
 else
-  echo "FAIL explicit signer digest was not forwarded"; FAILED=1
+  echo "FAIL valid source ref and signer pin"; cat "$work/out.txt"; FAILED=1
 fi
 
 # 9. Multi-target manifest checking: the manifest walk must receive one

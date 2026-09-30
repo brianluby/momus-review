@@ -1,0 +1,38 @@
+name: release consumer smoke
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Immutable release to verify and install
+        required: true
+        default: v0.3.0
+        type: string
+permissions:
+  contents: read
+jobs:
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-22.04-arm, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install required release with the Action installer
+        env:
+          VERSION: ${{ inputs.version }}
+          VERIFY_ATTESTATIONS: required
+          RELEASE_REPO: ${{ github.repository }}
+          ACTION_PATH: ${{ github.workspace }}
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/install-release.sh
+      - name: Install historical release with explicit legacy policy
+        env:
+          VERSION: v0.2.0
+          VERIFY_ATTESTATIONS: legacy
+          RELEASE_REPO: ${{ github.repository }}
+          ACTION_PATH: ${{ github.workspace }}
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/install-release.sh

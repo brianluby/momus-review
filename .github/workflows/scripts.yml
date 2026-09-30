@@ -5,10 +5,10 @@ name: scripts
 
 on:
   pull_request:
-    paths: ["scripts/**", "examples/**", ".github/workflows/**", "Cargo.lock"]
+    paths: ["scripts/**", "examples/**", ".github/workflows/**", "Cargo.lock", "action.yml"]
   push:
     branches: [main]
-    paths: ["scripts/**", "examples/**", ".github/workflows/**", "Cargo.lock"]
+    paths: ["scripts/**", "examples/**", ".github/workflows/**", "Cargo.lock", "action.yml"]
   schedule:
     # Weekly RustSec sweep of the locked dependency set on main.
     - cron: "17 4 * * 1"
@@ -35,6 +35,11 @@ jobs:
       # the attestation policy flags handed to gh.
       - name: Test verify-release.sh
         run: scripts/test-verify-release.sh
+
+      - name: Test installer and publication gates
+        run: |
+          python3 -B scripts/test-install-release.py
+          python3 -B scripts/test-release-workflow.py
 
       - name: Test SBOM finalization and artifact handoff
         run: |
