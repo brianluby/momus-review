@@ -25,6 +25,10 @@ pub const SUMMARY_MARKER: &str = "<!-- momus:summary -->";
 
 /// At most this many summary-only findings are listed individually.
 const SUMMARY_LIST_MAX: usize = 50;
+const SUMMARY_TEXT_MAX: usize = 280;
+// Conservative byte ceiling below GitHub's 65,536-character comment limit.
+const SUMMARY_BODY_MAX: usize = 64_000;
+const SUMMARY_EXCERPT_MAX: usize = 4_000;
 
 static FINGERPRINT_MARKER: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"<!-- momus:fp=([0-9a-f]+) -->").expect("valid marker regex"));
@@ -298,6 +302,167 @@ fn redacted(text: &str) -> String {
     redact(text, &mut Redactions::default())
 }
 
+/// Repository-controlled strings stay in one code span. Redact before
+/// bounding so an omitted suffix cannot expose a partial secret prefix.
+fn summary_inline(text: &str) -> String {
+    let text = redacted(text);
+    let mut chars = text.chars().map(|ch| {
+        if ch == '`' || ch.is_control() {
+            ' '
+        } else {
+            ch
+        }
+    });
+    let mut bounded: String = chars.by_ref().take(SUMMARY_TEXT_MAX).collect();
+    if chars.next().is_some() {
+        bounded.push_str(" … [text omitted; see JSON report]");
+    }
+    format!("`{bounded}`")
+}
+
+fn summary_version(value: Option<&str>) -> String {
+    let Some(value) = value else {
+        return "absent".into();
+    };
+    // Keep ordinary versions readable while arbitrary refs/URLs remain inert.
+    if value.len() <= SUMMARY_TEXT_MAX
+        && value.as_bytes().first().is_some_and(u8::is_ascii_digit)
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+'))
+    {
+        value.to_string()
+    } else {
+        summary_inline(value)
+    }
+}
+
+fn summary_overflow(out: &mut Vec<String>, count: usize, category: &str) {
+    if count > SUMMARY_LIST_MAX {
+        out.push(format!(
+            "- … {} {category} omitted; see the complete JSON report.",
+            count - SUMMARY_LIST_MAX
+        ));
+    }
+}
+
+fn confidence_summary(report: &ReviewReport, head_sha: &str, out: &mut Vec<String>) {
+    let Some(confidence) = report.merge_confidence.as_ref() else {
+        return;
+    };
+    let head_matches = !head_sha.is_empty() && report.reviewed_head.as_deref() == Some(head_sha);
+    let immutable = report.reviewed_clean
+        && report.reviewed_committed
+        && report
+            .reviewed_base
+            .as_deref()
+            .is_some_and(|base| !base.trim().is_empty());
+    let valid_probability = |value: Option<f64>| {
+        value.is_some_and(|value| value.is_finite() && (0.0..=1.0).contains(&value))
+    };
+    let outcomes_ready = confidence.outcomes.len() == 3
+        && confidence.outcomes.iter().all(|outcome| {
+            outcome.status == "evaluatedEmpirical"
+                && valid_probability(outcome.probability)
+                && valid_probability(outcome.upper_bound_95)
+                && valid_probability(outcome.held_out_upper_bound_95)
+        })
+        && [
+            crate::review::merge_confidence::OutcomeKind::Revert,
+            crate::review::merge_confidence::OutcomeKind::Incident,
+            crate::review::merge_confidence::OutcomeKind::Flake,
+        ]
+        .iter()
+        .all(|kind| {
+            confidence
+                .outcomes
+                .iter()
+                .any(|outcome| outcome.outcome == *kind)
+        });
+    out.push(format!(
+        "**Merge outcomes**: assessed heuristic score {:.3}, producer version {} (uncalibrated; not a probability).",
+        confidence.heuristic_score, confidence.heuristic_version
+    ));
+    out.push(format!("Assessment head: {} · assessed merge base: {} · publishing head: {} · clean verified: {} · committed-only evidence: {}.",
+        summary_inline(report.reviewed_head.as_deref().unwrap_or("unknown")), summary_inline(report.reviewed_base.as_deref().unwrap_or("unknown")), summary_inline(if head_sha.is_empty() { "unknown" } else { head_sha }), report.reviewed_clean, report.reviewed_committed));
+    out.push(format!("Outcome evidence: {}; provenance: {}. Observational estimates do not certify real-world calibration.",
+        match confidence.synthetic { Some(true) => "synthetic demonstration; cannot authorize approval", Some(false) => "caller-supplied observed history", None => "unknown history" }, summary_inline(confidence.provenance.as_deref().unwrap_or("unknown"))));
+    let approval_state = if !confidence.approval.enabled {
+        "disabled (explicit opt-in policy not enabled)"
+    } else if !head_matches {
+        "rejected (assessment head is missing or stale)"
+    } else if !immutable || !outcomes_ready || confidence.synthetic != Some(false) || report.partial
+    {
+        "rejected (immutable or complete observed evidence is not established)"
+    } else if confidence.approval.eligible {
+        "eligible under explicit policy for the assessed publishing head"
+    } else {
+        "rejected under explicit policy"
+    };
+    out.push(format!("Automatic approval: {approval_state}."));
+    for reason in confidence.approval.reasons.iter().take(SUMMARY_LIST_MAX) {
+        out.push(format!("- Approval reason: {}", summary_inline(reason)));
+    }
+    summary_overflow(out, confidence.approval.reasons.len(), "approval reasons");
+    let probability = |value: Option<f64>| {
+        value
+            .filter(|value| value.is_finite() && (0.0..=1.0).contains(value))
+            .map_or_else(|| "unknown".into(), |value| format!("{value:.3}"))
+    };
+    for outcome in confidence.outcomes.iter().take(SUMMARY_LIST_MAX) {
+        out.push(format!("- {:?}: estimate {} ({}) · Wilson 95% upper bounds: training {}, held-out {} · {} training / {} held-out labels.", outcome.outcome, probability(outcome.probability), summary_inline(&outcome.status), probability(outcome.upper_bound_95), probability(outcome.held_out_upper_bound_95), outcome.evaluation.training_samples, outcome.evaluation.held_out_samples));
+        for limitation in outcome.limitations.iter().take(SUMMARY_LIST_MAX) {
+            out.push(format!("  - Limitation: {}", summary_inline(limitation)));
+        }
+        summary_overflow(out, outcome.limitations.len(), "outcome limitations");
+    }
+    summary_overflow(out, confidence.outcomes.len(), "outcome estimates");
+    out.push(String::new());
+}
+
+/// Preserve complete Markdown chunks (especially fences), never raw-cut an
+/// excerpt mid-fence. Omitted sections/entries remain explicitly counted.
+fn bounded_summary(chunks: &[String]) -> String {
+    let notice_reserve = 240;
+    let mut body = format!("{SUMMARY_MARKER}\n");
+    let mut omitted = 0;
+    for chunk in chunks {
+        let chunk = redacted(chunk);
+        if body.len().saturating_add(chunk.len()).saturating_add(1)
+            <= SUMMARY_BODY_MAX - notice_reserve
+        {
+            body.push_str(&chunk);
+            body.push('\n');
+        } else {
+            omitted += 1;
+        }
+    }
+    if omitted > 0 {
+        body.push_str(&format!("\n**Output limit**: {omitted} summary sections or entries omitted to fit the publication size limit. See the complete JSON report for all findings and evidence.\n"));
+    }
+    // Also catch secrets spanning chunks, preserving the original publication boundary.
+    let body = redacted(&body);
+    if body.len() <= SUMMARY_BODY_MAX {
+        body
+    } else {
+        // Redaction can expand an unusually short matching token; omit safely
+        // rather than cut a protected excerpt or publish an oversized body.
+        format!(
+            "{SUMMARY_MARKER}\n**Output limit**: Summary omitted after redaction exceeded the publication size limit. See the complete JSON report for findings, assessment identity and evidence."
+        )
+    }
+}
+
+fn summary_fenced(text: &str) -> String {
+    let text = redacted(text);
+    let mut chars = text.chars();
+    let mut excerpt: String = chars.by_ref().take(SUMMARY_EXCERPT_MAX).collect();
+    if chars.next().is_some() {
+        excerpt.push_str("\n… [evidence text omitted; see complete JSON report]");
+    }
+    fenced(&excerpt)
+}
+
 /// An inline comment body: a port of the dashboard's `formatPrComment`
 /// (without the `file:line` line, which the anchor already shows), redacted,
 /// plus the fingerprint marker.
@@ -343,6 +508,8 @@ pub fn summary_body(report: &ReviewReport, plan: &Plan, head_sha: &str) -> Strin
         .filter(|f| f.action == Action::RequestChanges)
         .count();
     let mut out = vec!["### momus review".to_string(), String::new()];
+    // Put the assessment identity before possibly large evidence sections.
+    confidence_summary(report, head_sha, &mut out);
 
     if report.partial {
         let omitted = report
@@ -470,7 +637,7 @@ pub fn summary_body(report: &ReviewReport, plan: &Plan, head_sha: &str) -> Strin
             ));
             out.push(format!("Required assertion: {}", test.assertion));
             out.push("Repository-specific setup, calls and assertions are still required; no coverage is provided yet.".into());
-            out.push(fenced(&test.stub));
+            out.push(summary_fenced(&test.stub));
         }
         out.push(String::new());
         out.push("</details>".into());
@@ -480,51 +647,37 @@ pub fn summary_body(report: &ReviewReport, plan: &Plan, head_sha: &str) -> Strin
         out.push(format!("**Dependency triage (advisory)**: {} dependency changes, {} unknown evidence requirements.",upgrades.changes.len(),upgrades.unknowns.len()));
         for change in upgrades.changes.iter().take(SUMMARY_LIST_MAX) {
             out.push(format!(
-                "- `{}`: {:?} → {:?}; {} signal. Scope: `{}`.",
-                change.dependency,
-                change.old_version,
-                change.new_version,
-                change.risk,
-                change.scope
+                "- {}: {} → {}; {} in {}; {} signal. Scope: {}.",
+                summary_inline(&change.dependency),
+                summary_version(change.old_version.as_deref()),
+                summary_version(change.new_version.as_deref()),
+                summary_inline(&change.kind),
+                summary_inline(&change.ecosystem),
+                summary_inline(&change.risk),
+                summary_inline(&change.scope)
             ));
         }
+        summary_overflow(&mut out, upgrades.changes.len(), "dependency changes");
         for unknown in upgrades.unknowns.iter().take(SUMMARY_LIST_MAX) {
-            out.push(format!("- Unknown: {unknown}"));
+            out.push(format!("- Unknown: {}", summary_inline(unknown)));
         }
+        summary_overflow(
+            &mut out,
+            upgrades.unknowns.len(),
+            "dependency evidence unknowns",
+        );
     }
     if let Some(docs) = &report.docs_drift {
         out.push(String::new());
         out.push(format!("**Docs comparison (advisory)**: {} checks, {} unknown evidence requirements. Supported interface checks only.",docs.checks.len(),docs.unknowns.len()));
         for unknown in docs.unknowns.iter().take(SUMMARY_LIST_MAX) {
-            out.push(format!("- Unknown: {unknown}"));
+            out.push(format!("- Unknown: {}", summary_inline(unknown)));
         }
-    }
-    if let Some(confidence) = &report.merge_confidence {
-        out.push(String::new());
-        out.push(
-            "**Merge outcomes**: the legacy risk score is a heuristic, not a probability.".into(),
+        summary_overflow(
+            &mut out,
+            docs.unknowns.len(),
+            "documentation evidence unknowns",
         );
-        for outcome in &confidence.outcomes {
-            let probability = outcome
-                .probability
-                .map_or("unknown".into(), |p| format!("{p:.3}"));
-            out.push(format!(
-                "- {:?}: {probability} ({}) · {} training / {} held-out labels.",
-                outcome.outcome,
-                outcome.status,
-                outcome.evaluation.training_samples,
-                outcome.evaluation.held_out_samples
-            ));
-        }
-        out.push(format!(
-            "Automatic approval: {}. {}",
-            if confidence.approval.eligible {
-                "eligible under explicit policy"
-            } else {
-                "disabled or rejected"
-            },
-            confidence.approval.reasons.join("; ")
-        ));
     }
     if let Some(specs) = &report.spec_drift {
         let drift = specs
@@ -552,7 +705,7 @@ pub fn summary_body(report: &ReviewReport, plan: &Plan, head_sha: &str) -> Strin
                     "`{}:{}–{}`",
                     evidence.path, evidence.start_line, evidence.end_line
                 ));
-                out.push(fenced(&evidence.text));
+                out.push(summary_fenced(&evidence.text));
             }
         }
         if specs.checks.len() > SUMMARY_LIST_MAX {
@@ -589,7 +742,7 @@ pub fn summary_body(report: &ReviewReport, plan: &Plan, head_sha: &str) -> Strin
     out.push(String::new());
     out.push(format!("<sub>{}</sub>", footer.join(" · ")));
 
-    format!("{SUMMARY_MARKER}\n{}", redacted(&out.join("\n")))
+    bounded_summary(&out)
 }
 
 /// Keep untrusted excerpts inside a Markdown code block, including embedded fences.
@@ -602,6 +755,230 @@ fn fenced(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn confidence_report() -> ReviewReport {
+        let mut report = ReviewReport {
+            reviewed_head: Some("assessed-head".into()),
+            reviewed_base: Some("assessed-base".into()),
+            reviewed_clean: true,
+            reviewed_committed: true,
+            p_revert: 0.123,
+            ..Default::default()
+        };
+        let mut confidence =
+            crate::review::merge_confidence::assess(&report, None, None, None).unwrap();
+        confidence.heuristic_score = 0.777;
+        confidence.synthetic = Some(false);
+        confidence.provenance =
+            Some("fabricated renderer fixture; no real calibration claim".into());
+        confidence.approval.enabled = true;
+        confidence.approval.eligible = true;
+        confidence.approval.reasons.clear();
+        for outcome in &mut confidence.outcomes {
+            outcome.status = "evaluatedEmpirical".into();
+            outcome.probability = Some(0.043);
+            outcome.upper_bound_95 = Some(0.19);
+            outcome.held_out_upper_bound_95 = Some(0.31);
+            outcome.evaluation.training_samples = 100;
+            outcome.evaluation.held_out_samples = 40;
+        }
+        report.merge_confidence = Some(confidence);
+        report
+    }
+
+    #[test]
+    fn confidence_summary_binds_claim_to_publishing_head_and_shows_bounds() {
+        let mut report = confidence_report();
+        let body = summary_body(&report, &Plan::default(), "assessed-head");
+        assert!(body.contains("eligible under explicit policy for the assessed publishing head"));
+        assert!(body.contains("Assessment head: `assessed-head`"));
+        assert!(body.contains("assessed merge base: `assessed-base`"));
+        assert!(body.contains("publishing head: `assessed-head`"));
+        assert!(body.contains("clean verified: true · committed-only evidence: true"));
+        assert!(body.contains("assessed heuristic score 0.777"));
+        assert!(body.contains("estimate 0.043"));
+        assert!(body.contains("Wilson 95% upper bounds: training 0.190, held-out 0.310"));
+        assert!(body.contains("Limitation:") && body.contains("No causal guarantee"));
+        let stale = summary_body(&report, &Plan::default(), "current-head");
+        assert!(stale.contains("rejected (assessment head is missing or stale)"));
+        assert!(stale.contains("publishing head: `current-head`"));
+        assert!(!stale.contains("Automatic approval: eligible"));
+        report.reviewed_head = None;
+        assert!(
+            !summary_body(&report, &Plan::default(), "assessed-head")
+                .contains("Automatic approval: eligible")
+        );
+    }
+
+    #[test]
+    fn synthetic_disabled_and_missing_bounds_never_render_eligible() {
+        let mut report = confidence_report();
+        report.merge_confidence.as_mut().unwrap().synthetic = Some(true);
+        let body = summary_body(&report, &Plan::default(), "assessed-head");
+        assert!(body.contains("synthetic demonstration; cannot authorize approval"));
+        assert!(!body.contains("Automatic approval: eligible"));
+        let mut report = confidence_report();
+        report.merge_confidence.as_mut().unwrap().outcomes[0].held_out_upper_bound_95 = None;
+        let body = summary_body(&report, &Plan::default(), "assessed-head");
+        assert!(body.contains("held-out unknown"));
+        assert!(!body.contains("Automatic approval: eligible"));
+        let mut report = confidence_report();
+        report.merge_confidence.as_mut().unwrap().approval.enabled = false;
+        assert!(
+            summary_body(&report, &Plan::default(), "assessed-head")
+                .contains("Automatic approval: disabled (explicit opt-in policy not enabled)")
+        );
+        let mut report = confidence_report();
+        report.reviewed_committed = false;
+        assert!(
+            !summary_body(&report, &Plan::default(), "assessed-head")
+                .contains("Automatic approval: eligible")
+        );
+    }
+
+    #[test]
+    fn advisory_manifest_unknowns_and_reasons_are_inert_and_secret_safe() {
+        use crate::review::upgrades::{DependencyChange, UpgradeSummary};
+        let attack = "name`\n[internal CI](https://attacker.example) <script>alert(1)</script> @everyone AKIAIOSFODNN7EXAMPLE";
+        let mut report = confidence_report();
+        report.upgrades = Some(UpgradeSummary {
+            changes: vec![DependencyChange {
+                ecosystem: attack.into(),
+                dependency: attack.into(),
+                scope: attack.into(),
+                kind: "removed".into(),
+                risk: "routine".into(),
+                old_version: Some(attack.into()),
+                new_version: None,
+                evidence: vec![],
+                changelog: vec![],
+            }],
+            unknowns: vec![attack.into()],
+            ..Default::default()
+        });
+        report.docs_drift = Some(crate::review::docs_drift::DocsDriftSummary {
+            unknowns: vec![attack.into()],
+            ..Default::default()
+        });
+        report.merge_confidence.as_mut().unwrap().approval.reasons = vec![attack.into()];
+        report.merge_confidence.as_mut().unwrap().outcomes[0].limitations = vec![attack.into()];
+        let body = summary_body(&report, &Plan::default(), "assessed-head");
+        assert!(!body.contains("AKIAIOSFODNN7EXAMPLE"));
+        assert!(body.contains("redacted:aws-access-key"));
+        assert!(body.contains("`removed` in"));
+        // Removing complete code spans leaves no attacker link, HTML or mention.
+        let outside_code = Regex::new(r"`[^`]*`").unwrap().replace_all(&body, "");
+        for unsafe_text in ["https://attacker.example", "<script>", "@everyone"] {
+            assert!(!outside_code.contains(unsafe_text), "{outside_code}");
+        }
+    }
+
+    #[test]
+    fn every_new_list_discloses_omitted_entries() {
+        use crate::review::upgrades::{DependencyChange, UpgradeSummary};
+        let mut report = confidence_report();
+        let change = DependencyChange {
+            ecosystem: "cargo".into(),
+            dependency: "crate".into(),
+            scope: "dependencies".into(),
+            kind: "added".into(),
+            risk: "routine".into(),
+            old_version: None,
+            new_version: Some("1.0.0".into()),
+            evidence: vec![],
+            changelog: vec![],
+        };
+        report.upgrades = Some(UpgradeSummary {
+            changes: vec![change; 61],
+            unknowns: vec!["missing changelog".into(); 61],
+            ..Default::default()
+        });
+        report.docs_drift = Some(crate::review::docs_drift::DocsDriftSummary {
+            unknowns: vec!["missing interface evidence".into(); 61],
+            ..Default::default()
+        });
+        let confidence = report.merge_confidence.as_mut().unwrap();
+        confidence.approval.reasons = vec!["missing required check".into(); 61];
+        confidence.outcomes[0].limitations = vec!["sampling uncertainty".into(); 61];
+        let body = summary_body(&report, &Plan::default(), "assessed-head");
+        for category in [
+            "approval reasons",
+            "outcome limitations",
+            "dependency changes",
+            "dependency evidence unknowns",
+            "documentation evidence unknowns",
+        ] {
+            assert!(
+                body.contains(&format!("11 {category} omitted")),
+                "{category}: {body}"
+            );
+        }
+    }
+
+    #[test]
+    fn publication_body_and_excerpts_are_bounded_without_cutting_fences() {
+        use crate::review::upgrades::{DependencyChange, UpgradeSummary};
+        let mut report = confidence_report();
+        let long = "untrusted evidence ".repeat(4000);
+        let change = DependencyChange {
+            ecosystem: long.clone(),
+            dependency: long.clone(),
+            scope: long.clone(),
+            kind: long.clone(),
+            risk: long.clone(),
+            old_version: Some(long.clone()),
+            new_version: Some(long.clone()),
+            evidence: vec![],
+            changelog: vec![],
+        };
+        report.upgrades = Some(UpgradeSummary {
+            changes: vec![change; 100],
+            unknowns: vec![long.clone(); 100],
+            ..Default::default()
+        });
+        report.merge_confidence.as_mut().unwrap().approval.reasons = vec![long; 100];
+        let body = summary_body(&report, &Plan::default(), "assessed-head");
+        assert!(body.len() <= SUMMARY_BODY_MAX, "{} bytes", body.len());
+        assert!(body.starts_with(SUMMARY_MARKER));
+        assert!(body.contains("publishing head: `assessed-head`"));
+        assert!(body.contains("Output limit") && body.contains("text omitted"));
+        let excerpt = summary_fenced(&format!("AKIAIOSFODNN7EXAMPLE\n```\n{}", "🙂".repeat(6000)));
+        assert!(!excerpt.contains("AKIAIOSFODNN7EXAMPLE"));
+        assert!(excerpt.contains("evidence text omitted"));
+        assert!(excerpt.starts_with("\n````\n") && excerpt.ends_with("\n````\n"));
+    }
+
+    #[test]
+    fn dependency_summary_renders_versions_and_absence_without_debug_wrappers() {
+        use crate::review::upgrades::{DependencyChange, UpgradeSummary};
+        let change = |name: &str, old: Option<&str>, new: Option<&str>| DependencyChange {
+            ecosystem: "cargo".into(),
+            dependency: name.into(),
+            scope: "dependencies".into(),
+            kind: "changed".into(),
+            risk: "routine".into(),
+            old_version: old.map(str::to_owned),
+            new_version: new.map(str::to_owned),
+            evidence: vec![],
+            changelog: vec![],
+        };
+        let report = ReviewReport {
+            upgrades: Some(UpgradeSummary {
+                changes: vec![
+                    change("upgraded", Some("2.0.0"), Some("3.0.0")),
+                    change("removed", Some("1.0.0"), None),
+                    change("added", None, Some("1.2.0")),
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let body = summary_body(&report, &Plan::default(), "abc");
+        assert!(body.contains("`upgraded`: 2.0.0 → 3.0.0"));
+        assert!(body.contains("`removed`: 1.0.0 → absent"));
+        assert!(body.contains("`added`: absent → 1.2.0"));
+        assert!(!body.contains("Some(") && !body.contains("None"));
+    }
 
     /// Advisory outcomes and previously posted plans stay visible and secret-safe.
     #[test]

@@ -17,12 +17,19 @@ insufficient. Momus does not derive a single misleading complement called
 
 `OutcomeHistory` JSON uses camelCase and rejects unknown fields. Supply one
 repository's history with a source description in `provenance`, an explicit
-`synthetic` flag, Unix-second `asOf` and `trainingCutoff`, and separate positive
+`synthetic` flag, required `heuristicVersion: 1`, Unix-second `asOf` and `trainingCutoff`, and separate positive
 `windows` (`revertSeconds`, `incidentSeconds`, `flakeSeconds`). The default Rust
 windows are 30 days, 30 days and 7 days; history files must state their windows.
 Use the same outcome definitions, surveillance process, review pipeline and
 heuristic formula for all records. Record changes to these definitions in the
 provenance and start a separate history when comparability is lost.
+`HEURISTIC_VERSION` pins the formula, severity scale and fixed bins. Histories
+missing that field or naming another producer version are rejected before
+fitting. `mergeConfidence.heuristicVersion` identifies the current producer;
+its separate `version` identifies the report format. An old saved summary with
+no producer field reads as version zero, meaning unverified provenance, and
+is never reused to authorize approval. Do not relabel incompatible scores with
+a newer version number.
 
 Each record names its unique merged `head`, `mergedAt`, `scoreRecordedAt` and
 `heuristicScore`. Freeze the score before the merge; recomputing scores with
@@ -44,6 +51,10 @@ nonempty evidence reference. An absent incident record, an issue search with no
 results, a missed monitoring interval or unavailable test telemetry remains
 unknown. Momus validates times, windows, uniqueness, bounds and evidence presence;
 it cannot verify a caller's external surveillance or causal attribution.
+Nonsynthetic history requires full, nonzero, lowercase hexadecimal Git head
+identities of 40 or 64 characters. Abbreviated, uppercase and padded aliases
+are rejected, so a candidate's own record cannot bypass the independence
+check under another spelling. Synthetic demonstrations may use opaque IDs.
 
 ## Reproducible evaluation
 
@@ -77,6 +88,10 @@ without accounting for distribution shift, surveillance bias, causal
 misattribution or dependence between changes. `evaluatedEmpirical` means an
 empirical estimate with held-out evaluation, **not** certified calibration.
 Use real repository data and prospective monitoring before relying on it.
+The evaluation also records the candidate bin's latest usable training and
+held-out `observedAt` timestamps and its latest mature held-out `mergedAt`.
+These refer only to records actually admitted to that outcome's chronological
+fit/evaluation, excluding unsupported, unknown and immature labels.
 
 ## Explicit, fail-closed automatic approval
 
@@ -98,10 +113,27 @@ includes `name`, exact `head`, `status`, `completedAt`, and a nonempty evidence
 reference. Only `passed` is accepted. Required missing checks, any supplied
 failed/pending/unknown checks, duplicate names, stale results, future
 timestamps and results for other heads reject eligibility.
+Every `CheckEvidence` JSON field is required, including an explicitly supplied
+`auxiliaryUnknowns` array. An omitted completeness assertion is an input error,
+never an assertion that nothing is unknown. The Rust `Default` constructor
+remains available for constructing incomplete, ineligible evidence internally.
+
+A recent export `asOf` is insufficient to make old telemetry current. For each
+outcome and the candidate's score bin, approval also requires the latest usable
+held-out observation within `maxHistoryAgeSeconds`, and the latest mature
+held-out merge within that age plus the outcome window. The window allowance
+permits ordinary 30-day outcomes to mature before evaluation. The latest usable
+training observation must fall within the same age-plus-window allowance,
+because training labels precede the cutoff and held-out windows mature after
+it. Refreshing a negative-surveillance timestamp on an ancient merge cannot
+refresh its old score cohort. These recency checks establish minimum current
+evidence support; they do not establish a sufficient recent sample size or
+guarantee safety against distribution shift.
 
 The report's `reviewedHead`, the evidence's `reviewedHead` and current `head`
 must match exactly. The candidate cannot be in its own training/evaluation
-history. The history must belong to the same repository and be no later than
+history. Nonsynthetic approval also requires a canonical full lowercase
+candidate head. The history must belong to the same repository and be no later than
 the assessment. An old report without a recorded head cannot be approved.
 The report must also record an actual `reviewedBase` merge-base identity,
 `reviewedClean: true`, and `reviewedCommitted: true`. Run
@@ -119,6 +151,12 @@ changed-file coverage and auxiliary evidence before setting completeness
 booleans; those assertions are a trust boundary. In particular, missing
 changelogs, unsupported manifests, unprovable documentation drift or incomplete
 repository context must be listed in `auxiliaryUnknowns`.
+Saved review reports retain tolerant legacy deserialization, including
+workflow counters. They are not authenticated completeness evidence: privileged
+publication requires a report produced by the trusted committed reviewer and
+fresh provider inventory/check verification. Legacy missing head/verification
+fields reject approval; externally authored reports must not be promoted to
+trusted review artifacts merely because they deserialize.
 All five review dimensions must be present for every uniquely identified matrix
 file. Selectively omitting a dimension prevents automatic approval even when
 the requested subset completed successfully.
@@ -180,3 +218,8 @@ The publishing step needs `contents: read`, `checks: read`, `statuses: read` and
 The publisher compares exact report/PR head and merge base, complete changed-file counts and reviewed matrix paths. It rejects unavailable/binary patches, more-than-100 check inventories, unsupported/non-source inputs, absent checks and any non-success result. Required named checks must exist, and all returned check/status results must succeed. Duplicate/ambiguous names reject rather than selecting one provider. It recomputes eligibility before publication and again immediately before an exact-commit approval, verifying the head and base again. Provider changes after the final API reads remain subject to GitHub branch protection; these REST calls do not form an atomic transaction.
 
 Committed-only review reads diffs and source/test context from the pinned Git tree. It currently rejects combination with worktree-based `--upgrade-triage`/`--docs-drift`; dependency/docs/configuration-only changes cannot pass the publisher's source-coverage gate. Dirty or untracked checkout inputs, mixed repository scopes, suppressed findings, specification drift and uncertain spec matches reject eligibility. Automatic approval is intentionally limited to routine fully screened source changes with sufficient real outcome history.
+
+Committed source context is limited to 10,000 files, 10 MB per file and 100 MB
+of source text. Tree sizes are checked before a batched immutable blob read.
+Unavailable, binary, non-UTF-8 or nonregular source context fails the committed
+review before API screening rather than silently presenting incomplete context.

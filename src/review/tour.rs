@@ -49,6 +49,8 @@ pub struct Tour {
     pub components: Vec<Component>,
     pub relationships: Vec<Relationship>,
     pub unknowns: Vec<String>,
+    /// Evidence gaps in inventory, entrypoints or corroborated edges. The
+    /// fixed static-map disclosure alone does not mark a tour incomplete.
     pub partial: bool,
 }
 
@@ -138,6 +140,9 @@ pub fn build(mut evidence: RepositoryEvidence, store: &IndexStore) -> Tour {
         .filter(|f| is_source_path(&f.path))
         .partition(|f| is_test_path(&f.path));
     let index = RepoIndex::build(&files, &tests, store);
+    if index.stats.fallbacks > 0 {
+        unknowns.push(format!("{} source/test file(s) lack index metadata (size limit or unsupported content); their public declarations are unknown", index.stats.fallbacks));
+    }
     let mut stops: Vec<_> = files
         .iter()
         .map(|file| {
@@ -159,12 +164,16 @@ pub fn build(mut evidence: RepositoryEvidence, store: &IndexStore) -> Tour {
                 .into(),
         );
     }
+    let files_by_path: std::collections::HashMap<_, _> = files
+        .iter()
+        .map(|file| (file.path.as_str(), file))
+        .collect();
     let relationships: Vec<_> = index
         .evidenced_edges()
         .iter()
         .filter_map(|(source, target, line)| {
-            let source = files.iter().find(|f| f.path == *source)?;
-            let target = files.iter().find(|f| f.path == *target)?;
+            let source = files_by_path.get(source.as_str())?;
+            let target = files_by_path.get(target.as_str())?;
             Some(Relationship {
                 source: reference(source, *line),
                 target: reference(target, 1),
@@ -172,6 +181,7 @@ pub fn build(mut evidence: RepositoryEvidence, store: &IndexStore) -> Tour {
             })
         })
         .collect();
+    let partial = !unknowns.is_empty() || relationships.is_empty();
     if relationships.is_empty() {
         unknowns.push("No corroborated internal import edges; external imports, dynamic loading and unsupported syntax remain unknown".into());
     } else {
@@ -209,8 +219,10 @@ pub fn build(mut evidence: RepositoryEvidence, store: &IndexStore) -> Tour {
         .collect();
     Tour {
         head: evidence.head,
-        basis: "RepoIndex static import resolution and heuristic file-role classification".into(),
-        partial: !unknowns.is_empty(),
+        basis:
+            "Working-tree RepoIndex static import resolution and heuristic file-role classification"
+                .into(),
+        partial,
         stops,
         components,
         relationships,
@@ -310,6 +322,15 @@ mod tests {
                 assert!(tour.partial);
             } else {
                 assert!(!tour.relationships.is_empty(), "{}", markdown(&tour));
+                assert!(
+                    !tour.partial,
+                    "fixed disclosure does not imply an incomplete inventory"
+                );
+                assert!(
+                    tour.unknowns
+                        .iter()
+                        .any(|unknown| unknown.contains("dynamic calls"))
+                );
             }
             assert!(tour.relationships.iter().all(|e| e.source.line == 1));
         }
@@ -328,5 +349,82 @@ mod tests {
         assert!(tour.relationships.is_empty());
         assert!(tour.partial);
         assert!(tour.unknowns.iter().any(|s| s.contains("entry point")));
+    }
+
+    #[test]
+    fn inventory_gaps_remain_partial_even_with_entrypoint_and_edges() {
+        let dir = tempfile::tempdir().unwrap();
+        let tour = build(
+            RepositoryEvidence {
+                files: vec![
+                    file("src/main.rs", "mod worker;\nfn main() {}"),
+                    file("src/worker.rs", "pub fn run() {}"),
+                ],
+                unknowns: vec!["file limit omitted source context".into()],
+                ..Default::default()
+            },
+            &IndexStore::open(dir.path().into()),
+        );
+        assert!(!tour.relationships.is_empty());
+        assert!(tour.partial);
+        assert!(
+            tour.unknowns
+                .iter()
+                .any(|unknown| unknown.contains("file limit"))
+        );
+    }
+
+    #[test]
+    fn missing_entrypoint_or_edge_evidence_still_marks_partial() {
+        for files in [
+            vec![
+                file("src/module.rs", "use crate::worker::run;"),
+                file("src/worker.rs", "pub fn run() {}"),
+            ],
+            vec![file("src/main.rs", "fn main() {}")],
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let tour = build(
+                RepositoryEvidence {
+                    files,
+                    ..Default::default()
+                },
+                &IndexStore::open(dir.path().into()),
+            );
+            assert!(tour.partial);
+        }
+    }
+
+    #[test]
+    fn oversized_index_metadata_keeps_public_surface_unknown_and_tour_partial() {
+        let dir = tempfile::tempdir().unwrap();
+        let large = format!("pub fn run() {{}}\n//{}", "x".repeat(2_000_000));
+        let tour = build(
+            RepositoryEvidence {
+                files: vec![
+                    file("src/main.rs", "mod worker;\nfn main() {}"),
+                    file("src/worker.rs", &large),
+                ],
+                ..Default::default()
+            },
+            &IndexStore::open(dir.path().into()),
+        );
+        assert!(
+            !tour.relationships.is_empty(),
+            "imports still have exact source evidence"
+        );
+        assert!(tour.partial);
+        assert!(tour.unknowns.iter().any(|unknown| {
+            unknown.contains("1 source/test file(s) lack index metadata")
+                && unknown.contains("public declarations are unknown")
+        }));
+        assert!(
+            tour.stops
+                .iter()
+                .find(|stop| stop.reference.path == "src/worker.rs")
+                .unwrap()
+                .public_surface
+                .is_empty()
+        );
     }
 }

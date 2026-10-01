@@ -3,10 +3,10 @@
 //! is guarded against symlinks, special files, and ancestor-swap races.
 
 use std::fs::{File, OpenOptions};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, anyhow, bail};
 
@@ -102,7 +102,7 @@ fn merge_base(repo_root: &Path, rev: &str) -> Result<DiffBase> {
 }
 
 fn merge_base_at(repo_root: &Path, rev: &str, head: &str) -> Result<DiffBase> {
-    if rev.is_empty() || rev.starts_with('-') {
+    if rev.is_empty() || rev.starts_with('-') || head.is_empty() || head.starts_with('-') {
         bail!("--base must name a revision, got '{rev}'");
     }
     let commit = git_value(
@@ -117,7 +117,7 @@ fn merge_base_at(repo_root: &Path, rev: &str, head: &str) -> Result<DiffBase> {
     })?;
     let base = git_value(repo_root, &["merge-base", &commit, head]).map_err(|_| {
         anyhow!(
-            "'{rev}' and HEAD share no history (a shallow clone lacks it: actions/checkout with fetch-depth: 0)"
+            "'{rev}' and '{head}' share no history (a shallow clone lacks it: actions/checkout with fetch-depth: 0)"
         )
     })?;
     Ok(DiffBase::Commit(base))
@@ -134,6 +134,8 @@ pub fn review_base_sha(scope: &Path, base: &str) -> Result<String> {
     Ok(merge_base(scope, base)?.rev().to_string())
 }
 
+/// Verify all tracked and untracked status is clean. Ignored tool artifacts
+/// are excluded; committed-only review reads their source context from Git.
 pub fn tracked_checkout_clean(scope: &Path) -> Result<bool> {
     Ok(git(scope, &["status", "--porcelain", "--untracked-files=all"])?.is_empty())
 }
@@ -265,6 +267,7 @@ pub fn changed_files_at(
     base: &str,
     head: &str,
 ) -> Result<Vec<ChangedFile>> {
+    validate_pinned_scopes(scopes, head)?;
     collect_changed_files(scopes, exclude, Some(base), Some(head))
 }
 
@@ -360,6 +363,21 @@ fn changed_files_in_scope(
     };
     let tracked = nul_lines(&tracked_output);
     let untracked = nul_lines(&untracked_output);
+    let additions_output = git_diff_at(
+        &repo_root,
+        base_rev,
+        head,
+        &[
+            "-M",
+            "--name-only",
+            "-z",
+            "--diff-filter=A",
+            "--",
+            relative_scope,
+        ],
+    )?;
+    let additions: std::collections::HashSet<_> =
+        nul_lines(&additions_output).into_iter().collect();
 
     let untracked_set: std::collections::HashSet<&str> = untracked.iter().copied().collect();
     let mut seen = std::collections::HashSet::new();
@@ -382,10 +400,11 @@ fn changed_files_in_scope(
                 .to_string();
             let base = match &base_kind {
                 DiffBase::EmptyTree(_) => String::new(),
-                DiffBase::Commit(rev) => {
-                    git(&repo_root, &["show", &format!("{rev}:{base_path}")]).unwrap_or_default()
-                }
+                DiffBase::Commit(_) if additions.contains(path) => String::new(),
+                DiffBase::Commit(rev) => git(&repo_root, &["show", &format!("{rev}:{base_path}")])
+                    .with_context(|| format!("unavailable base source evidence {base_path}"))?,
             };
+            ensure_source_text(base_path, &base)?;
             files.push(ChangedFile {
                 path: path.to_string(),
                 patch,
@@ -582,24 +601,26 @@ pub fn repository_evidence(
                 (kind.starts_with('D'), old_path, kind.starts_with('A')),
             );
         }
-        let paths = if base.is_some() {
-            git(&root, &["ls-files", "--cached", "-z", "--", relative])?
+        let untracked_paths: BTreeSet<String> = if base.is_some() {
+            BTreeSet::new()
         } else {
-            git(
+            let paths = git(
                 &root,
                 &[
                     "ls-files",
-                    "--cached",
                     "--others",
                     "--exclude-standard",
                     "-z",
                     "--",
                     relative,
                 ],
-            )?
+            )?;
+            nul_lines(&paths).into_iter().map(String::from).collect()
         };
+        let paths = git(&root, &["ls-files", "--cached", "-z", "--", relative])?;
         let mut inventory: BTreeSet<String> =
             nul_lines(&paths).into_iter().map(String::from).collect();
+        inventory.extend(untracked_paths.iter().cloned());
         inventory.extend(changes.keys().cloned());
         for path in inventory {
             if !evidence_path(&path)
@@ -646,9 +667,7 @@ pub fn repository_evidence(
                     }
                 }
             };
-            let untracked = base.is_none()
-                && content.is_some()
-                && git(&root, &["ls-files", "--error-unmatch", "--", &path]).is_err();
+            let untracked = content.is_some() && untracked_paths.contains(&path);
             let mut previous = String::new();
             if change.is_some() {
                 let old = change.and_then(|c| c.1.as_deref()).unwrap_or(&path);
@@ -665,10 +684,17 @@ pub fn repository_evidence(
                                 .push(format!("{old}: base exceeds evidence byte limit"));
                             continue;
                         }
-                        previous = git(&root, &["show", &object])?;
-                        if previous.contains('\0') {
-                            out.unknowns.push(format!("{old}: binary base evidence"));
-                            continue;
+                        match git(&root, &["show", &object]) {
+                            Ok(text) if !text.contains('\0') => previous = text,
+                            Ok(_) => {
+                                out.unknowns.push(format!("{old}: binary base evidence"));
+                                continue;
+                            }
+                            Err(e) => {
+                                out.unknowns
+                                    .push(format!("{old}: unreadable base evidence: {e}"));
+                                continue;
+                            }
                         }
                     }
                     Err(_) if change.is_some_and(|c| c.2) => {} // actual addition has no previous blob
@@ -681,7 +707,12 @@ pub fn repository_evidence(
             }
             let bytes = previous
                 .len()
-                .saturating_add(content.as_ref().map_or(0, String::len));
+                .saturating_add(content.as_ref().map_or(0, |text| {
+                    // Changed current text is retained in both the inventory
+                    // and comparison; count both copies in the evidence budget.
+                    text.len()
+                        .saturating_mul(if change.is_some() || untracked { 2 } else { 1 })
+                }));
             if total.saturating_add(bytes) > max_total_bytes {
                 out.unknowns.push(format!(
                     "{path}: total evidence byte limit {max_total_bytes} reached"
@@ -725,36 +756,132 @@ pub fn repository_files_at(
     exclude: &Exclude,
     head: &str,
 ) -> Result<Vec<SourceFile>> {
+    validate_pinned_scopes(scopes, head)?;
     let mut out = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
+    let mut total_bytes = 0usize;
     for scope in scopes {
         let scope = scope.canonicalize()?;
         let root = repository_root(&scope)?;
         let relative = relative_scope(&root, &scope);
-        let tree = git(&root, &["ls-tree", "-r", "-z", head, "--", relative])?;
+        let tree = git(&root, &["ls-tree", "-r", "-l", "-z", head, "--", relative])?;
+        let mut blobs = Vec::new();
         for record in nul_lines(&tree) {
             let (metadata, path) = record
                 .split_once('\t')
                 .context("invalid Git tree evidence")?;
-            if !metadata.starts_with("100644 blob ") && !metadata.starts_with("100755 blob ") {
-                continue;
-            }
             if !is_source_path(path) || exclude.is_match(path) || !seen.insert(path.to_string()) {
                 continue;
             }
-            let blob = metadata
-                .split_whitespace()
-                .nth(2)
-                .context("missing Git blob")?;
-            let content = git(&root, &["cat-file", "blob", blob])?;
-            ensure_source_text(path, &content)?;
-            out.push(SourceFile {
-                path: path.into(),
-                content,
-            });
+            if !metadata.starts_with("100644 blob ") && !metadata.starts_with("100755 blob ") {
+                bail!("{path}: unsupported non-regular committed source context");
+            }
+            let fields: Vec<_> = metadata.split_whitespace().collect();
+            let blob = fields.get(2).context("missing Git blob")?;
+            let size = fields
+                .get(3)
+                .context("missing Git blob size")?
+                .parse::<usize>()?;
+            total_bytes = total_bytes.saturating_add(size);
+            if seen.len() > 10_000 || size > 10_000_000 || total_bytes > 100_000_000 {
+                bail!(
+                    "committed source context exceeds inventory limits (10,000 files, 10 MB per file, 100 MB total); complete review unavailable"
+                );
+            }
+            blobs.push((path.to_string(), blob.to_string(), size));
+        }
+        if !blobs.is_empty() {
+            out.extend(read_blob_batch(&root, &blobs)?);
         }
     }
     Ok(out)
+}
+
+fn validate_pinned_scopes(scopes: &[PathBuf], head: &str) -> Result<()> {
+    if !matches!(head.len(), 40 | 64)
+        || !head
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        bail!("pinned head must be a full lowercase Git commit identity");
+    }
+    let mut identity = None;
+    for scope in scopes {
+        let root = repository_root(scope)?;
+        if identity.as_ref().is_some_and(|previous| previous != &root) {
+            bail!("committed source scopes must share one canonical checkout");
+        }
+        if identity.is_none() && git_value(&root, &["cat-file", "-t", head])? != "commit" {
+            bail!("pinned head must identify a commit");
+        }
+        identity = Some(root);
+    }
+    Ok(())
+}
+
+fn read_blob_batch(root: &Path, blobs: &[(String, String, usize)]) -> Result<Vec<SourceFile>> {
+    let input: String = blobs
+        .iter()
+        .map(|(_, blob, _)| format!("{blob}\n"))
+        .collect();
+    let mut child = Command::new("git")
+        .current_dir(root)
+        .args(["cat-file", "--batch"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let mut stdin = child.stdin.take().context("missing Git batch input")?;
+    // Drain stdout while feeding stdin to avoid pipe-buffer deadlock on large inventories.
+    let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
+    let output = child.wait_with_output()?;
+    writer
+        .join()
+        .map_err(|_| anyhow!("Git batch input writer failed"))??;
+    if !output.status.success() {
+        bail!(
+            "Git batch source read failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let mut cursor = 0usize;
+    let mut files = Vec::new();
+    for (path, blob, size) in blobs {
+        let line_end = output.stdout[cursor..]
+            .iter()
+            .position(|&b| b == b'\n')
+            .map(|offset| cursor + offset)
+            .context("missing Git batch header")?;
+        let header = std::str::from_utf8(&output.stdout[cursor..line_end])?;
+        let expected = format!("{blob} blob {size}");
+        if header != expected {
+            bail!("{path}: Git batch blob identity/size mismatched");
+        }
+        cursor = line_end + 1;
+        let end = cursor
+            .checked_add(*size)
+            .context("Git batch size overflow")?;
+        let bytes = output
+            .stdout
+            .get(cursor..end)
+            .context("truncated Git batch source")?;
+        let content = std::str::from_utf8(bytes)
+            .with_context(|| format!("{path}: non-UTF-8 committed source"))?
+            .to_owned();
+        ensure_source_text(path, &content)?;
+        if output.stdout.get(end) != Some(&b'\n') {
+            bail!("{path}: missing Git batch terminator");
+        }
+        cursor = end + 1;
+        files.push(SourceFile {
+            path: path.clone(),
+            content,
+        });
+    }
+    if cursor != output.stdout.len() {
+        bail!("unexpected trailing Git batch data");
+    }
+    Ok(files)
 }
 fn ensure_source_text(path: &str, text: &str) -> Result<()> {
     if text.contains('\0') {

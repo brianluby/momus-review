@@ -1,9 +1,8 @@
 //! Merge confidence: observed, separate outcomes and fail-closed approval.
 //!
-//! Produces a scalar in `[0, 1)` estimating the probability that a merge is
-//! reverted, from the review signals alone. This is an **uncalibrated
-//! heuristic spike** — the weights are hand-picked, not fitted, and the value
-//! must NOT be presented or treated as a calibrated probability. Roadmap item
+//! `p_revert` produces an **uncalibrated heuristic** in `[0, 1)` from review
+//! signals. Its weights are hand-picked, not fitted; it must never be presented
+//! or treated as a calibrated probability.
 //! `assess` separately fits fixed-bin empirical estimates to supplied observed
 //! revert, incident and flake outcomes and reports chronological held-out
 //! evaluation. Without sufficient evidence those estimates remain unknown.
@@ -37,6 +36,11 @@ const MIN_TRAIN: usize = 40;
 const MIN_HELD_OUT: usize = 20;
 const MIN_BIN: usize = 20;
 const BINS: usize = 4;
+
+/// Producer identity for the heuristic formula, severity scale and fixed bins.
+/// Increment whenever any of those change; existing histories then require
+/// separate compatible exports rather than silently mixing score producers.
+pub const HEURISTIC_VERSION: u32 = 1;
 
 /// Outcomes are independent: reverting a merge is not an incident or a test flake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,6 +97,8 @@ impl Default for OutcomeWindows {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OutcomeHistory {
+    /// Required on input. There is no inferred producer for legacy exports.
+    pub heuristic_version: u32,
     pub repository: String,
     pub provenance: String,
     pub synthetic: bool,
@@ -117,6 +123,9 @@ pub struct Evaluation {
     pub matching_bin_held_out_samples: usize,
     pub matching_bin_held_out_events: usize,
     pub matching_bin_calibration_error: Option<f64>,
+    pub matching_bin_training_last_observed_at: Option<i64>,
+    pub matching_bin_held_out_last_observed_at: Option<i64>,
+    pub matching_bin_held_out_last_merged_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,7 +148,7 @@ pub struct OutcomeEstimate {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CheckEvidence {
     pub repository: String,
     pub head: String,
@@ -208,6 +217,10 @@ pub struct ApprovalDecision {
 #[serde(rename_all = "camelCase")]
 pub struct MergeConfidenceSummary {
     pub version: u32,
+    /// Zero means a saved legacy artifact omitted producer provenance. It is
+    /// never used for fitting or approval; assess emits the current version.
+    #[serde(default)]
+    pub heuristic_version: u32,
     pub heuristic_score: f64,
     pub heuristic_label: String,
     pub repository: Option<String>,
@@ -238,6 +251,10 @@ fn window(windows: &OutcomeWindows, kind: OutcomeKind) -> i64 {
 /// Reject malformed, future, hindsight-scored, duplicated or unproven labels.
 pub fn validate_history(history: &OutcomeHistory) -> Result<()> {
     ensure!(
+        history.heuristic_version == HEURISTIC_VERSION,
+        "history heuristicVersion is unsupported; expected {HEURISTIC_VERSION}"
+    );
+    ensure!(
         !history.repository.trim().is_empty() && !history.provenance.trim().is_empty(),
         "history requires repository and source provenance"
     );
@@ -247,6 +264,10 @@ pub fn validate_history(history: &OutcomeHistory) -> Result<()> {
     );
     let mut heads = BTreeSet::new();
     for record in &history.records {
+        ensure!(
+            history.synthetic || canonical_git_head(&record.head),
+            "observed history requires canonical full 40/64-character lowercase Git heads"
+        );
         ensure!(
             !record.head.trim().is_empty() && heads.insert(&record.head),
             "history head is missing or duplicated"
@@ -307,6 +328,18 @@ pub fn validate_history(history: &OutcomeHistory) -> Result<()> {
     Ok(())
 }
 
+fn canonical_git_head(head: &str) -> bool {
+    matches!(head.len(), 40 | 64)
+        && head
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        && head.bytes().any(|byte| byte != b'0')
+}
+
+fn latest(timestamp: &mut Option<i64>, observed: i64) {
+    *timestamp = Some(timestamp.map_or(observed, |current| current.max(observed)));
+}
+
 fn bin(score: f64) -> usize {
     ((score * BINS as f64) as usize).min(BINS - 1)
 }
@@ -361,7 +394,23 @@ fn estimate(history: Option<&OutcomeHistory>, score: f64, kind: OutcomeKind) -> 
             }
             counts[bin(record.heuristic_score)] += 1;
             events[bin(record.heuristic_score)] += usize::from(observed.occurred);
+            if bin(record.heuristic_score) == bin(score) {
+                latest(
+                    &mut result.evaluation.matching_bin_training_last_observed_at,
+                    observed.observed_at,
+                );
+            }
         } else if maturity <= history.as_of {
+            if bin(record.heuristic_score) == bin(score) {
+                latest(
+                    &mut result.evaluation.matching_bin_held_out_last_observed_at,
+                    observed.observed_at,
+                );
+                latest(
+                    &mut result.evaluation.matching_bin_held_out_last_merged_at,
+                    record.merged_at,
+                );
+            }
             held_out.push((
                 bin(record.heuristic_score),
                 if observed.occurred { 1.0 } else { 0.0 },
@@ -724,6 +773,12 @@ fn approval(
                 .into(),
         );
     }
+    if history.is_some_and(|history| !history.synthetic) && !canonical_git_head(&checks.head) {
+        decision.reasons.push(
+            "Observed-history approval requires a canonical full lowercase Git candidate head."
+                .into(),
+        );
+    }
     if !checks.review_complete
         || !checks.evidence_complete
         || !checks.supported_inputs
@@ -740,6 +795,31 @@ fn approval(
             || history.records.iter().any(|r| r.head == checks.head))
     {
         decision.reasons.push("Outcome history is stale, from another repository, future-dated or includes the candidate head.".into());
+    }
+    for outcome in outcomes {
+        let Some(duration) = outcome.window_seconds else {
+            continue;
+        };
+        let maturity_allowance = policy.max_history_age_seconds.saturating_add(duration);
+        let recent = |timestamp: Option<i64>, allowed: i64| {
+            timestamp.is_some_and(|timestamp| {
+                timestamp > 0
+                    && timestamp <= checks.assessed_at
+                    && checks.assessed_at.saturating_sub(timestamp) <= allowed
+            })
+        };
+        if !recent(
+            outcome.evaluation.matching_bin_training_last_observed_at,
+            maturity_allowance,
+        ) || !recent(
+            outcome.evaluation.matching_bin_held_out_last_observed_at,
+            policy.max_history_age_seconds,
+        ) || !recent(
+            outcome.evaluation.matching_bin_held_out_last_merged_at,
+            maturity_allowance,
+        ) {
+            decision.reasons.push(format!("{:?} candidate-bin training/evaluation observations or held-out merge cohorts are stale or missing; a refreshed asOf cannot establish current evidence.", outcome.outcome));
+        }
     }
     let mut names = BTreeSet::new();
     for check in &checks.checks {
@@ -819,6 +899,7 @@ pub fn assess(
     .collect();
     Ok(MergeConfidenceSummary {
         version: 1,
+        heuristic_version: HEURISTIC_VERSION,
         heuristic_score: heuristic,
         heuristic_label: "Uncalibrated hand-weighted review score; not a probability.".into(),
         repository: history.map(|h| h.repository.clone()),
@@ -915,7 +996,7 @@ mod tests {
 
     fn routine_report() -> ReviewReport {
         ReviewReport {
-            reviewed_head: Some("candidate".into()),
+            reviewed_head: Some("ffffffffffffffffffffffffffffffffffffffff".into()),
             reviewed_clean: true,
             reviewed_committed: true,
             reviewed_base: Some("fixture-base".into()),
@@ -938,11 +1019,12 @@ mod tests {
             let event = if training { i >= 80 } else { i >= 140 };
             let merged_at = if training { 100 + i } else { 2000 + i };
             let observation = ObservedOutcome { occurred: event, observed_at: merged_at + 100, evidence: format!("test-only surveillance record {i}; fabricated, not a real calibration claim") };
-            OutcomeRecord { head: format!("fixture-{i}"), merged_at, score_recorded_at: merged_at - 1, heuristic_score: if event { 0.9 } else { 0.0 }, revert: Some(observation.clone()), incident: Some(observation.clone()), flake: Some(observation) }
+            OutcomeRecord { head: format!("{:040x}", i + 1), merged_at, score_recorded_at: merged_at - 1, heuristic_score: if event { 0.9 } else { 0.0 }, revert: Some(observation.clone()), incident: Some(observation.clone()), flake: Some(observation) }
         }).collect();
         // The synthetic flag is false ONLY to exercise the trusted-observation code path.
         // These unit-test records are fabricated and make no empirical product claim.
         OutcomeHistory {
+            heuristic_version: HEURISTIC_VERSION,
             repository: "test/repo".into(),
             provenance: "fabricated unit-test observed-source contract".into(),
             synthetic: false,
@@ -968,8 +1050,8 @@ mod tests {
     fn check_evidence() -> CheckEvidence {
         CheckEvidence {
             repository: "test/repo".into(),
-            head: "candidate".into(),
-            reviewed_head: "candidate".into(),
+            head: "ffffffffffffffffffffffffffffffffffffffff".into(),
+            reviewed_head: "ffffffffffffffffffffffffffffffffffffffff".into(),
             assessed_at: 5000,
             review_complete: true,
             evidence_complete: true,
@@ -977,7 +1059,7 @@ mod tests {
             auxiliary_unknowns: Vec::new(),
             checks: vec![NamedCheck {
                 name: "test".into(),
-                head: "candidate".into(),
+                head: "ffffffffffffffffffffffffffffffffffffffff".into(),
                 status: "passed".into(),
                 completed_at: 4999,
                 evidence: "test-only check receipt".into(),
@@ -1157,6 +1239,206 @@ mod tests {
     }
 
     #[test]
+    fn producer_version_is_required_and_incompatible_histories_are_rejected() {
+        let mut encoded = serde_json::to_value(observed_history()).unwrap();
+        encoded.as_object_mut().unwrap().remove("heuristicVersion");
+        assert!(serde_json::from_value::<OutcomeHistory>(encoded).is_err());
+        let mut history = observed_history();
+        history.heuristic_version = HEURISTIC_VERSION + 1;
+        assert!(validate_history(&history).is_err());
+        assert!(
+            assess(
+                &routine_report(),
+                Some(&history),
+                Some(&policy()),
+                Some(&check_evidence())
+            )
+            .is_err()
+        );
+        let summary = assess(&routine_report(), None, None, None).unwrap();
+        assert_eq!(summary.heuristic_version, HEURISTIC_VERSION);
+        let mut legacy = serde_json::to_value(summary).unwrap();
+        legacy.as_object_mut().unwrap().remove("heuristicVersion");
+        assert_eq!(
+            serde_json::from_value::<MergeConfidenceSummary>(legacy)
+                .unwrap()
+                .heuristic_version,
+            0
+        );
+    }
+
+    #[test]
+    fn observed_heads_are_canonical_and_candidate_aliases_cannot_leak() {
+        let candidate = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
+        for alias in [
+            candidate[..7].into(),
+            candidate.to_uppercase(),
+            format!(" {candidate} "),
+            "synthetic-id".into(),
+            "0".repeat(40),
+        ] {
+            let mut history = observed_history();
+            history.records[0].head = alias;
+            assert!(validate_history(&history).is_err());
+        }
+        let mut history = observed_history();
+        history.records[0].head = "a".repeat(64);
+        assert!(validate_history(&history).is_ok());
+        history.synthetic = true;
+        history.records[0].head = "opaque-synthetic-id".into();
+        assert!(validate_history(&history).is_ok());
+        let mut history = observed_history();
+        history.records[0].head = candidate.into();
+        for alias in [
+            candidate.into(),
+            candidate[..7].into(),
+            candidate.to_uppercase(),
+            format!(" {candidate} "),
+        ] {
+            let mut report = routine_report();
+            report.reviewed_head = Some(alias.clone());
+            let mut checks = check_evidence();
+            checks.head = alias.clone();
+            checks.reviewed_head = alias.clone();
+            checks.checks[0].head = alias;
+            let summary = assess(&report, Some(&history), Some(&policy()), Some(&checks)).unwrap();
+            assert!(!summary.approval.eligible, "{:?}", summary.approval.reasons);
+        }
+    }
+
+    #[test]
+    fn check_evidence_requires_every_explicit_completeness_field() {
+        let encoded = serde_json::to_value(check_evidence()).unwrap();
+        assert!(serde_json::from_value::<CheckEvidence>(encoded.clone()).is_ok());
+        for field in [
+            "repository",
+            "head",
+            "reviewedHead",
+            "assessedAt",
+            "reviewComplete",
+            "evidenceComplete",
+            "supportedInputs",
+            "auxiliaryUnknowns",
+            "checks",
+        ] {
+            let mut missing = encoded.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(
+                serde_json::from_value::<CheckEvidence>(missing).is_err(),
+                "{field}"
+            );
+        }
+    }
+
+    fn recent_history() -> OutcomeHistory {
+        let mut history = observed_history();
+        history.training_cutoff = 4500;
+        for (index, record) in history.records.iter_mut().enumerate() {
+            record.merged_at = if index < 100 {
+                4300 + index as i64
+            } else {
+                4600 + index as i64
+            };
+            record.score_recorded_at = record.merged_at - 1;
+            for observed in [&mut record.revert, &mut record.incident, &mut record.flake]
+                .into_iter()
+                .flatten()
+            {
+                observed.observed_at = record.merged_at + 100;
+            }
+        }
+        history
+    }
+
+    #[test]
+    fn refreshed_asof_cannot_refresh_stale_observation_or_merge_cohorts() {
+        let mut history = recent_history();
+        let mut p = policy();
+        p.max_history_age_seconds = 1000;
+        let fresh = assess(
+            &routine_report(),
+            Some(&history),
+            Some(&p),
+            Some(&check_evidence()),
+        )
+        .unwrap();
+        assert!(fresh.approval.eligible, "{:?}", fresh.approval.reasons);
+        assert_eq!(
+            fresh.outcomes[0]
+                .evaluation
+                .matching_bin_held_out_last_merged_at,
+            Some(4739)
+        );
+        history.as_of = 100_000;
+        let mut checks = check_evidence();
+        checks.assessed_at = history.as_of;
+        checks.checks[0].completed_at = history.as_of - 1;
+        let stale = assess(&routine_report(), Some(&history), Some(&p), Some(&checks)).unwrap();
+        assert!(!stale.approval.eligible);
+        assert!(
+            stale
+                .outcomes
+                .iter()
+                .all(|outcome| outcome.status == "evaluatedEmpirical")
+        );
+        assert!(
+            stale
+                .approval
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("cohorts are stale"))
+        );
+        // Extending negative surveillance on ancient held-out merges does not
+        // update the score producer/cohort or revive stale evaluation evidence.
+        for record in history
+            .records
+            .iter_mut()
+            .filter(|record| record.merged_at >= history.training_cutoff)
+        {
+            for observed in [&mut record.revert, &mut record.incident, &mut record.flake]
+                .into_iter()
+                .flatten()
+            {
+                if !observed.occurred {
+                    observed.observed_at = history.as_of;
+                }
+            }
+        }
+        let refreshed_surveillance =
+            assess(&routine_report(), Some(&history), Some(&p), Some(&checks)).unwrap();
+        assert!(!refreshed_surveillance.approval.eligible);
+        assert_eq!(
+            refreshed_surveillance.outcomes[0]
+                .evaluation
+                .matching_bin_held_out_last_observed_at,
+            Some(100_000)
+        );
+        assert_eq!(
+            refreshed_surveillance.outcomes[0]
+                .evaluation
+                .matching_bin_held_out_last_merged_at,
+            Some(4739)
+        );
+        // A genuinely recent, mature cohort and label export can pass the same
+        // policy; this fabricated contract exercises mechanics only.
+        let mut recent = recent_history();
+        recent.as_of += 95_000;
+        recent.training_cutoff += 95_000;
+        for record in &mut recent.records {
+            record.merged_at += 95_000;
+            record.score_recorded_at += 95_000;
+            for observed in [&mut record.revert, &mut record.incident, &mut record.flake]
+                .into_iter()
+                .flatten()
+            {
+                observed.observed_at += 95_000;
+            }
+        }
+        let result = assess(&routine_report(), Some(&recent), Some(&p), Some(&checks)).unwrap();
+        assert!(result.approval.eligible, "{:?}", result.approval.reasons);
+    }
+
+    #[test]
     fn sparse_history_and_single_outcome_class_remain_unknown() {
         let mut history = observed_history();
         history.records.truncate(2);
@@ -1221,7 +1503,7 @@ mod tests {
                 evidence: "fabricated held-out positive".into(),
             };
             history.records.push(OutcomeRecord {
-                head: format!("dilution-{i}"),
+                head: format!("{:040x}", i + 1000),
                 merged_at,
                 score_recorded_at: merged_at - 1,
                 heuristic_score: 0.9,
@@ -1512,7 +1794,7 @@ mod tests {
         c.checks.push(c.checks[0].clone());
         cases.push(c);
         let mut c = check_evidence();
-        c.head = "fixture-0".into();
+        c.head = observed_history().records[0].head.clone();
         c.reviewed_head = c.head.clone();
         c.checks[0].head = c.head.clone();
         cases.push(c);

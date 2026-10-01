@@ -1,5 +1,6 @@
 {
   "asOf": 5000,
+  "heuristicVersion": 1,
   "provenance": "generate.py deterministic fabricated data; no real-world calibration",
   "records": [
     {

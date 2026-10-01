@@ -130,6 +130,8 @@ where
 /// unlimited follow-ups, refinement on, no feedback.
 #[derive(Debug)]
 pub struct ReviewOptions {
+    /// CLI-owned local evidence. The CLI takes and attaches it after binding
+    /// source-review identity; direct `run_review` callers must attach it separately.
     pub auxiliary: Option<crate::review::auxiliary::AuxiliaryInputs>,
     /// Cap follow-ups per `select_follow_ups`; `None` follows every signal.
     pub max_follow_ups: Option<usize>,
@@ -180,6 +182,11 @@ pub async fn run_review<S: ReviewStrategy>(
     options: ReviewOptions,
     strategy: S,
 ) -> Result<ReviewReport> {
+    if options.auxiliary.is_some() {
+        return Err(anyhow!(
+            "local auxiliary evidence must be attached after source-review identity binding; run_review cannot consume it"
+        ));
+    }
     let ReviewOptions {
         auxiliary: _,
         max_follow_ups,

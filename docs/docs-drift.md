@@ -20,6 +20,13 @@ line. Simple fixed positional parameter lists support argument-count checks.
 It does not evaluate argument types, return values, behavioral contracts,
 feature selection, or the success of an actual example compilation.
 
+Crate-level or item-level `cfg(...)` gates keep the interface conditional and
+produce unknown evidence. Benign `cfg_attr` payloads such as
+`feature(doc_cfg)`, `no_std` and `doc(cfg(...))` still allow structural
+comparisons. A `cfg_attr` that applies `cfg(...)`, including through nested
+`cfg_attr`, remains conditional. Multiline attributes are handled; malformed
+or excessively nested conditional attributes remain unknown.
+
 An example must establish its source identity: use an exact crate-qualified
 call such as `crate::api::connect()`, or reference the source file from the document
 with a Markdown link or exact backticked path and use an unqualified call.
@@ -71,6 +78,16 @@ outside the initial recognizer. Excluded files and inventory limits must also
 be recorded by the review's repository loader; a bounded inventory is not a
 complete API graph.
 
+Unsupported Rust declaration diagnostics are scoped to source paths referenced
+by the checked documents or their crate-qualified example calls. Unrelated
+generic, multiline or conditional functions do not make a supported example's
+comparison incomplete. Every unresolved example call still records its own
+unknown; the scoped diagnostics do not establish coverage of undocumented APIs.
+Current Rust files are lexed once to index exact identifier tokens and opaque
+exports, so repeated stale calls reuse that evidence without rescanning the
+repository. Comments, string literals and longer identifiers cannot establish
+a replacement reference.
+
 Findings use the existing correctness dimension and comment action. They pass
 through the review's ordinary fingerprint and suppression behavior, so an
 accepted suppression is consistent with other review findings. Suppression
@@ -83,5 +100,6 @@ unchanged examples, removed and renamed functions, file moves and re-exports,
 relative links and module-qualified calls, valid argument counts, comments
 and string literals, nested declarations, unsupported syntax and ecosystems,
 conditional interfaces, shadowed names, deleted documents, incomplete fences,
-and secret redaction. To validate a reported mismatch fully, compile the
+repeated stale calls, unrelated unsupported declarations, and secret redaction.
+To validate a reported mismatch fully, compile the
 corrected example against the intended crate and build configuration.

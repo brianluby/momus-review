@@ -426,6 +426,124 @@ fn auxiliary_evidence_includes_docs_manifests_renames_and_removals() {
 }
 
 #[test]
+fn committed_context_is_bounded_and_rejects_ambiguous_identity() {
+    let (_dir, repo) = fixture_repo();
+    for index in 0..1600 {
+        write(
+            &repo,
+            &format!("src/file{index}.rs"),
+            &format!("pub fn f{index}() {{}}\n"),
+        );
+    }
+    run_git(&repo, &["add", "-A"]);
+    run_git(&repo, &["commit", "-qm", "many blobs"]);
+    let head = git::head_sha(&repo).unwrap();
+    let files =
+        git::repository_files_at(std::slice::from_ref(&repo), &Exclude::default(), &head).unwrap();
+    assert_eq!(files.len(), 1600);
+    assert!(
+        files
+            .iter()
+            .any(|file| file.path == "src/file1599.rs" && file.content == "pub fn f1599() {}\n")
+    );
+    for invalid in ["HEAD", "--help", &head[..7]] {
+        assert!(
+            git::repository_files_at(std::slice::from_ref(&repo), &Exclude::default(), invalid)
+                .is_err()
+        );
+    }
+    write(&repo, "src/huge.rs", &"x".repeat(10_000_001));
+    run_git(&repo, &["add", "-A"]);
+    run_git(&repo, &["commit", "-qm", "oversized context"]);
+    let head = git::head_sha(&repo).unwrap();
+    let error = git::repository_files_at(std::slice::from_ref(&repo), &Exclude::default(), &head)
+        .unwrap_err();
+    assert!(error.to_string().contains("inventory limits"));
+}
+
+#[test]
+fn unreadable_source_baseline_is_never_reinterpreted_as_an_addition() {
+    let (_dir, repo) = fixture_repo();
+    fs::write(repo.join("source.rs"), [0xff, 0x00, 0x80]).unwrap();
+    run_git(&repo, &["add", "-A"]);
+    run_git(&repo, &["commit", "-qm", "binary source baseline"]);
+    write(&repo, "source.rs", "pub fn readable_now() {}\n");
+    let error = git::changed_files(std::slice::from_ref(&repo), &Exclude::default()).unwrap_err();
+    assert!(format!("{error:#}").contains("base source evidence"));
+}
+
+#[test]
+fn evidence_total_budget_counts_both_retained_current_copies() {
+    let (_dir, repo) = fixture_repo();
+    write(&repo, "README.md", "old");
+    run_git(&repo, &["add", "-A"]);
+    run_git(&repo, &["commit", "-qm", "base"]);
+    write(&repo, "README.md", "new!");
+    for (budget, expected_files) in [(7, 0), (11, 1)] {
+        let evidence = git::repository_evidence(
+            std::slice::from_ref(&repo),
+            &Exclude::default(),
+            None,
+            100,
+            1000,
+            budget,
+        )
+        .unwrap();
+        assert_eq!(evidence.files.len(), expected_files);
+        assert_eq!(evidence.changes.len(), expected_files);
+        assert_eq!(evidence.unknowns.is_empty(), expected_files == 1);
+    }
+}
+
+#[test]
+fn unreadable_removed_base_evidence_does_not_abort_other_changes() {
+    let (_dir, repo) = fixture_repo();
+    fs::write(repo.join("bun.lockb"), [0xff, 0xfe, 0x80]).unwrap();
+    write(&repo, "CHANGELOG.md", "binary\0base");
+    write(&repo, "README.md", "old\n");
+    run_git(&repo, &["add", "-A"]);
+    run_git(&repo, &["commit", "-qm", "binary baseline"]);
+    fs::remove_file(repo.join("bun.lockb")).unwrap();
+    fs::remove_file(repo.join("CHANGELOG.md")).unwrap();
+    write(&repo, "README.md", "current\n");
+    write(&repo, "extra.rs", "pub fn extra() {}\n");
+    let evidence = git::repository_evidence(
+        std::slice::from_ref(&repo),
+        &Exclude::default(),
+        None,
+        100,
+        1000,
+        10000,
+    )
+    .unwrap();
+    assert!(
+        evidence
+            .unknowns
+            .iter()
+            .any(|s| s.contains("bun.lockb: unreadable base"))
+    );
+    assert!(
+        evidence
+            .unknowns
+            .iter()
+            .any(|s| s.contains("CHANGELOG.md: binary base"))
+    );
+    assert_eq!(evidence.changes.len(), 2);
+    assert!(
+        evidence
+            .changes
+            .iter()
+            .any(|c| c.path == "README.md" && c.base == "old\n")
+    );
+    assert!(
+        evidence
+            .changes
+            .iter()
+            .any(|c| c.path == "extra.rs" && c.base.is_empty())
+    );
+}
+
+#[test]
 fn auxiliary_limits_exclusions_binary_and_unsafe_paths_remain_explicit() {
     use std::os::unix::fs::symlink;
     let (_dir, repo) = fixture_repo();

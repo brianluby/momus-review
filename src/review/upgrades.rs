@@ -26,6 +26,7 @@ pub struct UpgradeSummary {
 #[serde(rename_all = "camelCase")]
 pub struct UpgradeEvidence {
     pub path: String,
+    /// Zero means the declaration was parsed but its source line is unknown.
     pub line: usize,
     /// `base` or `current`; removed dependencies cite the former explicitly.
     pub snapshot: String,
@@ -79,16 +80,19 @@ pub fn assess(changes: &[RepositoryChange], files: &[SourceFile]) -> UpgradeSumm
         };
         let before = parse(name, &change.base);
         let after = parse(name, change.content.as_deref().unwrap_or_default());
-        let (Ok(mut before), Ok(mut after)) = (before.clone(), after.clone()) else {
-            for (snapshot, result) in [("base", &before), ("current", &after)] {
-                if let Err(reason) = result {
-                    summary.unknowns.push(format!(
-                        "{} ({snapshot}): {reason}; no dependency comparison was inferred",
-                        change.path
-                    ));
+        let (mut before, mut after) = match (before, after) {
+            (Ok(before), Ok(after)) => (before, after),
+            (before, after) => {
+                for (snapshot, result) in [("base", before), ("current", after)] {
+                    if let Err(reason) = result {
+                        summary.unknowns.push(format!(
+                            "{} ({snapshot}): {reason}; no dependency comparison was inferred",
+                            change.path
+                        ));
+                    }
                 }
+                continue;
             }
-            continue;
         };
         if name == "Cargo.lock" {
             pair_cargo_versions(&mut before, &mut after, &mut summary.unknowns, &change.path);
@@ -193,6 +197,14 @@ fn record(
             dep.line,
         ));
     }
+    for entry in &evidence {
+        if entry.line == 0 {
+            summary.unknowns.push(format!(
+                "{} ({}): {} ({scope}) declaration line could not be located; parsed dependency metadata is retained without an exact citation",
+                entry.path, entry.snapshot, dep.name
+            ));
+        }
+    }
     let release = new.and_then(|d| exact_version(&d.version));
     let changelog =
         release.map_or_else(Vec::new, |version| release_notes(&dep.name, version, files));
@@ -250,19 +262,26 @@ fn record(
         risk,
         "removal" | "majorChange" | "preOneChange" | "downgrade" | "changelogBreakingSignal"
     ) {
-        let anchor = item
+        // Finding locations are current-side coordinates. A removed
+        // declaration has only historical evidence, so keep its exact base
+        // provenance in evidence and leave the finding unlocated (line 0).
+        // This routes the advisory to the summary and omits the SARIF region
+        // instead of attaching an old line to unrelated or absent current text.
+        let line = item
             .evidence
-            .last()
-            .expect("a dependency change has an anchor");
+            .iter()
+            .rev()
+            .find(|evidence| evidence.snapshot == "current")
+            .map_or(0, |evidence| evidence.line);
         let mut finding = Finding {
-            file: change.path.clone(), line: anchor.line, dimension: Dimension::Compatibility,
+            file: change.path.clone(), line, dimension: Dimension::Compatibility,
             action: Action::Comment, mechanism: "dependencyUpgrade".into(),
             // Probability refers to observing the signal, never to runtime failure.
-            probability: 1.0, location_confidence: 1.0, mechanism_confidence: 1.0,
+            probability: 1.0, location_confidence: if line == 0 { 0.0 } else { 1.0 }, mechanism_confidence: 1.0,
             severity: 1.0, severity_confidence: 1.0,
-            evidence: item.evidence.iter().chain(&item.changelog).map(|e| format!(
-                "{}:{} ({}) {}", e.path, e.line, e.snapshot, e.text
-            )).collect::<Vec<_>>().join("\n"),
+            evidence: item.evidence.iter().chain(&item.changelog).map(|e| if e.line == 0 {
+                format!("{} ({}; declaration line unavailable)", e.path, e.snapshot)
+            } else { format!("{}:{} ({}) {}", e.path, e.line, e.snapshot, e.text) }).collect::<Vec<_>>().join("\n"),
             title: Some(format!("Review {} dependency {}: {risk}", item.ecosystem, item.dependency)),
             why: Some("Visible version/removal/release-note evidence requires compatibility review; this signal does not establish a runtime defect or estimate breakage probability.".into()),
             fix: Some("Check affected callers and all intervening upstream release notes; apply required migrations or retain the previous dependency until compatibility is verified.".into()),
@@ -410,7 +429,7 @@ fn cargo_tables(
                         name,
                         version,
                         configuration,
-                        line: cargo_declaration_line(content, &path, alias),
+                        line: cargo_declaration_line(content, &path, alias).unwrap_or(0),
                     },
                 );
             }
@@ -543,7 +562,7 @@ fn npm_manifest(content: &str) -> Result<Dependencies, String> {
                     name: actual_name,
                     version: actual_version,
                     configuration: String::new(),
-                    line: json_property_line(content, &[scope, name]),
+                    line: json_property_line(content, &[scope, name]).unwrap_or(0),
                 },
             );
         }
@@ -590,7 +609,7 @@ fn npm_lock(content: &str) -> Result<Dependencies, String> {
                     name: name.into(),
                     version: version.into(),
                     configuration: String::new(),
-                    line: json_property_line(content, &["packages", path, "version"]),
+                    line: json_property_line(content, &["packages", path, "version"]).unwrap_or(0),
                 },
             );
         }
@@ -639,7 +658,7 @@ fn npm_v1(
                 name: actual_name,
                 version: actual_version,
                 configuration: String::new(),
-                line: json_property_line(content, &key_refs),
+                line: json_property_line(content, &key_refs).unwrap_or(0),
             },
         );
         keys.pop();
@@ -653,7 +672,12 @@ fn npm_v1(
     Ok(())
 }
 
-fn cargo_declaration_line(content: &str, scope: &str, name: &str) -> usize {
+fn cargo_declaration_line(content: &str, scope: &str, name: &str) -> Option<usize> {
+    // Line scanning cannot distinguish section-like text inside TOML
+    // multiline strings from declarations. Abstain rather than cite it.
+    if content.contains("\"\"\"") || content.contains("'''") {
+        return None;
+    }
     let mut section = String::new();
     let mut table_anchor = None;
     for (index, line) in content.lines().enumerate() {
@@ -673,7 +697,7 @@ fn cargo_declaration_line(content: &str, scope: &str, name: &str) -> usize {
                 .strip_prefix("version")
                 .is_some_and(|rest| rest.trim_start().starts_with('='))
         {
-            return index + 1;
+            return Some(index + 1);
         }
         if section == scope
             && (line
@@ -682,10 +706,10 @@ fn cargo_declaration_line(content: &str, scope: &str, name: &str) -> usize {
                 || line.starts_with(&format!("\"{name}\""))
                 || line.starts_with(&format!("'{name}'")))
         {
-            return index + 1;
+            return Some(index + 1);
         }
     }
-    table_anchor.unwrap_or(1)
+    table_anchor
 }
 
 fn npm_alias(name: &str, version: &str) -> (String, String) {
@@ -703,7 +727,10 @@ fn npm_alias(name: &str, version: &str) -> (String, String) {
 /// Locate a property in a validated JSON document by its object path. Parsing
 /// string boundaries prevents repeated names in distinct dependency groups
 /// from citing the first unrelated occurrence.
-fn json_property_line(content: &str, keys: &[&str]) -> usize {
+fn json_property_line(content: &str, keys: &[&str]) -> Option<usize> {
+    if keys.is_empty() {
+        return None;
+    }
     let bytes = content.as_bytes();
     let mut start = 0;
     let mut end = bytes.len();
@@ -714,7 +741,7 @@ fn json_property_line(content: &str, keys: &[&str]) -> usize {
             cursor += 1;
         }
         if bytes.get(cursor) != Some(&b'{') {
-            return 1;
+            return None;
         }
         cursor += 1;
         let mut found = None;
@@ -727,8 +754,7 @@ fn json_property_line(content: &str, keys: &[&str]) -> usize {
             }
             let key_start = cursor;
             let key_end = json_value_end(bytes, cursor, end);
-            let key: String =
-                serde_json::from_str(&content[key_start..key_end]).unwrap_or_default();
+            let key: String = serde_json::from_str(&content[key_start..key_end]).ok()?;
             cursor = key_end;
             while cursor < end && (bytes[cursor].is_ascii_whitespace() || bytes[cursor] == b':') {
                 cursor += 1;
@@ -736,23 +762,27 @@ fn json_property_line(content: &str, keys: &[&str]) -> usize {
             let value_start = cursor;
             let value_end = json_value_end(bytes, cursor, end);
             if key == *wanted {
+                // serde_json accepts duplicate keys with last-wins semantics.
+                // A non-unique declaration cannot safely cite the first key.
+                if found.is_some() {
+                    return None;
+                }
                 found = Some((key_start, value_start, value_end));
-                break;
             }
             cursor = value_end;
         }
-        let Some((position, value_start, value_end)) = found else {
-            return 1;
-        };
+        let (position, value_start, value_end) = found?;
         anchor = position;
         start = value_start;
         end = value_end;
     }
-    content[..anchor]
-        .bytes()
-        .filter(|byte| *byte == b'\n')
-        .count()
-        + 1
+    Some(
+        content[..anchor]
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count()
+            + 1,
+    )
 }
 
 fn json_value_end(bytes: &[u8], start: usize, end: usize) -> usize {
@@ -793,15 +823,14 @@ fn json_value_end(bytes: &[u8], start: usize, end: usize) -> usize {
 }
 
 fn location(path: &str, snapshot: &str, text: &str, line: usize) -> UpgradeEvidence {
+    let excerpt = line
+        .checked_sub(1)
+        .and_then(|index| text.lines().nth(index));
     UpgradeEvidence {
         path: path.into(),
         snapshot: snapshot.into(),
-        line,
-        text: text
-            .lines()
-            .nth(line.saturating_sub(1))
-            .unwrap_or_default()
-            .into(),
+        line: if excerpt.is_some() { line } else { 0 },
+        text: excerpt.unwrap_or_default().into(),
     }
 }
 
@@ -1296,5 +1325,149 @@ mod tests {
                 .iter()
                 .any(|s| s.contains("unsupported npm lockfileVersion"))
         );
+    }
+    #[test]
+    fn removed_dependencies_keep_base_provenance_without_current_side_anchors() {
+        use crate::domain::github_review::{Posted, PrFile, SummaryReason, plan};
+        use crate::domain::report::ReviewReport;
+        let base = "# former preamble\n\n[dependencies]\nremoved = '1.0.0'\n";
+        let current = "[dependencies]\n\n\n# unrelated current line four\n";
+        let shifted = change("Cargo.toml", base, Some(current));
+        let deleted = change("old/Cargo.toml", base, None);
+        let mut renamed = change("new/Cargo.toml", base, Some(current));
+        renamed.old_path = Some("original/Cargo.toml".into());
+        for input in [shifted, deleted, renamed] {
+            let summary = assess(std::slice::from_ref(&input), &[]);
+            let finding = &summary.findings[0];
+            assert_eq!(finding.line, 0);
+            assert_eq!(finding.location_confidence, 0.0);
+            let expected_base_path = input.old_path.as_deref().unwrap_or(&input.path);
+            assert_eq!(summary.changes[0].evidence[0].path, expected_base_path);
+            assert_eq!(summary.changes[0].evidence[0].snapshot, "base");
+            assert_eq!(summary.changes[0].evidence[0].line, 4);
+            assert!(
+                finding
+                    .evidence
+                    .contains(&format!("{expected_base_path}:4 (base) removed = '1.0.0'"))
+            );
+            let report = ReviewReport {
+                findings: summary.findings,
+                ..Default::default()
+            };
+            // Old line 4 is deliberately commentable on the current side:
+            // copying the base coordinate would publish against unrelated text.
+            let pr_files = [PrFile {
+                filename: input.path,
+                patch: Some(if input.content.is_none() {
+                    "@@ -1,4 +0,0 @@\n-# former preamble\n-\n-[dependencies]\n-removed = '1.0.0'"
+                        .into()
+                } else {
+                    "@@ -4 +4 @@\n-removed = '1.0.0'\n+# unrelated current line four".into()
+                }),
+            }];
+            let publish = plan(&report, &pr_files, &Posted::default(), 10);
+            assert!(publish.inline.is_empty());
+            assert_eq!(publish.summary_only[0].1, SummaryReason::OutsideDiff);
+            let sarif = crate::adapters::sarif::to_sarif(&report);
+            assert!(
+                sarif["runs"][0]["results"][0]["locations"][0]["physicalLocation"]
+                    .get("region")
+                    .is_none()
+            );
+        }
+        let summary = assess(&[npm("1.0.0", "2.0.0")], &[]);
+        assert_eq!(
+            summary.findings[0].line,
+            summary.changes[0].evidence[1].line
+        );
+        assert_eq!(summary.findings[0].location_confidence, 1.0);
+    }
+
+    #[test]
+    fn decoded_manifest_without_a_unique_source_location_stays_unlocated() {
+        // These are valid decoder inputs, beyond the line scanner's syntax.
+        for (base, current) in [
+            (
+                "# unrelated header\n[dependencies]\n\"l\\u0069b\" = '1.0.0'\n",
+                "# unrelated header\n[dependencies]\n\"l\\u0069b\" = '2.0.0'\n",
+            ),
+            (
+                "# unrelated header\ndependencies = { lib = '1.0.0' }\n",
+                "# unrelated header\ndependencies = { lib = '2.0.0' }\n",
+            ),
+        ] {
+            let summary = assess(&[change("Cargo.toml", base, Some(current))], &[]);
+            assert_eq!(summary.changes[0].dependency, "lib");
+            assert_eq!(summary.changes[0].new_version.as_deref(), Some("2.0.0"));
+            assert_eq!(summary.findings[0].line, 0);
+            assert_eq!(summary.findings[0].location_confidence, 0.0);
+            assert!(
+                summary.changes[0]
+                    .evidence
+                    .iter()
+                    .all(|entry| entry.line == 0 && entry.text.is_empty())
+            );
+            assert!(
+                summary
+                    .unknowns
+                    .iter()
+                    .any(|reason| reason.contains("declaration line could not be located"))
+            );
+            assert!(!summary.findings[0].evidence.contains("unrelated header"));
+            assert!(
+                summary.findings[0]
+                    .evidence
+                    .contains("current; declaration line unavailable")
+            );
+        }
+        let body = "{\n\"dependencies\": {\n\"lib\": \"0.2.0\",\n\"\\u006cib\": \"2.0.0\"\n}\n}";
+        let summary = assess(
+            &[change(
+                "package.json",
+                r#"{"dependencies":{"lib":"1.0.0"}}"#,
+                Some(body),
+            )],
+            &[],
+        );
+        // The JSON decoder chooses the last duplicate key. Neither the first
+        // key nor line 1 is a defensible exact declaration citation.
+        assert_eq!(summary.changes[0].new_version.as_deref(), Some("2.0.0"));
+        assert_eq!(summary.changes[0].evidence[1].line, 0);
+        assert!(summary.changes[0].evidence[1].text.is_empty());
+        assert_eq!(summary.findings[0].line, 0);
+        assert!(
+            summary
+                .unknowns
+                .iter()
+                .any(|reason| reason.contains("current")
+                    && reason.contains("declaration line could not be located"))
+        );
+    }
+
+    #[test]
+    fn locator_abstention_and_multiline_literal_do_not_fabricate_citations() {
+        assert_eq!(json_property_line("{\"present\":1}", &["absent"]), None);
+        assert_eq!(
+            json_property_line("{\"present\":1}", &["present", "absent"]),
+            None
+        );
+        let escaped = "{\n\"dependencies\": {\n\"l\\u0069b\": \"2.0.0\"\n}\n}";
+        assert_eq!(
+            json_property_line(escaped, &["dependencies", "lib"]),
+            Some(3)
+        );
+        let misleading = "[package]\ndescription = '''\n[dependencies]\nlib='99.0.0'\n'''\n[dependencies]\nlib='2.0.0'\n";
+        assert_eq!(
+            parse("Cargo.toml", misleading).unwrap()["dependencies/lib"].version,
+            "2.0.0"
+        );
+        assert_eq!(
+            cargo_declaration_line(misleading, "dependencies", "lib"),
+            None
+        );
+        let absent = location("package.json", "current", "unrelated first line", 0);
+        assert_eq!(absent.line, 0);
+        assert!(absent.text.is_empty());
+        assert_eq!(location("package.json", "current", "one line", 9).line, 0);
     }
 }

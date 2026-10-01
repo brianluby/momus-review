@@ -31,6 +31,7 @@ for i in range(100):
     })
 
 write("synthetic-history.json", {
+    "heuristicVersion": 1,
     "repository": "fixture/repository",
     "provenance": "generate.py deterministic fabricated data; no real-world calibration",
     "synthetic": True,

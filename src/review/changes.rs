@@ -103,8 +103,9 @@ impl ReviewStrategy for ChangesStrategy {
 
     /// Index current source bytes and map related changed tests before concurrent judgments.
     fn prepass(&self, scopes: &[PathBuf], discovery: &Discovery<ChangedFile>) -> Result<()> {
-        // Best-effort index discovery: changed-file review remains available
-        // even when a full-tree pre-pass cannot read the repository inventory.
+        // Working-tree indexing is best effort. Committed-only review must
+        // establish complete immutable source/test context or fail before API
+        // work; silently dropping it could authorize an incomplete approval.
         let repository = if let Some(head) = &self.committed_head {
             git::repository_files_at(scopes, &self.exclude, head)?
         } else {

@@ -834,6 +834,19 @@ fn tour_is_offline_redacted_bounded_and_excludes_paths() {
     assert!(!text.contains("excluded.rs"));
     let tour: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert!(
+        tour.get("head")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|head| !head.is_empty())
+    );
+    assert_eq!(tour.get("partial"), Some(&serde_json::json!(true)));
+    assert!(
+        tour.get("basis")
+            .and_then(serde_json::Value::as_str)
+            .unwrap()
+            .contains("Working-tree RepoIndex")
+    );
+    assert!(tour.get("unknowns").and_then(serde_json::Value::as_array).unwrap().iter().any(|reason| reason.as_str().is_some_and(|text| text.starts_with("Tour describes uncommitted or untracked working-tree evidence; head identifies the checkout baseline"))));
+    assert!(
         tour["stops"]
             .as_array()
             .unwrap()
@@ -864,10 +877,32 @@ fn dependency_only_review_runs_local_triage_without_api() {
     assert_eq!(report["usage"]["calls"], 0);
     assert!(!report["upgrades"]["changes"].as_array().unwrap().is_empty());
     assert!(report["partial"].as_bool().unwrap());
+    let outcomes = report
+        .get("mergeConfidence")
+        .and_then(|summary| summary.get("outcomes"))
+        .and_then(serde_json::Value::as_array)
+        .expect("confidence must contain the outcome array");
     assert_eq!(
-        report["mergeConfidence"]["outcomes"][0]["probability"],
-        serde_json::Value::Null
+        outcomes.len(),
+        3,
+        "all independent outcomes must remain present"
     );
+    let names: std::collections::BTreeSet<_> = outcomes
+        .iter()
+        .map(|outcome| {
+            assert_eq!(
+                outcome.get("probability"),
+                Some(&serde_json::Value::Null),
+                "missing history must be a present unknown probability"
+            );
+            assert_eq!(outcome.get("status"), Some(&serde_json::json!("unknown")));
+            outcome
+                .get("outcome")
+                .and_then(serde_json::Value::as_str)
+                .expect("outcome name must exist")
+        })
+        .collect();
+    assert_eq!(names, ["revert", "incident", "flake"].into_iter().collect());
     assert!(!report["findings"].as_array().unwrap().is_empty());
 }
 
@@ -993,6 +1028,121 @@ fn confidence_fixture_reports_synthetic_limits_and_rejects_approval() {
     );
     let summary: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(summary["synthetic"], true);
+    assert_eq!(
+        summary
+            .get("approval")
+            .and_then(|approval| approval.get("enabled")),
+        Some(&serde_json::json!(true)),
+        "the synthetic rejection must exercise an enabled opt-in policy"
+    );
     assert_eq!(summary["approval"]["eligible"], false);
+    assert!(
+        summary
+            .get("approval")
+            .and_then(|approval| approval.get("reasons"))
+            .and_then(serde_json::Value::as_array)
+            .expect("rejection reasons must be present")
+            .iter()
+            .any(|reason| reason
+                .as_str()
+                .is_some_and(|text| text.to_lowercase().contains("synthetic"))),
+        "enabled policy must reject because history is synthetic: {summary}"
+    );
     assert_eq!(summary["outcomes"][0]["status"], "syntheticDemonstration");
+}
+
+/// A provider can return a finite score outside the advertised severity
+/// rubric. Confidence estimation must fail closed without losing the source
+/// review that has already completed or its saved findings.
+#[tokio::test(flavor = "multi_thread")]
+async fn invalid_model_severity_preserves_completed_review_without_confidence() {
+    use axum::{Json, Router, routing::post};
+    use serde_json::{Value, json};
+    let app = Router::new().route("/v1/systemone", post(|Json(body): Json<Value>| async move {
+        let answers: serde_json::Map<String, Value> = body["questions"].as_object().unwrap().iter().map(|(id, question)| {
+            let answer = match question["type"].as_str().unwrap() {
+                "noul" => json!({"noul": if id == "correctness" || id == "supported" {0.95} else {0.1}}),
+                "score" => json!({"score": if id == "severity" {4.0} else {1.0}, "confidence":0.95}),
+                "choice" => {
+                    let criteria = question["criteria"].as_object().unwrap();
+                    let selected = if id == "mechanism" { "condition" }
+                        else if id == "owner" { "maintainer" }
+                        else { criteria.keys().find(|key| key.as_str() != "noMatch").unwrap().as_str() };
+                    assert!(criteria.contains_key(selected));
+                    json!({"choice":selected,"confidence":0.95})
+                }
+                _ => panic!("unexpected question type"),
+            };
+            (id.clone(), answer)
+        }).collect();
+        Json(json!({"model":"out-of-scale-stub","answers":answers}))
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let dir = config_only_branch();
+    fs::write(
+        dir.path().join("bug.rs"),
+        "pub fn accepts(value: i32) -> bool { value < 0 }\n",
+    )
+    .unwrap();
+    let repo = dir.path().to_path_buf();
+    let out = tokio::task::spawn_blocking(move || {
+        Command::new(env!("CARGO_BIN_EXE_momus"))
+            .args(["review", "--no-refine", "--no-cache"])
+            .current_dir(&repo)
+            .env_remove("TYPESAFE_API_KEY")
+            .env("TYPESAFE_BASE_URL", url)
+            .env("MOMUS_REPORT", repo.join("report.json"))
+            .env("MOMUS_CONCURRENCY", "1")
+            .env_remove("MOMUS_CONTEXT_BUDGET_CHARS")
+            .output()
+            .expect("momus runs")
+    })
+    .await
+    .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "completed review must still be persisted: {stderr}"
+    );
+    let report: Value =
+        serde_json::from_slice(&out.stdout).expect("stdout must contain the completed report");
+    let saved: Value = serde_json::from_slice(
+        &fs::read(dir.path().join("report.json")).expect("completed report must be saved"),
+    )
+    .unwrap();
+    assert_eq!(saved, report);
+    assert_eq!(report.get("partial"), Some(&json!(true)));
+    assert!(
+        report.get("mergeConfidence").is_none(),
+        "invalid scoring evidence cannot produce estimates or approval: {report}"
+    );
+    let findings = report.get("findings").and_then(Value::as_array).unwrap();
+    assert_eq!(
+        findings.len(),
+        1,
+        "completed source-review evidence must be preserved: {report}"
+    );
+    assert_eq!(findings[0].get("file"), Some(&json!("bug.rs")));
+    assert_eq!(findings[0].get("severity"), Some(&json!(4.0)));
+    assert!(
+        !findings[0]
+            .get("evidence")
+            .and_then(Value::as_str)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        report
+            .get("skipped")
+            .and_then(Value::as_array)
+            .unwrap()
+            .is_empty(),
+        "no source-review request failed"
+    );
+    assert!(
+        stderr.contains("merge outcome assessment unavailable"),
+        "assessment failure must be disclosed: {stderr}"
+    );
 }

@@ -50,6 +50,20 @@ struct Interface {
     evidence: DocsEvidence,
 }
 
+struct PreparedExample {
+    line: usize,
+    original: String,
+    clean: String,
+    shadowed: BTreeSet<String>,
+    wildcard_import: bool,
+}
+
+struct PreparedDocument<'a> {
+    path: &'a str,
+    links: BTreeSet<String>,
+    examples: Vec<PreparedExample>,
+}
+
 static DECLARATION: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^pub\s+(?:(?:async|unsafe|const)\s+)*fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^()]*)\)")
         .expect("valid declaration pattern")
@@ -97,26 +111,73 @@ pub fn assess(changes: &[RepositoryChange], files: &[SourceFile]) -> DocsDriftSu
         .filter(|change| is_document(&change.path))
         .map(|change| change.path.as_str())
         .collect();
+    // Prepare each relevant document once. Unsupported declarations are useful
+    // evidence only in a source file to which these documents establish identity.
+    let mut relevant_sources = BTreeSet::new();
+    let mut documents = Vec::new();
+    for (&path, &content) in &current {
+        if !is_document(path) || (!has_code_changes && !changed_docs.contains(path)) {
+            continue;
+        }
+        let links = source_links(path, content);
+        relevant_sources.extend(links.iter().cloned());
+        let examples = examples(path, content, &mut summary.unknowns)
+            .into_iter()
+            .map(|(line, original)| {
+                let clean = lexical_code(&original);
+                for captures in CALL.captures_iter(&clean) {
+                    add_qualified_sources(&captures[1], &mut relevant_sources);
+                }
+                let (shadowed, wildcard_import) = example_shadows(&clean);
+                PreparedExample {
+                    line,
+                    original,
+                    clean,
+                    shadowed,
+                    wildcard_import,
+                }
+            })
+            .collect();
+        documents.push(PreparedDocument {
+            path,
+            links,
+            examples,
+        });
+    }
     let mut interfaces: BTreeMap<String, Vec<Interface>> = BTreeMap::new();
     let mut old_interfaces: BTreeMap<String, Vec<Interface>> = BTreeMap::new();
+    let mut current_identifiers = BTreeSet::new();
+    let mut opaque_exports = false;
     for (&path, &content) in &current {
         if path.ends_with(".rs") {
-            for interface in extract_interfaces(path, content, "current", &mut summary.unknowns) {
+            let clean = lexical_code(content);
+            current_identifiers.extend(identifiers(&clean).map(str::to_owned));
+            opaque_exports |= has_opaque_exports(&clean);
+            let mut unknowns = Vec::new();
+            for interface in extract_interfaces(path, content, &clean, "current", &mut unknowns) {
                 interfaces
                     .entry(interface.name.clone())
                     .or_default()
                     .push(interface);
+            }
+            if relevant_sources.contains(path) {
+                summary.unknowns.extend(unknowns);
             }
         }
     }
     for change in changes {
         if change.path.ends_with(".rs") {
             let path = change.old_path.as_deref().unwrap_or(&change.path);
-            for interface in extract_interfaces(path, &change.base, "base", &mut summary.unknowns) {
+            let clean = lexical_code(&change.base);
+            let mut unknowns = Vec::new();
+            for interface in extract_interfaces(path, &change.base, &clean, "base", &mut unknowns) {
                 old_interfaces
                     .entry(interface.name.clone())
                     .or_default()
                     .push(interface);
+            }
+            if relevant_sources.contains(path) {
+                summary.unknowns.extend(unknowns);
             }
         } else if !is_document(&change.path) && !is_manifest(&change.path) {
             summary.unknowns.push(format!(
@@ -125,17 +186,14 @@ pub fn assess(changes: &[RepositoryChange], files: &[SourceFile]) -> DocsDriftSu
             ));
         }
     }
-    let mut doc_count = 0;
-    for (&path, &content) in &current {
-        if !is_document(path) || (!has_code_changes && !changed_docs.contains(path)) {
-            continue;
-        }
-        doc_count += 1;
-        let source_links = source_links(path, content);
-        let examples = examples(path, content, &mut summary.unknowns);
-        for (line, example) in examples {
-            let cleaned = lexical_code(&example);
-            for captures in CALL.captures_iter(&cleaned) {
+    let doc_count = documents.len();
+    for document in documents {
+        let path = document.path;
+        let source_links = document.links;
+        for example in document.examples {
+            let line = example.line;
+            let cleaned = &example.clean;
+            for captures in CALL.captures_iter(cleaned) {
                 let name = captures[2].to_string();
                 // Matching strings/comments are excluded by lexical_code. Calls
                 // inside declarations and qualified method calls are not evidence.
@@ -151,10 +209,16 @@ pub fn assess(changes: &[RepositoryChange], files: &[SourceFile]) -> DocsDriftSu
                         .bytes()
                         .filter(|&b| b == b'\n')
                         .count();
-                let text = example.lines().nth(doc_line - line).unwrap_or_default();
+                let text = example
+                    .original
+                    .lines()
+                    .nth(doc_line - line)
+                    .unwrap_or_default();
                 let documentation = evidence(path, doc_line, "current", text);
                 let qualified = &captures[1];
-                if qualified.is_empty() && example_shadows(&cleaned, &name) {
+                if qualified.is_empty()
+                    && (example.wildcard_import || example.shadowed.contains(&name))
+                {
                     record_unknown(
                         &mut summary,
                         name,
@@ -205,19 +269,10 @@ pub fn assess(changes: &[RepositoryChange], files: &[SourceFile]) -> DocsDriftSu
                     // A move, re-export, macro, private function or another matching
                     // declaration leaves identity unresolved. Do not use repository
                     // absence as proof: require the exact changed file as evidence.
-                    let elsewhere = current.iter().any(|(path, text)| {
-                        path.ends_with(".rs") && contains_identifier(text, &name)
-                    });
-                    let opaque_exports = current
-                        .iter()
-                        .any(|(path, text)| path.ends_with(".rs") && has_opaque_exports(text));
-                    if !elsewhere
-                        && !opaque_exports
-                        && change
-                            .content
-                            .as_deref()
-                            .is_none_or(|body| !contains_identifier(body, &name))
-                    {
+                    // Changes already override the current inventory, so this
+                    // precomputed union also covers the changed file's contents.
+                    let elsewhere = current_identifiers.contains(&name);
+                    if !elsewhere && !opaque_exports {
                         let current_path = change.path.clone();
                         let reason = format!(
                             "Example still calls `{name}`, declared at {}:{} in base; the changed file `{current_path}` {} and no visible replacement establishes compatibility.",
@@ -289,17 +344,15 @@ fn evidence(path: &str, line: usize, revision: &str, text: &str) -> DocsEvidence
 fn extract_interfaces(
     path: &str,
     content: &str,
+    clean: &str,
     revision: &str,
     unknowns: &mut Vec<String>,
 ) -> Vec<Interface> {
-    let clean = lexical_code(content);
     let original: Vec<_> = content.lines().collect();
     let mut depth: i64 = 0;
     let mut conditional = false;
     let mut attribute_depth = 0i64;
-    let crate_conditional = clean
-        .lines()
-        .any(|line| line.trim_start().starts_with("#![cfg"));
+    let (conditional_lines, crate_conditional) = conditional_attributes(clean);
     let mut out = Vec::new();
     for (index, line) in clean.lines().enumerate() {
         if depth == 0 {
@@ -308,7 +361,7 @@ fn extract_interfaces(
                 attribute_depth += line.bytes().filter(|&b| b == b'[').count() as i64;
                 attribute_depth -= line.bytes().filter(|&b| b == b']').count() as i64;
             }
-            if line.trim_start().starts_with("#[cfg") {
+            if conditional_lines.contains(&index) {
                 conditional = true;
             }
             if let Some(captures) = DECLARATION.captures(line) {
@@ -354,6 +407,120 @@ fn extract_interfaces(
         depth -= line.bytes().filter(|&b| b == b'}').count() as i64;
     }
     out
+}
+
+/// Distinguish cfg from cfg_attr, including multiline and nested payloads.
+/// Benign cfg_attr features/no_std/doc attributes do not remove declarations;
+/// a cfg payload (even nested in cfg_attr) can and remains unknown.
+fn conditional_attributes(clean: &str) -> (BTreeSet<usize>, bool) {
+    let lines: Vec<_> = clean.lines().collect();
+    let mut conditional_lines = BTreeSet::new();
+    let mut crate_conditional = false;
+    let mut scope_depth = 0i64;
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        let attribute = trimmed
+            .strip_prefix("#![")
+            .map(|body| (true, body))
+            .or_else(|| trimmed.strip_prefix("#[").map(|body| (false, body)));
+        if scope_depth == 0
+            && let Some((inner, first)) = attribute
+        {
+            let mut body = String::new();
+            let mut depth = 1i64;
+            let mut complete = false;
+            'attribute: for fragment in
+                std::iter::once(first).chain(lines[index + 1..].iter().copied())
+            {
+                for ch in fragment.chars() {
+                    if ch == '[' {
+                        depth += 1;
+                    }
+                    if ch == ']' {
+                        depth -= 1;
+                    }
+                    if depth == 0 {
+                        complete = true;
+                        break 'attribute;
+                    }
+                    body.push(ch);
+                }
+                body.push('\n');
+            }
+            if cfg_attribute_may_disable(&body, complete) {
+                if inner {
+                    crate_conditional = true;
+                } else {
+                    conditional_lines.insert(index);
+                }
+            }
+        }
+        scope_depth += line.bytes().filter(|&byte| byte == b'{').count() as i64;
+        scope_depth -= line.bytes().filter(|&byte| byte == b'}').count() as i64;
+    }
+    (conditional_lines, crate_conditional)
+}
+
+fn cfg_attribute_may_disable(body: &str, complete: bool) -> bool {
+    cfg_meta_may_disable(body, complete, 0)
+}
+
+fn cfg_meta_may_disable(body: &str, complete: bool, nesting: usize) -> bool {
+    if nesting >= 32 {
+        return true;
+    }
+    let body = body.trim();
+    let end = body
+        .find(|ch: char| !ch.is_alphanumeric() && ch != '_')
+        .unwrap_or(body.len());
+    match &body[..end] {
+        "cfg" => true,
+        "cfg_attr" => {
+            if !complete {
+                return true;
+            }
+            let Some(args) = body[end..]
+                .trim()
+                .strip_prefix('(')
+                .and_then(|args| args.strip_suffix(')'))
+            else {
+                return true;
+            };
+            let mut depth = 0i64;
+            let mut parts = Vec::new();
+            let mut start = 0;
+            for (offset, ch) in args.char_indices() {
+                match ch {
+                    '(' | '[' | '{' => depth += 1,
+                    ')' | ']' | '}' => depth -= 1,
+                    ',' if depth == 0 => {
+                        parts.push(&args[start..offset]);
+                        start = offset + 1;
+                    }
+                    _ => {}
+                }
+                if depth < 0 {
+                    return true;
+                }
+            }
+            if depth != 0 {
+                return true;
+            }
+            parts.push(&args[start..]);
+            if parts.len() < 2 || parts[0].trim().is_empty() {
+                return true;
+            }
+            let payloads: Vec<_> = parts[1..]
+                .iter()
+                .filter(|part| !part.trim().is_empty())
+                .collect();
+            payloads.is_empty()
+                || payloads
+                    .iter()
+                    .any(|payload| cfg_meta_may_disable(payload, true, nesting + 1))
+        }
+        _ => false,
+    }
 }
 
 /// Blank comments/string bodies while preserving byte positions and newlines.
@@ -520,32 +687,46 @@ fn associated_source(path: &str, qualified: &str, links: &BTreeSet<String>) -> b
     qualified == expected
 }
 
-fn contains_identifier(text: &str, identifier: &str) -> bool {
-    lexical_code(text)
-        .split(|ch: char| !ch.is_alphanumeric() && ch != '_')
-        .any(|token| token == identifier)
+fn add_qualified_sources(qualified: &str, sources: &mut BTreeSet<String>) {
+    if qualified == "crate::" {
+        sources.extend(["src/lib.rs".into(), "src/main.rs".into()]);
+    } else if let Some(module) = qualified
+        .strip_prefix("crate::")
+        .and_then(|module| module.strip_suffix("::"))
+    {
+        let module = module.replace("::", "/");
+        sources.insert(format!("src/{module}.rs"));
+        sources.insert(format!("src/{module}/mod.rs"));
+    }
 }
 
-fn example_shadows(text: &str, name: &str) -> bool {
-    if IMPORT
-        .find_iter(text)
-        .any(|import| import.as_str().contains('*') || contains_identifier(import.as_str(), name))
-    {
-        return true;
+/// Tokens from already-cleaned Rust; comments and literals must be removed first.
+fn identifiers(clean: &str) -> impl Iterator<Item = &str> {
+    clean
+        .split(|ch: char| !ch.is_alphanumeric() && ch != '_')
+        .filter(|token| !token.is_empty())
+}
+
+fn example_shadows(clean: &str) -> (BTreeSet<String>, bool) {
+    let mut shadowed = BTreeSet::new();
+    let mut wildcard_import = false;
+    for import in IMPORT.find_iter(clean) {
+        wildcard_import |= import.as_str().contains('*');
+        shadowed.extend(identifiers(import.as_str()).map(str::to_owned));
     }
-    text.lines().any(|line| {
+    for line in clean.lines() {
         let line = line.trim_start().trim_start_matches('#').trim_start();
         let declaration = line.split('=').next().unwrap_or(line);
-        let tokens: Vec<_> = declaration
-            .split(|ch: char| !ch.is_alphanumeric() && ch != '_')
-            .filter(|token| !token.is_empty())
-            .collect();
-        (tokens.first() == Some(&"let") || tokens.contains(&"fn")) && tokens.contains(&name)
-    })
+        let tokens: Vec<_> = identifiers(declaration).collect();
+        if tokens.first() == Some(&"let") || tokens.contains(&"fn") {
+            shadowed.extend(tokens.into_iter().map(str::to_owned));
+        }
+    }
+    (shadowed, wildcard_import)
 }
 
-fn has_opaque_exports(text: &str) -> bool {
-    lexical_code(text).lines().any(|line| {
+fn has_opaque_exports(clean: &str) -> bool {
+    clean.lines().any(|line| {
         let trimmed = line.trim_start();
         (trimmed.starts_with("pub use ") && trimmed.contains('*'))
             || trimmed.starts_with("include!")
@@ -768,6 +949,93 @@ mod tests {
     }
 
     #[test]
+    fn repeated_removed_calls_reuse_exact_lexical_reference_evidence() {
+        let document = docs(&"old_api();\n".repeat(128));
+        let changed = change("src/lib.rs", "pub fn old_api() {}", None);
+        let unrelated = "// old_api();\nconst TEXT: &str = r#\"old_api()\"#;\npub fn old_api_suffix() {}\n/* pub use api::*; */\nconst MACRO_TEXT: &str = \"include!(x)\";";
+        let summary = assess(
+            std::slice::from_ref(&changed),
+            &[
+                source("README.md", &document),
+                source("src/other.rs", unrelated),
+            ],
+        );
+        assert_eq!(summary.findings.len(), 128);
+        assert_eq!(summary.findings[0].line, 4);
+        assert_eq!(summary.findings[127].line, 131);
+        assert!(summary.unknowns.is_empty());
+        for replacement in [
+            "fn caller() { old_api(); }",
+            "pub use api::*;",
+            "include!(\"generated.rs\");",
+            "generate_api!();",
+        ] {
+            let summary = assess(
+                std::slice::from_ref(&changed),
+                &[
+                    source("README.md", &document),
+                    source("src/other.rs", replacement),
+                ],
+            );
+            assert!(summary.findings.is_empty(), "{replacement}");
+            assert_eq!(summary.checks.len(), 128);
+            assert!(summary.checks.iter().all(|check| check.status == "unknown"));
+        }
+    }
+
+    #[test]
+    fn unsupported_declaration_diagnostics_follow_document_source_identity() {
+        let unrelated = "pub fn generic<T>(value: T) {}\npub fn multiline(\nvalue: u32\n) {}\n#[cfg(feature = \"optional\")]\npub fn conditional() {}";
+        for document in [docs("answer();"), "```rust\ncrate::answer();\n```".into()] {
+            let summary = assess(
+                &[change("README.md", "", Some(&document))],
+                &[
+                    source("src/lib.rs", "pub fn answer(value: u32) {}"),
+                    source("src/unrelated.rs", unrelated),
+                ],
+            );
+            assert_eq!(summary.findings.len(), 1);
+            assert!(summary.unknowns.is_empty(), "{:?}", summary.unknowns);
+        }
+        // Crate-qualified module paths retain relevant unsupported diagnostics
+        // for both supported physical module layouts.
+        for path in ["src/api.rs", "src/api/mod.rs"] {
+            let document = "```rust\ncrate::api::generic();\n```";
+            let summary = assess(
+                &[change("README.md", "", Some(document))],
+                &[source(path, "pub fn generic<T>(value: T) {}")],
+            );
+            assert!(summary.findings.is_empty());
+            assert!(
+                summary
+                    .unknowns
+                    .iter()
+                    .any(|unknown| unknown.starts_with(path))
+            );
+            assert_eq!(summary.checks[0].status, "unknown");
+        }
+    }
+
+    #[test]
+    fn unsupported_base_diagnostics_are_scoped_but_unresolved_calls_stay_unknown() {
+        let summary = assess(
+            &[
+                change("README.md", "", Some(&docs("answer();"))),
+                change("src/unrelated.rs", "pub fn generic<T>(value: T) {}", None),
+            ],
+            &[source("src/lib.rs", "pub fn answer() {}")],
+        );
+        assert_eq!(summary.checks[0].status, "consistent");
+        assert!(summary.unknowns.is_empty());
+        let summary = assess(
+            &[change("README.md", "", Some("```rust\ngeneric();\n```"))],
+            &[source("src/unrelated.rs", "pub fn generic<T>(value: T) {}")],
+        );
+        assert_eq!(summary.checks[0].status, "unknown");
+        assert!(!summary.unknowns.is_empty());
+    }
+
+    #[test]
     fn moved_reexported_or_ambiguous_interfaces_abstain() {
         let mut moved = change(
             "src/new.rs",
@@ -932,6 +1200,55 @@ mod tests {
                     .unknowns
                     .iter()
                     .any(|unknown| unknown.contains("shadow"))
+            );
+        }
+    }
+
+    #[test]
+    fn benign_cfg_attr_does_not_disable_public_interface_comparisons() {
+        for attribute in [
+            "#![cfg_attr(docsrs, feature(doc_cfg))]",
+            "#![cfg_attr(not(feature = \"std\"), no_std)]",
+            "#![cfg_attr(\n docsrs,\n feature(doc_cfg)\n)]",
+            "#[cfg_attr(docsrs, doc(cfg(feature = \"std\")))]",
+            "#[cfg_attr(docsrs, doc = \"cfg(hidden)\")]",
+        ] {
+            let code = format!("{attribute}\npub fn answer(x: u32) {{}}");
+            let summary = assess(
+                &[change("README.md", "", Some(&docs("answer();")))],
+                &[source("src/lib.rs", &code)],
+            );
+            assert_eq!(
+                summary.findings.len(),
+                1,
+                "{attribute}: {:?}",
+                summary.unknowns
+            );
+        }
+    }
+
+    #[test]
+    fn true_cfg_and_cfg_attr_that_can_remove_interfaces_stay_unknown() {
+        for attribute in [
+            "#![cfg(feature = \"std\")]",
+            "#![cfg (feature = \"std\")]",
+            "#![cfg_attr(docsrs, cfg(feature = \"std\"))]",
+            "#![cfg_attr(\n docsrs,\n cfg(feature = \"std\")\n)]",
+            "#[cfg_attr(docsrs, cfg(feature = \"std\"))]",
+            "#[cfg_attr(docsrs, cfg_attr(unix, cfg(feature = \"std\")))]",
+        ] {
+            let code = format!("{attribute}\npub fn answer(x: u32) {{}}");
+            let summary = assess(
+                &[change("README.md", "", Some(&docs("answer();")))],
+                &[source("src/lib.rs", &code)],
+            );
+            assert!(summary.findings.is_empty(), "{attribute}");
+            assert!(
+                summary
+                    .unknowns
+                    .iter()
+                    .any(|unknown| unknown.contains("conditional public interface")),
+                "{attribute}"
             );
         }
     }

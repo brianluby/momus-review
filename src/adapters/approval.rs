@@ -8,7 +8,9 @@ use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 use std::collections::BTreeSet;
 
-// GitHub REST timestamps are UTC RFC3339 seconds. Anything else is unknown.
+// GitHub REST timestamps are UTC RFC3339 seconds. Zero is the explicit
+// unknown/invalid sentinel (including the Unix epoch); approval requires a
+// positive, fresh timestamp, so unreadable dates never become passing evidence.
 fn timestamp(value: &Value) -> i64 {
     let Some(text) = value.as_str() else { return 0 };
     if !text.is_ascii()
@@ -69,6 +71,68 @@ fn timestamp(value: &Value) -> i64 {
     let day = (153 * mp + 2) / 5 + d - 1;
     let epoch_days = era * 146097 + year * 365 + year / 4 - year / 100 + day - 719468;
     epoch_days * 86400 + h * 3600 + min * 60 + sec
+}
+
+fn check_status(state: Option<&str>, conclusion: Option<&str>, check_run: bool) -> &'static str {
+    let result = if check_run {
+        match state {
+            Some("queued" | "in_progress" | "pending") => return "pending",
+            Some("completed") => conclusion,
+            _ => return "unknown",
+        }
+    } else {
+        state
+    };
+    match result {
+        Some("success") => "passed",
+        Some("queued" | "in_progress" | "pending") => "pending",
+        Some("failure" | "error" | "timed_out" | "cancelled" | "action_required") => "failed",
+        // neutral, skipped and every missing/unsupported value are unknown.
+        _ => "unknown",
+    }
+}
+
+fn named_check(item: &Value, check_run: bool, head: &str) -> NamedCheck {
+    let name = item[if check_run { "name" } else { "context" }]
+        .as_str()
+        .filter(|name| !name.trim().is_empty());
+    let status = if name.is_none() {
+        "unknown"
+    } else {
+        check_status(
+            item[if check_run { "status" } else { "state" }].as_str(),
+            item["conclusion"].as_str(),
+            check_run,
+        )
+    };
+    NamedCheck {
+        name: name
+            .unwrap_or(if check_run {
+                "<unnamed check run>"
+            } else {
+                "<unnamed commit status>"
+            })
+            .into(),
+        head: if check_run {
+            item["head_sha"].as_str().unwrap_or_default()
+        } else {
+            head
+        }
+        .into(),
+        status: status.into(),
+        completed_at: timestamp(
+            &item[if check_run {
+                "completed_at"
+            } else {
+                "updated_at"
+            }],
+        ),
+        // Missing evidence remains empty: the engine must reject it.
+        evidence: item[if check_run { "html_url" } else { "url" }]
+            .as_str()
+            .unwrap_or_default()
+            .into(),
+    }
 }
 
 impl GitHubClient {
@@ -137,11 +201,13 @@ impl GitHubClient {
             ("status", "statuses", "total_count"),
         ] {
             let url = self.repo_url(pr, &format!("commits/{}/{endpoint}", pr.head_sha));
-            let batch: Value = self
-                .send(self.http.get(&url).query(&[("per_page", 100)]))
-                .await?
-                .json()
-                .await?;
+            // GitHub defaults to latest check runs; request it explicitly so
+            // reruns cannot accidentally become an all-runs inventory.
+            let mut request = self.http.get(&url).query(&[("per_page", 100)]);
+            if endpoint == "check-runs" {
+                request = request.query(&[("filter", "latest")]);
+            }
+            let batch: Value = self.send(request).await?.json().await?;
             let values = batch[array].as_array().context("missing check inventory")?;
             ensure!(
                 batch[total].as_u64() == Some(values.len() as u64),
@@ -154,30 +220,7 @@ impl GitHubClient {
                 );
             }
             for item in values {
-                let (name, head, passed, completed, evidence) = if endpoint == "check-runs" {
-                    (
-                        item["name"].as_str(),
-                        item["head_sha"].as_str(),
-                        item["status"] == "completed" && item["conclusion"] == "success",
-                        timestamp(&item["completed_at"]),
-                        item["html_url"].as_str(),
-                    )
-                } else {
-                    (
-                        item["context"].as_str(),
-                        Some(pr.head_sha.as_str()),
-                        item["state"] == "success",
-                        timestamp(&item["updated_at"]),
-                        item["url"].as_str(),
-                    )
-                };
-                checks.push(NamedCheck {
-                    name: name.unwrap_or_default().into(),
-                    head: head.unwrap_or_default().into(),
-                    status: if passed { "passed" } else { "unknown" }.into(),
-                    completed_at: completed,
-                    evidence: evidence.unwrap_or_default().into(),
-                });
+                checks.push(named_check(item, endpoint == "check-runs", &pr.head_sha));
             }
         }
         let now = std::time::SystemTime::now()
@@ -224,6 +267,62 @@ impl GitHubClient {
 mod tests {
     use super::*;
 
+    #[test]
+    fn check_results_distinguish_passed_pending_failed_and_unknown() {
+        for (value, expected) in [
+            ("success", "passed"),
+            ("failure", "failed"),
+            ("error", "failed"),
+            ("timed_out", "failed"),
+            ("cancelled", "failed"),
+            ("action_required", "failed"),
+            ("queued", "pending"),
+            ("in_progress", "pending"),
+            ("pending", "pending"),
+            ("neutral", "unknown"),
+            ("skipped", "unknown"),
+            ("unsupported", "unknown"),
+        ] {
+            assert_eq!(check_status(Some(value), None, false), expected);
+            assert_eq!(check_status(Some("completed"), Some(value), true), expected);
+        }
+        for state in ["queued", "in_progress", "pending"] {
+            assert_eq!(check_status(Some(state), Some("success"), true), "pending");
+        }
+        assert_eq!(check_status(None, Some("success"), true), "unknown");
+        assert_eq!(
+            check_status(Some("unsupported"), Some("success"), true),
+            "unknown"
+        );
+        assert_eq!(check_status(Some("completed"), None, true), "unknown");
+        assert_eq!(check_status(None, None, false), "unknown");
+    }
+
+    #[test]
+    fn unnamed_or_unreadable_evidence_is_labeled_and_remains_fail_closed() {
+        let head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let mut run = serde_json::json!({"head_sha":head,"status":"completed","conclusion":"success","completed_at":"2026-09-30T00:00:00Z","html_url":"https://example.test/check"});
+        let check = named_check(&run, true, head);
+        assert_eq!(check.name, "<unnamed check run>");
+        assert_eq!(check.status, "unknown");
+        assert_eq!(check.head, head);
+        run["name"] = serde_json::json!("ci");
+        run.as_object_mut().unwrap().remove("html_url");
+        let check = named_check(&run, true, head);
+        assert_eq!(check.name, "ci");
+        assert_eq!(check.status, "passed");
+        assert!(check.evidence.is_empty());
+        let status = named_check(
+            &serde_json::json!({"context":" ","state":"success"}),
+            false,
+            head,
+        );
+        assert_eq!(status.name, "<unnamed commit status>");
+        assert_eq!(status.status, "unknown");
+        assert_eq!(status.completed_at, 0);
+        assert!(status.evidence.is_empty());
+    }
+
     #[derive(Clone)]
     struct Fixture {
         head: String,
@@ -245,7 +344,7 @@ mod tests {
         };
         use std::sync::{Arc, Mutex};
         let state = Arc::new(Mutex::new(Fixture {
-            head: "candidate".into(),
+            head: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
             base: "base".into(),
             count: 1,
             patch: Some("@@ -1 +1 @@\n-a\n+b".into()),
@@ -254,11 +353,11 @@ mod tests {
         }));
         let app=Router::new()
             .route("/repos/test/repo/pulls/1",get(|State(s):State<Arc<Mutex<Fixture>>>|async move {let s=s.lock().unwrap();Json(serde_json::json!({"head":{"sha":s.head},"base":{"sha":s.base},"state":"open","draft":false,"changed_files":s.count}))}))
-            .route("/repos/test/repo/compare/base...candidate",get(||async {Json(serde_json::json!({"merge_base_commit":{"sha":"base"}}))}))
+            .route("/repos/test/repo/compare/base...aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",get(||async {Json(serde_json::json!({"merge_base_commit":{"sha":"base"}}))}))
             .route("/repos/test/repo/pulls/1/files",get(|State(s):State<Arc<Mutex<Fixture>>>|async move {let s=s.lock().unwrap();Json(serde_json::json!([{"filename":"src/main.rs","patch":s.patch}]))}))
-            .route("/repos/test/repo/commits/candidate/check-runs",get(|State(s):State<Arc<Mutex<Fixture>>>|async move {let s=s.lock().unwrap();Json(serde_json::json!({"total_count":1,"check_runs":[{"name":"ci","head_sha":"candidate","status":"completed","conclusion":s.check,"completed_at":"2026-09-30T00:00:00Z","html_url":"https://example.test/ci"}]}))}))
-            .route("/repos/test/repo/commits/candidate/status",get(||async {Json(serde_json::json!({"sha":"candidate","total_count":0,"statuses":[]}))}))
-            .route("/repos/test/repo/pulls/1/reviews",post(|State(s):State<Arc<Mutex<Fixture>>>,Json(body):Json<Value>|async move {assert_eq!(body["event"],"APPROVE");assert_eq!(body["commit_id"],"candidate");s.lock().unwrap().posts+=1;Json(serde_json::json!({}))}))
+            .route("/repos/test/repo/commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/check-runs",get(|State(s):State<Arc<Mutex<Fixture>>>|async move {let s=s.lock().unwrap();Json(serde_json::json!({"total_count":1,"check_runs":[{"name":"ci","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","status":"completed","conclusion":s.check,"completed_at":"2026-09-30T00:00:00Z","html_url":"https://example.test/ci"}]}))}))
+            .route("/repos/test/repo/commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/status",get(||async {Json(serde_json::json!({"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","total_count":0,"statuses":[]}))}))
+            .route("/repos/test/repo/pulls/1/reviews",post(|State(s):State<Arc<Mutex<Fixture>>>,Json(body):Json<Value>|async move {assert_eq!(body["event"],"APPROVE");assert_eq!(body["commit_id"],"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");s.lock().unwrap().posts+=1;Json(serde_json::json!({}))}))
             .with_state(state.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -268,7 +367,7 @@ mod tests {
             PullRequest {
                 repository: "test/repo".into(),
                 number: 1,
-                head_sha: "candidate".into(),
+                head_sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
             },
             state,
         )
@@ -282,7 +381,7 @@ mod tests {
             "../../examples/merge-confidence/routine-report.json"
         ))
         .unwrap();
-        report.reviewed_head = Some("candidate".into());
+        report.reviewed_head = Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into());
         report.reviewed_base = Some("base".into());
         report.reviewed_clean = true;
         let mut history: crate::review::merge_confidence::OutcomeHistory = serde_json::from_str(
@@ -292,6 +391,9 @@ mod tests {
         // Fabricated observed-source contract for a stub API test only; this
         // is never real-world calibration or a deployable history export.
         history.synthetic = false;
+        for (index, record) in history.records.iter_mut().enumerate() {
+            record.head = format!("{:040x}", index + 1);
+        }
         history.repository = "test/repo".into();
         let policy = crate::review::merge_confidence::ApprovalPolicy {
             enabled: true,
