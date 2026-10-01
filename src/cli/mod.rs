@@ -26,7 +26,7 @@ use crate::review::workflow::{ReviewOptions, run_review};
 #[command(
     name = "momus",
     version,
-    about = "Fast, calibrated, staged code review"
+    about = "Fast, staged code review with explicit evidence"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -87,8 +87,48 @@ impl RobustnessArgs {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Evaluate outcome history and opt-in approval policy without publishing
+    Confidence {
+        /// Saved review report to assess; this command never publishes approval
+        #[arg(long)]
+        report: PathBuf,
+        /// Trusted, provenance-backed observed history; absent history stays unknown
+        #[arg(long)]
+        history: Option<PathBuf>,
+        /// Trusted opt-in approval policy for offline eligibility assessment
+        #[arg(long)]
+        policy: Option<PathBuf>,
+        /// Explicit offline completeness/check assertions; live publication rechecks GitHub
+        #[arg(long)]
+        checks: Option<PathBuf>,
+    },
+    /// Generate a bounded, redacted repository tour without API requests
+    Tour {
+        #[arg(default_value = ".", value_name = "PATH")]
+        paths: Vec<PathBuf>,
+        #[arg(long)]
+        exclude: Vec<String>,
+        #[arg(long, default_value_t = 500, value_parser = clap::value_parser!(u32).range(1..=10000))]
+        max_files: u32,
+        #[arg(long, default_value_t = 1_000_000, value_parser = clap::value_parser!(u32).range(1..=10_000_000))]
+        max_file_bytes: u32,
+        #[arg(long, default_value_t = 8_000_000, value_parser = clap::value_parser!(u32).range(1..=100_000_000))]
+        max_total_bytes: u32,
+        /// Emit readable Markdown instead of JSON
+        #[arg(long)]
+        markdown: bool,
+    },
     /// Review the current Git diff (tracked changes + untracked files)
     Review {
+        /// Review a pinned committed tree; required for automatic approval
+        #[arg(long, requires = "base")]
+        committed_only: bool,
+        /// Compare Cargo/npm dependency changes with available local release notes
+        #[arg(long)]
+        upgrade_triage: bool,
+        /// Check supported documented public-interface examples against code
+        #[arg(long)]
+        docs_drift: bool,
         /// Scope directory/directories (defaults to the current directory);
         /// multiple paths are unioned into one run
         #[arg(default_value = ".", value_name = "PATH")]
@@ -223,6 +263,12 @@ pub enum Command {
     /// Publish the saved report to its pull request (inside GitHub Actions):
     /// inline review comments on the diff plus one sticky summary comment
     GithubReview {
+        /// Trusted opt-in approval policy; eligibility is recomputed from live GitHub evidence
+        #[arg(long, requires = "history")]
+        auto_approve_policy: Option<PathBuf>,
+        /// Trusted observed history required with the opt-in approval policy
+        #[arg(long, requires = "auto_approve_policy")]
+        history: Option<PathBuf>,
         /// The report to publish (default: `MOMUS_REPORT` or reviews/latest.json)
         #[arg(long = "report", value_name = "PATH")]
         report: Option<String>,
@@ -262,7 +308,74 @@ pub enum Command {
 /// Dispatch the parsed CLI command and preserve each command's exit contract.
 pub async fn run(cli: Cli) -> Result<()> {
     match cli.command {
+        Command::Confidence {
+            report,
+            history,
+            policy,
+            checks,
+        } => {
+            let report: ReviewReport = load_json(&report)?;
+            let history = history.as_deref().map(load_json).transpose()?;
+            let policy = policy.as_deref().map(load_json).transpose()?;
+            let checks = checks.as_deref().map(load_json).transpose()?;
+            let summary = crate::review::merge_confidence::assess(
+                &report,
+                history.as_ref(),
+                policy.as_ref(),
+                checks.as_ref(),
+            )?;
+            let mut value = serde_json::to_value(summary)?;
+            redact_value(&mut value, &mut Redactions::default());
+            println!("{}", serde_json::to_string_pretty(&value)?);
+            Ok(())
+        }
+        Command::Tour {
+            paths,
+            exclude,
+            max_files,
+            max_file_bytes,
+            max_total_bytes,
+            markdown,
+        } => {
+            let initial_head = paths.first().and_then(|path| git::head_sha(path).ok());
+            let clean_before = initial_head.is_some()
+                && paths
+                    .iter()
+                    .all(|path| git::tracked_checkout_clean(path).unwrap_or(false));
+            let mut evidence = git::repository_evidence(
+                &paths,
+                &Exclude::new(&exclude)?,
+                None,
+                max_files as usize,
+                max_file_bytes as usize,
+                max_total_bytes as usize,
+            )?;
+            if !clean_before
+                || paths.iter().any(|path| {
+                    !git::tracked_checkout_clean(path).unwrap_or(false)
+                        || git::head_sha(path).ok() != initial_head
+                })
+            {
+                evidence.unknowns.push("Tour describes uncommitted or untracked working-tree evidence; head identifies the checkout baseline, not an immutable tour snapshot".into());
+            }
+            let tour = crate::review::tour::build(
+                evidence,
+                &crate::adapters::index_store::IndexStore::from_env(),
+            );
+            let mut value = serde_json::to_value(tour)?;
+            redact_value(&mut value, &mut Redactions::default());
+            if markdown {
+                let tour = serde_json::from_value(value)?;
+                print!("{}", crate::review::tour::markdown(&tour));
+            } else {
+                println!("{}", serde_json::to_string_pretty(&value)?);
+            }
+            Ok(())
+        }
         Command::Review {
+            committed_only,
+            upgrade_triage,
+            docs_drift,
             paths,
             fail_on_blocking,
             exclude,
@@ -276,14 +389,74 @@ pub async fn run(cli: Cli) -> Result<()> {
             budget,
             robustness,
         } => {
-            let options = robustness.apply(options(follow_ups, no_refine, allow_empty, false))?;
-            let strategy = ChangesStrategy::new(
+            if committed_only && (upgrade_triage || docs_drift) {
+                anyhow::bail!(
+                    "--committed-only cannot combine --upgrade-triage or --docs-drift; run worktree analyses separately from the committed-only approval review"
+                );
+            }
+            let mut options = robustness.apply(options(
+                follow_ups,
+                no_refine,
+                allow_empty || upgrade_triage || docs_drift,
+                false,
+            ))?;
+            if upgrade_triage || docs_drift {
+                let scopes: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
+                options.auxiliary = Some(crate::review::auxiliary::AuxiliaryInputs {
+                    evidence: git::repository_evidence(
+                        &scopes,
+                        &Exclude::new(&exclude)?,
+                        base.as_deref(),
+                        500,
+                        1_000_000,
+                        8_000_000,
+                    )?,
+                    upgrades: upgrade_triage,
+                    docs_drift,
+                });
+            }
+            let mut strategy = ChangesStrategy::new(
                 client(no_redact, no_cache)?.with_budget(budget),
                 Exclude::new(&exclude)?,
-                base,
+                base.clone(),
             );
+            let committed_head = if committed_only {
+                let first = paths
+                    .first()
+                    .ok_or_else(|| anyhow::anyhow!("committed review requires a scope"))?;
+                let root = git::repository_root(Path::new(first))?.canonicalize()?;
+                for path in &paths {
+                    anyhow::ensure!(
+                        git::repository_root(Path::new(path))?.canonicalize()? == root,
+                        "committed-only scopes must share one canonical checkout"
+                    );
+                }
+                Some(git::head_sha(Path::new(first))?)
+            } else {
+                None
+            };
+            if let Some(head) = &committed_head {
+                strategy = strategy.with_committed_head(head.clone());
+            }
             let sarif = sarif.map(PathBuf::from);
-            run_mode(paths, fail_on_blocking, options, sarif, strategy, None).await
+            let reviewed_base = paths
+                .first()
+                .zip(base.as_deref())
+                .map(|(p, b)| git::review_base_sha(Path::new(p), b))
+                .transpose()?;
+            run_mode(
+                paths,
+                fail_on_blocking,
+                options,
+                sarif,
+                strategy,
+                None,
+                ReviewIdentity {
+                    base: reviewed_base,
+                    committed_head,
+                },
+            )
+            .await
         }
         Command::Scan {
             paths,
@@ -321,6 +494,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 sarif,
                 strategy,
                 sanitized_report,
+                ReviewIdentity::default(),
             )
             .await
         }
@@ -352,11 +526,14 @@ pub async fn run(cli: Cli) -> Result<()> {
                     eprintln!("{s}")
                 })
                 .await?;
+            attach_default_merge_outcomes(&mut report);
             report.wall_time_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
             eprintln!("{}", metrics_summary(&report));
             persist_report(&report, &scope, sarif.as_ref(), fail_on_blocking)
         }
         Command::GithubReview {
+            auto_approve_policy,
+            history,
             report,
             max_comments,
             event,
@@ -374,6 +551,8 @@ pub async fn run(cli: Cli) -> Result<()> {
                 sanitized_report.map(PathBuf::from),
                 options,
                 fail_on_blocking,
+                auto_approve_policy,
+                history,
             )
             .await
         }
@@ -405,9 +584,11 @@ async fn github_review(
     sanitized_report: Option<PathBuf>,
     options: PublishOptions,
     fail_on_blocking: bool,
+    auto_approve_policy: Option<PathBuf>,
+    history: Option<PathBuf>,
 ) -> Result<()> {
     let path = report.unwrap_or_else(report_path);
-    let report = match read_report(&path) {
+    let mut report = match read_report(&path) {
         StoredReport::Ok { report, .. } => report,
         StoredReport::Empty => {
             anyhow::bail!("no report at {} (run `momus review` first)", path.display())
@@ -424,7 +605,71 @@ async fn github_review(
     let pr = PullRequest::from_env()?;
     let client = GitHubClient::from_env()?;
 
+    let approval = if let Some(path) = auto_approve_policy {
+        let policy = load_json(&path)?;
+        let history = history.as_deref().map(load_json).transpose()?;
+        let checks = client.approval_evidence(&pr, &report).await?;
+        let summary = crate::review::merge_confidence::assess(
+            &report,
+            history.as_ref(),
+            Some(&policy),
+            Some(&checks),
+        )?;
+        let decision = summary.approval.clone();
+        report.merge_confidence = Some(summary);
+        Some((decision, policy, history))
+    } else {
+        None
+    };
+
+    if approval.is_some()
+        && let Some(path) = &sanitized_report
+    {
+        write_sanitized_report(&report, path)?;
+    }
     let outcome = publish(&client, &pr, &report, &options).await?;
+    let mut approval_error = None;
+    if let Some((decision, policy, history)) = approval {
+        if decision.eligible && !outcome.review_rejected {
+            if options.dry_run {
+                eprintln!("automatic approval eligible (dry run; no approval posted)");
+            } else {
+                match client
+                    .approve_current_head(&pr, &report, &policy, history.as_ref())
+                    .await
+                {
+                    Ok(()) => eprintln!("automatic approval posted for {}", pr.head_sha),
+                    Err(error) => {
+                        if let Some(summary) = &mut report.merge_confidence {
+                            summary.approval.eligible = false;
+                            summary.approval.reasons.push(format!(
+                                "Final approval publication was not confirmed: {error}"
+                            ));
+                        }
+                        eprintln!("automatic approval publication was not confirmed: {error}");
+                        approval_error = Some(error);
+                    }
+                }
+            }
+        } else if outcome.review_rejected {
+            if let Some(summary) = &mut report.merge_confidence {
+                summary.approval.eligible = false;
+                summary.approval.reasons.push(
+                    "GitHub rejected the review submission; automatic approval was withheld."
+                        .into(),
+                );
+            }
+            eprintln!("automatic approval withheld: GitHub rejected the review submission");
+        } else {
+            eprintln!(
+                "automatic approval rejected: {}",
+                decision.reasons.join("; ")
+            );
+        }
+        if let Some(path) = &sanitized_report {
+            write_sanitized_report(&report, path)?;
+        }
+    }
     let inline = outcome.review.as_ref().map_or(0, |r| r.comments.len());
     if options.dry_run {
         let preview = serde_json::json!({ "review": outcome.review, "summary": outcome.summary });
@@ -443,6 +688,11 @@ async fn github_review(
         },
         outcome.summary_action,
     );
+    if let Some(error) = approval_error {
+        return Err(
+            error.context("review publication completed; automatic approval was not confirmed")
+        );
+    }
 
     if fail_on_blocking
         && report
@@ -531,15 +781,22 @@ fn metrics_summary(r: &ReviewReport) -> String {
     )
 }
 
-/// Runs a review, saves the report, prints JSON to stdout, and applies the
-/// CI exit contract. Also writes history (always) and SARIF (when requested).
+/// Source identity; a pinned committed head enables immutable review inputs.
+#[derive(Default)]
+struct ReviewIdentity {
+    base: Option<String>,
+    committed_head: Option<String>,
+}
+
+/// Run and persist the completed review, with optional history and SARIF.
 async fn run_mode<S: ReviewStrategy>(
     paths: Vec<String>,
     fail_on_blocking: bool,
-    options: ReviewOptions,
+    mut options: ReviewOptions,
     sarif: Option<PathBuf>,
     strategy: S,
     sanitized_report: Option<PathBuf>,
+    identity: ReviewIdentity,
 ) -> Result<()> {
     let scopes: Vec<std::path::PathBuf> = paths
         .iter()
@@ -548,7 +805,39 @@ async fn run_mode<S: ReviewStrategy>(
     let log = |msg: &str| eprintln!("{msg}");
 
     let started = std::time::Instant::now();
+    let auxiliary = options.auxiliary.take();
+    let feedback = options.feedback.clone();
+    let actual_head = scopes.first().and_then(|s| git::head_sha(s).ok());
+    let head = identity.committed_head.clone().or(actual_head.clone());
+    let roots: Vec<_> = scopes
+        .iter()
+        .map(|s| git::repository_root(s).ok())
+        .collect();
+    let same_checkout = roots
+        .first()
+        .is_some_and(|first| first.is_some() && roots.iter().all(|r| r == first));
+    let clean_before = head.is_some()
+        && actual_head == head
+        && same_checkout
+        && scopes
+            .iter()
+            .all(|s| git::tracked_checkout_clean(s).unwrap_or(false));
     let mut report = run_review(&scopes, &log, options, strategy).await?;
+    report.reviewed_head = head;
+    report.reviewed_base = identity.base;
+    report.reviewed_committed = identity.committed_head.is_some();
+    report.reviewed_clean = clean_before
+        && scopes.iter().all(|s| {
+            git::tracked_checkout_clean(s).unwrap_or(false)
+                && git::head_sha(s).ok() == report.reviewed_head
+        });
+    if !report.reviewed_clean && clean_before {
+        report.partial = true;
+    }
+    if let Some(inputs) = auxiliary {
+        crate::review::auxiliary::attach(&mut report, inputs, &feedback);
+    }
+    attach_default_merge_outcomes(&mut report);
     report.wall_time_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
     eprintln!("{}", metrics_summary(&report));
 
@@ -623,6 +912,37 @@ fn persist_report(
         std::process::exit(1);
     }
     Ok(())
+}
+
+fn attach_default_merge_outcomes(report: &mut ReviewReport) {
+    match crate::review::merge_confidence::assess(report, None, None, None) {
+        Ok(summary) => report.merge_confidence = Some(summary),
+        Err(error) => {
+            report.partial = true;
+            report.merge_confidence = None;
+            eprintln!(
+                "merge outcome assessment unavailable: {error}; completed review preserved, automatic approval unavailable"
+            );
+        }
+    }
+}
+
+fn load_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+    use anyhow::Context;
+    use std::io::Read;
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("open JSON evidence {}", path.display()))?;
+    let mut bytes = Vec::new();
+    file.take(20_000_001)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("read JSON evidence {}", path.display()))?;
+    anyhow::ensure!(
+        bytes.len() <= 20_000_000,
+        "JSON evidence {} exceeds 20 MB limit",
+        path.display()
+    );
+    serde_json::from_slice(&bytes)
+        .with_context(|| format!("parse JSON evidence {}", path.display()))
 }
 
 #[cfg(test)]

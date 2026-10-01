@@ -124,14 +124,14 @@ function summary(report) {
   const testLabel = report.mode === "codebase" ? "test files" : "changed tests";
   const pr = report.pRevert;
   const prDisplay =
-    findings.length === 0 && !pr ? "–" : isNum(pr) ? `${fixed(pr * 100)}%` : "–";
+    isNum(pr) ? `${fixed(pr, 3)} / 1` : "–";
   const stats = [
     { value: report.screenedFiles, label: "files" },
     { value: tests.length, label: testLabel, title: tests.join("\n") || null },
     { value: report.followedSignals, label: "selected", title: "eligible concerns selected for evidence review; failures and deferrals are disclosed separately" },
     { value: findings.length, label: "findings", cls: "lead" },
     { value: blocking, label: "request changes", cls: blocking > 0 ? "alert" : "" },
-    { display: prDisplay, label: "P(revert)", title: "uncalibrated heuristic spike (see roadmap #17)" },
+    { display: prDisplay, label: "risk score", title: "hand-weighted heuristic; not a probability" },
   ];
   return h(
     "dl",
@@ -1062,6 +1062,98 @@ function historyHotspots(hotspots) {
   ];
 }
 
+// Bound visible local-analysis lists; complete data remains in the saved report.
+const ANALYSIS_LIST_MAX = 50;
+const ANALYSIS_EVIDENCE_MAX = 20;
+const analysisText = (value, fallback = "unknown") => String(value ?? fallback);
+const analysisVersion = (value) => value === null ? "absent" : analysisText(value);
+const analysisNumber = (value) => isNum(value) ? String(value) : "unknown";
+const analysisProbability = (value) => isNum(value) && value >= 0 && value <= 1 ? `${fixed(value * 100)}%` : "unknown";
+const analysisBool = (value) => value === true ? "yes" : value === false ? "no" : "unknown";
+
+function analysisList(values, label, renderItem, cap = ANALYSIS_LIST_MAX) {
+  const list = Array.isArray(values) ? values : [];
+  return [
+    ...list.slice(0, cap).map((value) => renderItem(value ?? {})),
+    list.length > cap && h("p", { class: "section-note" }, `${list.length - cap} ${label} omitted from this view; see the saved report.`),
+  ];
+}
+
+function analysisEvidence(evidence, label, revisionField) {
+  if (!evidence) return h("p", {}, `${label}: evidence unavailable.`);
+  const revision = evidence[revisionField];
+  const snapshot = revision === "base" ? "Base snapshot (pre-change)"
+    : revision === "current" ? "Current snapshot" : "Snapshot unknown";
+  const line = isNum(evidence.line) && evidence.line > 0 ? evidence.line : "line unknown";
+  const text = analysisText(evidence.text, "Evidence text unavailable");
+  const cap = 4000;
+  return h("div", {},
+    h("p", {}, h("strong", {}, `${label}: `), `${snapshot} · ${analysisText(evidence.path)}:${line}`),
+    h("pre", {}, h("code", {}, text.slice(0, cap))),
+    text.length > cap && h("p", {}, `${text.length - cap} evidence characters omitted from this view; see the saved report.`));
+}
+
+function upgradeTriage(result) {
+  if (!result) return null;
+  const changes = Array.isArray(result.changes) ? result.changes : [];
+  return h("div", {},
+    h("h3", {}, "Dependency triage (advisory)"),
+    changes.length === 0 && h("p", {}, "No dependency changes were available in the supplied evidence; compatibility is not established."),
+    analysisList(changes, "dependency changes", (change) => h("details", {},
+      h("summary", {}, `${analysisText(change.ecosystem)} · ${analysisText(change.dependency)} · ${analysisText(change.scope)} · ${humanize(change.kind ?? "unknown")}: ${analysisVersion(change.oldVersion)} → ${analysisVersion(change.newVersion)} · ${humanize(change.risk ?? "unknown")}`),
+      analysisList(change.evidence, "manifest/lock evidence entries", (entry) => analysisEvidence(entry, "Manifest / lock evidence", "snapshot"), ANALYSIS_EVIDENCE_MAX),
+      !(change.evidence?.length) && h("p", {}, "Manifest / lock evidence: unavailable."),
+      analysisList(change.changelog, "changelog evidence entries", (entry) => analysisEvidence(entry, "Changelog evidence", "snapshot"), ANALYSIS_EVIDENCE_MAX),
+      !(change.changelog?.length) && h("p", {}, "Changelog evidence: unavailable; breaking behavior remains unknown."))),
+    analysisList(result.unknowns, "dependency unknowns", (unknown) => h("p", {}, `Unknown: ${analysisText(unknown)}`)));
+}
+
+function docsComparison(result) {
+  if (!result) return null;
+  const checks = Array.isArray(result.checks) ? result.checks : [];
+  return h("div", {},
+    h("h3", {}, "Docs comparison (advisory)"),
+    checks.length === 0 && h("p", {}, "No documentation checks were available in the supplied evidence; consistency is not established."),
+    analysisList(checks, "documentation checks", (check) => h("details", {},
+      h("summary", {}, `${analysisText(check.symbol)}: ${humanize(check.status ?? "unknown")}`),
+      h("p", {}, `Reason: ${analysisText(check.reason)}`),
+      analysisEvidence(check.documentation, "Documentation evidence", "revision"),
+      analysisEvidence(check.source, "Source evidence", "revision"))),
+    analysisList(result.unknowns, "documentation unknowns", (unknown) => h("p", {}, `Unknown: ${analysisText(unknown)}`)));
+}
+
+function mergeOutcomes(result, report) {
+  if (!result) return null;
+  const outcomes = Array.isArray(result.outcomes) ? result.outcomes : [];
+  const approval = result.approval ?? {};
+  const approvalState = approval.enabled === false ? "disabled"
+    : approval.enabled === true && approval.eligible === true ? "eligible under explicit policy"
+    : approval.enabled === true && approval.eligible === false ? "rejected under explicit policy" : "unknown";
+  const synthetic = result.synthetic === true ? "synthetic demonstration — not real-world calibration"
+    : result.synthetic === false ? "observed history; evaluation limits still apply" : "history type unknown";
+  return h("div", {},
+    h("h3", {}, "Merge outcome estimates"),
+    h("p", {}, `History: ${synthetic} · Repository: ${analysisText(result.repository)} · Provenance: ${analysisText(result.provenance)}`),
+    h("p", {}, `Training cutoff: ${analysisNumber(result.trainingCutoff)} · Assessed as of: ${analysisNumber(result.asOf)} (Unix seconds)`),
+    h("p", {}, `Reviewed head: ${analysisText(report.reviewedHead)} · Clean checkout verified: ${analysisBool(report.reviewedClean)} · Committed review verified: ${analysisBool(report.reviewedCommitted)}`),
+    outcomes.length === 0 && h("p", {}, "No outcome estimates were available; risk remains unknown."),
+    analysisList(outcomes, "outcome estimates", (estimate) => h("details", {},
+      h("summary", {}, `${humanize(estimate.outcome ?? "unknown")}: ${analysisProbability(estimate.probability)} · ${humanize(estimate.status ?? "unknown")}`),
+      h("p", {}, `Observation window: ${analysisNumber(estimate.windowSeconds)} seconds · Matching training-bin samples: ${analysisNumber(estimate.matchingBinSamples)}`),
+      h("p", {}, `95% upper sampling bound (training bin): ${analysisProbability(estimate.upperBound95)} · Held-out bin: ${analysisProbability(estimate.heldOutUpperBound95)}. Sampling bounds do not bound distribution shift.`),
+      h("p", {}, `Evaluation: ${analysisNumber(estimate.evaluation?.trainingSamples)} training / ${analysisNumber(estimate.evaluation?.heldOutSamples)} held out · Unknown labels: ${analysisNumber(estimate.evaluation?.unknownLabels)} · Immature or unavailable labels: ${analysisNumber(estimate.evaluation?.immatureOrUnavailableLabels)}`),
+      h("p", {}, `Events: ${analysisNumber(estimate.evaluation?.trainingEvents)} training / ${analysisNumber(estimate.evaluation?.heldOutEvents)} held out · Matching held-out bin: ${analysisNumber(estimate.evaluation?.matchingBinHeldOutSamples)} samples / ${analysisNumber(estimate.evaluation?.matchingBinHeldOutEvents)} events`),
+      h("p", {}, `Held-out Brier score: ${fixed(estimate.evaluation?.brierScore)} · Baseline Brier: ${fixed(estimate.evaluation?.baselineBrierScore)} · Calibration error: ${fixed(estimate.evaluation?.expectedCalibrationError)} · Matching-bin calibration error: ${fixed(estimate.evaluation?.matchingBinCalibrationError)}`),
+      analysisList(estimate.limitations, "outcome limitations", (limit) => h("p", {}, `Limitation: ${analysisText(limit)}`)))),
+    h("p", {}, `Automatic approval: ${approvalState} · Policy enabled: ${analysisBool(approval.enabled)} · Eligible: ${analysisBool(approval.eligible)}`),
+    analysisList(approval.reasons, "approval reasons", (reason) => h("p", {}, `Approval reason: ${analysisText(reason)}`)));
+}
+
+function localAnalyses(report) {
+  const children = [upgradeTriage(report.upgrades), docsComparison(report.docsDrift), mergeOutcomes(report.mergeConfidence, report)].filter(Boolean);
+  return children.length ? section("Local evidence and merge outcomes", "Advisory; unknown evidence stays visible", ...children) : null;
+}
+
 function renderMeta(state) {
   meta.replaceChildren();
   if (state?.status !== "ok") return;
@@ -1093,6 +1185,7 @@ function render(state) {
           matrix(state.report),
           findings(state.report),
           specDrift(state.report),
+          localAnalyses(state.report),
           followUpPlan(state.report),
           h("div", { id: "history" }),
         ].filter(Boolean),

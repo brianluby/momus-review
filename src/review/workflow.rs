@@ -130,6 +130,9 @@ where
 /// unlimited follow-ups, refinement on, no feedback.
 #[derive(Debug)]
 pub struct ReviewOptions {
+    /// CLI-owned local evidence. The CLI takes and attaches it after binding
+    /// source-review identity; direct `run_review` callers must attach it separately.
+    pub auxiliary: Option<crate::review::auxiliary::AuxiliaryInputs>,
     /// Cap follow-ups per `select_follow_ups`; `None` follows every signal.
     pub max_follow_ups: Option<usize>,
     /// Opt-in information-value ordering; default probability policy stays unchanged.
@@ -156,6 +159,7 @@ impl Default for ReviewOptions {
     /// Enable ordinary refinement and unlimited follow-ups, without tiering or sharding.
     fn default() -> Self {
         Self {
+            auxiliary: None,
             max_follow_ups: None,
             follow_up_strategy: FollowUpStrategy::default(),
             threshold_overrides: BTreeMap::new(),
@@ -178,7 +182,13 @@ pub async fn run_review<S: ReviewStrategy>(
     options: ReviewOptions,
     strategy: S,
 ) -> Result<ReviewReport> {
+    if options.auxiliary.is_some() {
+        return Err(anyhow!(
+            "local auxiliary evidence must be attached after source-review identity binding; run_review cannot consume it"
+        ));
+    }
     let ReviewOptions {
+        auxiliary: _,
         max_follow_ups,
         follow_up_strategy,
         threshold_overrides,
@@ -617,6 +627,13 @@ pub async fn run_review<S: ReviewStrategy>(
     };
 
     Ok(ReviewReport {
+        reviewed_head: None,
+        reviewed_base: None,
+        reviewed_clean: false,
+        reviewed_committed: false,
+        upgrades: None,
+        docs_drift: None,
+        merge_confidence: None,
         mode: strategy.mode(),
         scope: scope_label,
         dimensions: dimension_metadata(),

@@ -26,7 +26,7 @@ const MAX_NEIGHBOR_LINES: usize = 40;
 const MAX_NEIGHBOR_CHARS: usize = 1_800;
 
 /// `fileRoles` — the source-file role vocabulary.
-const FILE_ROLES: [(&str, &str); 6] = [
+pub(crate) const FILE_ROLES: [(&str, &str); 6] = [
     (
         "entrypoint",
         "Application, command, route, or public package entry point",

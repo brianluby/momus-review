@@ -5,10 +5,10 @@ name: scripts
 
 on:
   pull_request:
-    paths: ["scripts/**", "examples/**", ".github/workflows/**", "Cargo.lock", "action.yml"]
+    paths: ["scripts/**", "examples/**", "tests/*.cjs", "src/dashboard/public/**", ".github/workflows/**", "Cargo.lock", "action.yml"]
   push:
     branches: [main]
-    paths: ["scripts/**", "examples/**", ".github/workflows/**", "Cargo.lock", "action.yml"]
+    paths: ["scripts/**", "examples/**", "tests/*.cjs", "src/dashboard/public/**", ".github/workflows/**", "Cargo.lock", "action.yml"]
   schedule:
     # Weekly RustSec sweep of the locked dependency set on main.
     - cron: "17 4 * * 1"
@@ -40,12 +40,16 @@ jobs:
         run: |
           python3 -B scripts/test-install-release.py
           python3 -B scripts/test-release-workflow.py
+          python3 -B scripts/test-action-evidence.py
 
       - name: Test SBOM finalization and artifact handoff
         run: |
           python3 -m venv "$RUNNER_TEMP/sbom-tests"
           "$RUNNER_TEMP/sbom-tests/bin/pip" install --quiet jsonschema==4.25.0
           "$RUNNER_TEMP/sbom-tests/bin/python" -B scripts/test-sbom.py
+
+      - name: Test dashboard evidence rendering
+        run: node --test tests/dashboard-robustness.cjs
 
   macos-shell:
     runs-on: macos-14
@@ -61,6 +65,7 @@ jobs:
           bash --version
           scripts/test-verify-release.sh
           python3 -B scripts/test-install-release.py
+          python3 -B scripts/test-action-evidence.py
 
   actionlint:
     runs-on: ubuntu-latest

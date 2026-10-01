@@ -336,6 +336,24 @@ pub struct ShardMetadata {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ReviewReport {
+    /// Bound source-review identity; absent in legacy reports. Auxiliary
+    /// evidence cannot replace it and invalidates verification on mismatch.
+    pub reviewed_head: Option<String>,
+    pub reviewed_base: Option<String>,
+    /// True only when cleanliness was verified for the bound identity.
+    /// False includes missing verification; it does not establish dirtiness.
+    pub reviewed_clean: bool,
+    /// True only for verified source inputs from the pinned committed tree.
+    /// False includes missing verification and always rejects approval.
+    pub reviewed_committed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upgrades: Option<crate::review::upgrades::UpgradeSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub docs_drift: Option<crate::review::docs_drift::DocsDriftSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Assessment artifact, including explicit unknowns when history is absent.
+    /// Presence does not mean historical calibration or approval was enabled.
+    pub merge_confidence: Option<crate::review::merge_confidence::MergeConfidenceSummary>,
     pub mode: ReviewMode,
     pub scope: String,
     pub dimensions: Vec<DimensionMeta>,

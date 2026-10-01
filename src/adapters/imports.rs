@@ -12,6 +12,7 @@
 //! follow-up rather than a guess made with another language's patterns).
 
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -249,11 +250,185 @@ impl Resolver {
     }
 }
 
+fn has_js_extension(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|extension| extension.to_str()),
+        Some("js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs" | "mts" | "cts")
+    )
+}
+
+/// Index exact paths once for architecture-map imports. Lookup cost depends
+/// on matching paths, not the full repository inventory for every import.
+/// Vectors retain duplicate paths and extension collisions as ambiguous.
+struct StrictResolver<'a> {
+    rust_paths: HashMap<String, Vec<&'a str>>,
+    js_stems: HashMap<PathBuf, Vec<&'a str>>,
+}
+
+impl<'a> StrictResolver<'a> {
+    fn new(files: &'a [SourceFile]) -> Self {
+        let mut rust_paths: HashMap<String, Vec<&str>> = HashMap::new();
+        let mut js_stems: HashMap<PathBuf, Vec<&str>> = HashMap::new();
+        for file in files {
+            let path = Path::new(&file.path);
+            if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
+                rust_paths
+                    .entry(file.path.clone())
+                    .or_default()
+                    .push(file.path.as_str());
+            } else if has_js_extension(path) {
+                js_stems
+                    .entry(path.with_extension(""))
+                    .or_default()
+                    .push(file.path.as_str());
+            }
+        }
+        Self {
+            rust_paths,
+            js_stems,
+        }
+    }
+
+    fn matching_paths(&self, stem: &Path, is_rust: bool) -> Vec<&'a str> {
+        let mut matches = Vec::new();
+        if is_rust {
+            for path in [
+                format!("{}.rs", stem.display()),
+                format!("{}/mod.rs", stem.display()),
+            ] {
+                if let Some(paths) = self.rust_paths.get(&path) {
+                    matches.extend(paths.iter().copied());
+                }
+            }
+        } else {
+            if let Some(paths) = self.js_stems.get(stem) {
+                matches.extend(paths.iter().copied());
+            }
+            if let Some(paths) = self.js_stems.get(&stem.join("index")) {
+                matches.extend(paths.iter().copied());
+            }
+        }
+        matches
+    }
+}
+
+/// Architecture maps use exact, unique local module paths, independently of
+/// the suffix heuristic used for review context. Opaque syntax abstains.
+fn strict_edges(file: &SourceFile, resolver: &StrictResolver<'_>) -> Vec<(String, String, usize)> {
+    use std::path::Component;
+    let language = Language::from_path(&file.path);
+    if !matches!(
+        language,
+        Some(Language::Rust | Language::JavaScript | Language::TypeScript)
+    ) || file.content.contains("/*")
+        || file.content.contains('`')
+        || file.content.contains("r#\"")
+        || file.content.contains("#[path")
+        || file.content.contains("#[cfg")
+    {
+        return Vec::new();
+    }
+    let path = Path::new(&file.path);
+    let parent = path.parent().unwrap_or(Path::new(""));
+    let module_parent = if matches!(
+        path.file_name().and_then(|s| s.to_str()),
+        Some("main.rs" | "lib.rs" | "mod.rs")
+    ) {
+        parent.to_path_buf()
+    } else {
+        parent.join(path.file_stem().unwrap_or_default())
+    };
+    let mut depth = 0isize;
+    let mut out = Vec::new();
+    for (line, text) in file.content.lines().enumerate() {
+        let text = text.trim();
+        if text.starts_with("//") {
+            continue;
+        }
+        let active = depth == 0
+            && (text.starts_with("use ")
+                || text.starts_with("mod ")
+                || text.starts_with("pub mod ")
+                || text.starts_with("import ")
+                || text.starts_with("export "));
+        if active {
+            for candidate in extract_imports(&file.path, text) {
+                let mut stem = if language == Some(Language::Rust) {
+                    if text.starts_with("use crate::") {
+                        let segments: Vec<_> = parent.components().collect();
+                        let Some(i) = segments.iter().rposition(|s| s.as_os_str() == "src") else {
+                            continue;
+                        };
+                        let root: PathBuf = segments[..=i].iter().map(|s| s.as_os_str()).collect();
+                        root.join(&candidate)
+                    } else if text.starts_with("use super::") {
+                        // Repeated parent anchors and inline module scopes are unknown.
+                        if text.contains("super::super::") {
+                            continue;
+                        }
+                        module_parent
+                            .parent()
+                            .unwrap_or(Path::new(""))
+                            .join(&candidate)
+                    } else {
+                        module_parent.join(&candidate)
+                    }
+                } else {
+                    parent.join(&candidate)
+                };
+                let mut parts = Vec::new();
+                let mut valid = true;
+                for part in stem.components() {
+                    match part {
+                        Component::Normal(s) => parts.push(s.to_string_lossy().into_owned()),
+                        Component::CurDir => {}
+                        Component::ParentDir => {
+                            if parts.pop().is_none() {
+                                valid = false;
+                            }
+                        }
+                        _ => valid = false,
+                    }
+                }
+                if !valid {
+                    continue;
+                }
+                stem = PathBuf::from(parts.join("/"));
+                if language != Some(Language::Rust) && has_js_extension(&stem) {
+                    stem.set_extension("");
+                }
+                let mut matches = resolver.matching_paths(&stem, language == Some(Language::Rust));
+                if matches.is_empty()
+                    && language == Some(Language::Rust)
+                    && text.starts_with("use ")
+                    && let Some(parent) = stem.parent()
+                {
+                    matches = resolver.matching_paths(parent, true);
+                }
+                if matches.len() == 1 && matches[0] != file.path {
+                    out.push((file.path.clone(), matches[0].to_string(), line + 1));
+                }
+            }
+        }
+        // Conservative top-level declarations only. Dynamic/nested imports
+        // and multiline strings are outside the evidence map contract.
+        depth += text.matches('{').count() as isize - text.matches('}').count() as isize;
+        if depth < 0 {
+            // Brace-containing literals or unsupported syntax can invalidate
+            // the lightweight scope counter. Never retain a prefix map when
+            // later lines disprove its scope assumptions.
+            return Vec::new();
+        }
+    }
+    if depth == 0 { out } else { Vec::new() }
+}
+
 /// Undirected import adjacency: an edge between `a` and `b` exists when `b`
 /// resolves to a scanned file imported by `a` (so neighbors include both
 /// files `a` imports and files that import `a`).
 pub struct ImportGraph {
     adjacency: HashMap<String, Vec<String>>,
+    edges: Vec<(String, String, usize)>,
 }
 
 impl ImportGraph {
@@ -271,7 +446,10 @@ impl ImportGraph {
             files.iter().map(|f| (f.path.clone(), Vec::new())).collect();
 
         let resolver = Resolver::new(files);
+        let strict_resolver = StrictResolver::new(files);
+        let mut edges = Vec::new();
         for f in files {
+            edges.extend(strict_edges(f, &strict_resolver));
             let importer = normalize_path(&f.path);
             let is_rust = Language::from_path(&f.path) == Some(Language::Rust);
             for target in candidates(f) {
@@ -285,7 +463,15 @@ impl ImportGraph {
             }
         }
 
-        ImportGraph { adjacency }
+        edges.sort();
+        edges.dedup();
+        ImportGraph { adjacency, edges }
+    }
+
+    /// Directed imports with a corroborated declaration line. Multiline
+    /// imports lacking exact line evidence are omitted from architecture maps.
+    pub fn evidenced_edges(&self) -> &[(String, String, usize)] {
+        &self.edges
     }
 
     /// The 1-hop adjacency of `file` (deduped, sorted, excluding self).
@@ -315,6 +501,189 @@ mod tests {
         }
     }
 
+    #[test]
+    fn tour_edges_require_exact_unambiguous_active_imports() {
+        let files = vec![
+            file("src/nested/a.ts", "import {x} from '../shared';"),
+            file("src/nested/shared.ts", "export const x=1;"),
+            file("src/shared.ts", "export const x=2;"),
+        ];
+        assert_eq!(
+            ImportGraph::build(&files).evidenced_edges(),
+            &[("src/nested/a.ts".into(), "src/shared.ts".into(), 1)]
+        );
+        let files = vec![
+            file("src/index.ts", "import {x} from './foo';"),
+            file("other/foo.ts", "export const x=1;"),
+        ];
+        assert!(ImportGraph::build(&files).evidenced_edges().is_empty());
+        let files = vec![
+            file(
+                "src/a.ts",
+                "// import {x} from './foo';\nconst s = \"import {x} from './foo'\";",
+            ),
+            file("src/foo.ts", "export const x=1;"),
+        ];
+        assert!(ImportGraph::build(&files).evidenced_edges().is_empty());
+        let files = vec![
+            file("src/a.ts", "import {x} from './foo';"),
+            file("src/foo.ts", "export const x=1;"),
+            file("src/foo.js", "export const x=2;"),
+        ];
+        assert!(ImportGraph::build(&files).evidenced_edges().is_empty());
+    }
+
+    #[test]
+    fn strict_js_resolution_preserves_dotted_module_names() {
+        for import in ["./user.service", "./user.service.js", "./user.service.ts"] {
+            let files = vec![
+                file(
+                    "src/index.ts",
+                    &format!("import {{ UserService }} from '{import}';"),
+                ),
+                file("src/user.service.ts", "export class UserService {}"),
+                file("src/user.ts", "export class OtherUser {}"),
+                file("src/user/index.ts", "export class OtherUser {}"),
+            ];
+            assert_eq!(
+                ImportGraph::build(&files).evidenced_edges(),
+                &[("src/index.ts".into(), "src/user.service.ts".into(), 1)],
+                "specifier {import}"
+            );
+        }
+        let files = vec![
+            file("src/index.ts", "import './config.dev';"),
+            file("src/config.dev.ts", "export const dev = true;"),
+            file("src/config.ts", "export const dev = false;"),
+        ];
+        assert_eq!(
+            ImportGraph::build(&files).evidenced_edges(),
+            &[("src/index.ts".into(), "src/config.dev.ts".into(), 1)]
+        );
+        let files = vec![
+            file("src/index.ts", "import './worker.wasm';"),
+            file("src/worker.ts", "export const worker = true;"),
+        ];
+        assert!(ImportGraph::build(&files).evidenced_edges().is_empty());
+    }
+
+    #[test]
+    fn strict_lookup_preserves_rust_and_js_ambiguity_abstention() {
+        for files in [
+            vec![
+                file("src/main.rs", "mod worker;"),
+                file("src/worker.rs", "pub fn run() {}"),
+                file("src/worker/mod.rs", "pub fn run() {}"),
+            ],
+            vec![
+                file("src/index.ts", "import './user.service';"),
+                file("src/user.service.ts", "export class Service {}"),
+                file("src/user.service/index.ts", "export class Service {}"),
+            ],
+            vec![
+                file("src/index.ts", "import './user.service.js';"),
+                file("src/user.service.ts", "export class Service {}"),
+                file("src/user.service.js", "export class Service {}"),
+            ],
+        ] {
+            assert!(ImportGraph::build(&files).evidenced_edges().is_empty());
+        }
+        let files = vec![
+            file("src/main.rs", "use crate::worker::Service;"),
+            file("src/worker.rs", "pub struct Service;"),
+        ];
+        assert_eq!(
+            ImportGraph::build(&files).evidenced_edges(),
+            &[("src/main.rs".into(), "src/worker.rs".into(), 1)]
+        );
+    }
+
+    #[test]
+    fn strict_lookup_abstains_on_opaque_or_inactive_imports() {
+        for declaration in [
+            "/* mod worker; */",
+            "#[cfg(feature = \"worker\")]\nmod worker;",
+            "#[path = \"worker.rs\"]\nmod worker;",
+            "const EXAMPLE: &str = r#\"\nmod worker;\n\"#;",
+            "fn nested() {\nmod worker;\n}",
+        ] {
+            let files = vec![
+                file("src/main.rs", declaration),
+                file("src/worker.rs", "pub fn run() {}"),
+            ];
+            assert!(
+                ImportGraph::build(&files).evidenced_edges().is_empty(),
+                "declaration {declaration}"
+            );
+        }
+        let files = vec![
+            file("src/index.ts", "const example = `\nimport './worker';\n`;"),
+            file("src/worker.ts", "export function run() {}"),
+        ];
+        assert!(ImportGraph::build(&files).evidenced_edges().is_empty());
+    }
+
+    #[test]
+    fn strict_edges_drop_prefix_evidence_when_scope_counter_is_unbalanced() {
+        for content in [
+            "mod worker;\nfn main() {\nlet brace = '{';\n}\nuse crate::worker::run;",
+            "mod worker;\nfn main() {\nlet brace = '}';\n}\nuse crate::worker::run;",
+            "mod worker;\nconst TEXT: &str = \"{\";\nuse crate::worker::run;",
+            "mod worker;\nconst TEXT: &str = \"}\";\nuse crate::worker::run;",
+            "mod worker;\nfn main() {",
+        ] {
+            let files = vec![
+                file("src/main.rs", content),
+                file("src/worker.rs", "pub fn run() {}"),
+            ];
+            assert!(
+                ImportGraph::build(&files).evidenced_edges().is_empty(),
+                "content {content}"
+            );
+        }
+    }
+
+    #[test]
+    fn full_line_comment_braces_do_not_change_strict_scope() {
+        let files = vec![
+            file(
+                "src/main.rs",
+                "// unmatched braces { {{{\nmod worker;\n// } }\nfn main() {}",
+            ),
+            file("src/worker.rs", "pub fn run() {}"),
+        ];
+        assert_eq!(
+            ImportGraph::build(&files).evidenced_edges(),
+            &[("src/main.rs".into(), "src/worker.rs".into(), 2)]
+        );
+    }
+
+    #[test]
+    fn strict_edges_resolve_many_distinct_modules_from_one_index() {
+        let files: Vec<_> = (0..4096)
+            .map(|i| {
+                file(
+                    &format!("src/nodes/node{i}.rs"),
+                    &format!("use super::node{};", (i + 1) % 4096),
+                )
+            })
+            .collect();
+        // Isolate architecture resolution from the separately cached heuristic
+        // neighbor graph while exercising a repository-sized inventory.
+        let graph = ImportGraph::from_candidates(&files, |_| Vec::new());
+        assert_eq!(graph.evidenced_edges().len(), files.len());
+        assert!(
+            graph
+                .evidenced_edges()
+                .iter()
+                .all(|(source, target, line)| source != target && *line == 1)
+        );
+        assert!(graph.evidenced_edges().contains(&(
+            "src/nodes/node4095.rs".into(),
+            "src/nodes/node0.rs".into(),
+            1
+        )));
+    }
     #[test]
     fn extracts_rust_imports() {
         let content = "//! preamble\nuse crate::a::b;\n  use super::x;\nuse self::y;\nmod foo;\nmod bar { fn inline() {} }\nuse serde::Serialize;\n";

@@ -38,7 +38,9 @@ impl PullRequest {
             !part.is_empty()
                 && part != "."
                 && part != ".."
-                && part.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+                && part
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
         };
         match repository.split_once('/') {
             Some((owner, repo)) if valid_part(owner) && valid_part(repo) => {}
@@ -54,7 +56,11 @@ impl PullRequest {
             .filter(|sha| sha.len() >= 7 && sha.chars().all(|c| c.is_ascii_hexdigit()))
             .context("the event's pull_request.head.sha is missing or not a commit sha")?
             .to_string();
-        Ok(Self { repository: repository.to_string(), number, head_sha })
+        Ok(Self {
+            repository: repository.to_string(),
+            number,
+            head_sha,
+        })
     }
 }
 
@@ -118,7 +124,11 @@ impl ApiStatusError {
     /// that is not JSON becomes the message.
     fn from_body(status: u16, text: String) -> Self {
         let Ok(body) = serde_json::from_str::<Value>(&text) else {
-            return Self { status, message: text, errors: Vec::new() };
+            return Self {
+                status,
+                message: text,
+                errors: Vec::new(),
+            };
         };
         let errors = body["errors"]
             .as_array()
@@ -129,15 +139,27 @@ impl ApiStatusError {
                         Value::String(s) => s.clone(),
                         e => {
                             let part = |k: &str| e[k].as_str().unwrap_or_default().to_string();
-                            let detail = if part("message").is_empty() { part("code") } else { part("message") };
-                            [part("field"), detail].into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join(": ")
+                            let detail = if part("message").is_empty() {
+                                part("code")
+                            } else {
+                                part("message")
+                            };
+                            [part("field"), detail]
+                                .into_iter()
+                                .filter(|p| !p.is_empty())
+                                .collect::<Vec<_>>()
+                                .join(": ")
                         }
                     })
                     .collect()
             })
             .unwrap_or_default();
         let message = body["message"].as_str().map(String::from).unwrap_or(text);
-        Self { status, message, errors }
+        Self {
+            status,
+            message,
+            errors,
+        }
     }
 }
 
@@ -160,7 +182,8 @@ pub fn is_unresolvable_anchor(error: &anyhow::Error) -> bool {
     error.downcast_ref::<ApiStatusError>().is_some_and(|e| {
         e.status == 422
             && std::iter::once(&e.message).chain(&e.errors).any(|text| {
-                text.contains("could not be resolved") || text.contains("pull_request_review_thread")
+                text.contains("could not be resolved")
+                    || text.contains("pull_request_review_thread")
             })
     })
 }
@@ -170,12 +193,29 @@ pub trait GitHubApi {
     /// Every file of the pull request, with its patch when GitHub has one.
     fn pull_files(&self, pr: &PullRequest) -> impl Future<Output = Result<Vec<PrFile>>> + Send;
     /// Every review (inline) comment on the pull request.
-    fn review_comments(&self, pr: &PullRequest) -> impl Future<Output = Result<Vec<Comment>>> + Send;
+    fn review_comments(
+        &self,
+        pr: &PullRequest,
+    ) -> impl Future<Output = Result<Vec<Comment>>> + Send;
     /// Every issue (conversation) comment on the pull request.
-    fn issue_comments(&self, pr: &PullRequest) -> impl Future<Output = Result<Vec<Comment>>> + Send;
-    fn create_review(&self, pr: &PullRequest, review: &NewReview) -> impl Future<Output = Result<()>> + Send;
-    fn create_issue_comment(&self, pr: &PullRequest, body: &str) -> impl Future<Output = Result<()>> + Send;
-    fn update_issue_comment(&self, pr: &PullRequest, id: u64, body: &str) -> impl Future<Output = Result<()>> + Send;
+    fn issue_comments(&self, pr: &PullRequest)
+    -> impl Future<Output = Result<Vec<Comment>>> + Send;
+    fn create_review(
+        &self,
+        pr: &PullRequest,
+        review: &NewReview,
+    ) -> impl Future<Output = Result<()>> + Send;
+    fn create_issue_comment(
+        &self,
+        pr: &PullRequest,
+        body: &str,
+    ) -> impl Future<Output = Result<()>> + Send;
+    fn update_issue_comment(
+        &self,
+        pr: &PullRequest,
+        id: u64,
+        body: &str,
+    ) -> impl Future<Output = Result<()>> + Send;
 }
 
 /// Page size for list calls (the API maximum).
@@ -186,7 +226,7 @@ const MAX_PAGES: usize = 100;
 
 /// A `reqwest` client for the GitHub REST API.
 pub struct GitHubClient {
-    http: reqwest::Client,
+    pub(crate) http: reqwest::Client,
     api_url: String,
     token: String,
 }
@@ -218,11 +258,11 @@ impl GitHubClient {
         })
     }
 
-    fn repo_url(&self, pr: &PullRequest, path: &str) -> String {
+    pub(crate) fn repo_url(&self, pr: &PullRequest, path: &str) -> String {
         format!("{}/repos/{}/{path}", self.api_url, pr.repository)
     }
 
-    async fn send(&self, request: reqwest::RequestBuilder) -> Result<reqwest::Response> {
+    pub(crate) async fn send(&self, request: reqwest::RequestBuilder) -> Result<reqwest::Response> {
         let resp = request
             .bearer_auth(&self.token)
             .header("Accept", "application/vnd.github+json")
@@ -243,7 +283,10 @@ impl GitHubClient {
     async fn get_all<T: DeserializeOwned>(&self, url: &str) -> Result<Vec<T>> {
         let mut items = Vec::new();
         for page in 1..=MAX_PAGES {
-            let request = self.http.get(url).query(&[("per_page", PER_PAGE), ("page", page)]);
+            let request = self
+                .http
+                .get(url)
+                .query(&[("per_page", PER_PAGE), ("page", page)]);
             let batch: Vec<T> = self.send(request).await?.json().await?;
             let last = batch.len() < PER_PAGE;
             items.extend(batch);
@@ -251,21 +294,27 @@ impl GitHubClient {
                 return Ok(items);
             }
         }
-        bail!("{url} lists more than {} items; refusing to act on a partial list", MAX_PAGES * PER_PAGE)
+        bail!(
+            "{url} lists more than {} items; refusing to act on a partial list",
+            MAX_PAGES * PER_PAGE
+        )
     }
 }
 
 impl GitHubApi for GitHubClient {
     async fn pull_files(&self, pr: &PullRequest) -> Result<Vec<PrFile>> {
-        self.get_all(&self.repo_url(pr, &format!("pulls/{}/files", pr.number))).await
+        self.get_all(&self.repo_url(pr, &format!("pulls/{}/files", pr.number)))
+            .await
     }
 
     async fn review_comments(&self, pr: &PullRequest) -> Result<Vec<Comment>> {
-        self.get_all(&self.repo_url(pr, &format!("pulls/{}/comments", pr.number))).await
+        self.get_all(&self.repo_url(pr, &format!("pulls/{}/comments", pr.number)))
+            .await
     }
 
     async fn issue_comments(&self, pr: &PullRequest) -> Result<Vec<Comment>> {
-        self.get_all(&self.repo_url(pr, &format!("issues/{}/comments", pr.number))).await
+        self.get_all(&self.repo_url(pr, &format!("issues/{}/comments", pr.number)))
+            .await
     }
 
     async fn create_review(&self, pr: &PullRequest, review: &NewReview) -> Result<()> {
@@ -276,13 +325,15 @@ impl GitHubApi for GitHubClient {
 
     async fn create_issue_comment(&self, pr: &PullRequest, body: &str) -> Result<()> {
         let url = self.repo_url(pr, &format!("issues/{}/comments", pr.number));
-        self.send(self.http.post(url).json(&json!({ "body": body }))).await?;
+        self.send(self.http.post(url).json(&json!({ "body": body })))
+            .await?;
         Ok(())
     }
 
     async fn update_issue_comment(&self, pr: &PullRequest, id: u64, body: &str) -> Result<()> {
         let url = self.repo_url(pr, &format!("issues/comments/{id}"));
-        self.send(self.http.patch(url).json(&json!({ "body": body }))).await?;
+        self.send(self.http.patch(url).json(&json!({ "body": body })))
+            .await?;
         Ok(())
     }
 }
@@ -295,9 +346,17 @@ mod tests {
 
     #[test]
     fn pull_request_from_event() {
-        let event = format!(r#"{{ "pull_request": {{ "number": 15, "head": {{ "sha": "{SHA}" }} }} }}"#);
+        let event =
+            format!(r#"{{ "pull_request": {{ "number": 15, "head": {{ "sha": "{SHA}" }} }} }}"#);
         let pr = PullRequest::from_event("brianluby/momus-review", &event).unwrap();
-        assert_eq!(pr, PullRequest { repository: "brianluby/momus-review".into(), number: 15, head_sha: SHA.into() });
+        assert_eq!(
+            pr,
+            PullRequest {
+                repository: "brianluby/momus-review".into(),
+                number: 15,
+                head_sha: SHA.into()
+            }
+        );
     }
 
     #[test]
@@ -306,9 +365,13 @@ mod tests {
         let err = PullRequest::from_event("o/r", push).unwrap_err();
         assert!(err.to_string().contains("pull_request events"), "{err:#}");
 
-        let event = format!(r#"{{ "pull_request": {{ "number": 1, "head": {{ "sha": "{SHA}" }} }} }}"#);
+        let event =
+            format!(r#"{{ "pull_request": {{ "number": 1, "head": {{ "sha": "{SHA}" }} }} }}"#);
         for bad in ["", "owner", "o/r/x", "../r", "o/..", "o/", "o/r?x=1"] {
-            assert!(PullRequest::from_event(bad, &event).is_err(), "accepted '{bad}'");
+            assert!(
+                PullRequest::from_event(bad, &event).is_err(),
+                "accepted '{bad}'"
+            );
         }
 
         let bad_sha = r#"{ "pull_request": { "number": 1, "head": { "sha": "main" } } }"#;
@@ -321,7 +384,12 @@ mod tests {
             commit_id: SHA.into(),
             event: "COMMENT",
             body: "b".into(),
-            comments: vec![InlineComment { path: "src/a.rs".into(), line: 3, side: "RIGHT", body: "c".into() }],
+            comments: vec![InlineComment {
+                path: "src/a.rs".into(),
+                line: 3,
+                side: "RIGHT",
+                body: "c".into(),
+            }],
         };
         assert_eq!(
             serde_json::to_value(&review).unwrap(),
@@ -392,7 +460,11 @@ mod tests {
     async fn client_pages_lists_and_surfaces_api_errors() {
         let (url, auth) = stub_github().await;
         let client = GitHubClient::new(&url, "t0ken").unwrap();
-        let pr = PullRequest { repository: "o/r".into(), number: 7, head_sha: SHA.into() };
+        let pr = PullRequest {
+            repository: "o/r".into(),
+            number: 7,
+            head_sha: SHA.into(),
+        };
 
         let files = client.pull_files(&pr).await.unwrap();
         assert_eq!(files.len(), 101);
@@ -403,9 +475,18 @@ mod tests {
 
         // Never a partial list: past the page cap is an error.
         let err = client.issue_comments(&pr).await.unwrap_err();
-        assert!(err.to_string().contains("refusing to act on a partial list"), "{err:#}");
+        assert!(
+            err.to_string()
+                .contains("refusing to act on a partial list"),
+            "{err:#}"
+        );
 
-        let review = NewReview { commit_id: SHA.into(), event: "COMMENT", body: "b".into(), comments: vec![] };
+        let review = NewReview {
+            commit_id: SHA.into(),
+            event: "COMMENT",
+            body: "b".into(),
+            comments: vec![],
+        };
         let err = client.create_review(&pr, &review).await.unwrap_err();
         assert!(is_unresolvable_anchor(&err), "{err:#}");
         assert_eq!(
@@ -424,19 +505,37 @@ mod tests {
                 .into(),
         );
         assert_eq!(e.message, "Validation Failed");
-        assert_eq!(e.errors, vec!["pull_request_review_thread.line: invalid", "body: is too long"]);
+        assert_eq!(
+            e.errors,
+            vec![
+                "pull_request_review_thread.line: invalid",
+                "body: is too long"
+            ]
+        );
 
         let e = ApiStatusError::from_body(502, "<html>Bad gateway</html>".into());
-        assert_eq!((e.message.as_str(), e.errors.len()), ("<html>Bad gateway</html>", 0));
+        assert_eq!(
+            (e.message.as_str(), e.errors.len()),
+            ("<html>Bad gateway</html>", 0)
+        );
     }
 
     #[test]
     fn only_an_anchor_422_is_an_unresolvable_anchor() {
         let status = |status: u16, message: &str, errors: &[&str]| -> anyhow::Error {
             let errors = errors.iter().map(|e| e.to_string()).collect();
-            ApiStatusError { status, message: message.into(), errors }.into()
+            ApiStatusError {
+                status,
+                message: message.into(),
+                errors,
+            }
+            .into()
         };
-        assert!(is_unresolvable_anchor(&status(422, "Unprocessable Entity", &["Line could not be resolved"])));
+        assert!(is_unresolvable_anchor(&status(
+            422,
+            "Unprocessable Entity",
+            &["Line could not be resolved"]
+        )));
         assert!(is_unresolvable_anchor(&status(
             422,
             "Validation Failed",
@@ -448,7 +547,11 @@ mod tests {
             "Unprocessable Entity",
             &["Can not request changes on your own pull request"]
         )));
-        assert!(!is_unresolvable_anchor(&status(403, "Line could not be resolved", &[])));
+        assert!(!is_unresolvable_anchor(&status(
+            403,
+            "Line could not be resolved",
+            &[]
+        )));
         assert!(!is_unresolvable_anchor(&anyhow::anyhow!("other")));
     }
 }

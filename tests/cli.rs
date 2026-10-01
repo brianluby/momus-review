@@ -812,3 +812,337 @@ async fn tier_uncertainty_and_oversized_sources_are_retained() {
                 && b["state"]["file"]["path"] == "oversized.rs")
     );
 }
+
+#[test]
+fn tour_is_offline_redacted_bounded_and_excludes_paths() {
+    let dir = config_only_branch();
+    let repo = dir.path();
+    fs::write(
+        repo.join("main.rs"),
+        "mod lib;\nfn main() {}\n// api_key = 'sk-proj-abcdefghijklmnopqrstuvwxyz1234567890'\n",
+    )
+    .unwrap();
+    fs::write(repo.join("excluded.rs"), "fn secret() {}\n").unwrap();
+    let out = momus(repo, &["tour", "--exclude", "excluded.rs"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(!text.contains("abcdefghijklmnopqrstuvwxyz1234567890"));
+    assert!(!text.contains("excluded.rs"));
+    let tour: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert!(
+        tour.get("head")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|head| !head.is_empty())
+    );
+    assert_eq!(tour.get("partial"), Some(&serde_json::json!(true)));
+    assert!(
+        tour.get("basis")
+            .and_then(serde_json::Value::as_str)
+            .unwrap()
+            .contains("Working-tree RepoIndex")
+    );
+    assert!(tour.get("unknowns").and_then(serde_json::Value::as_array).unwrap().iter().any(|reason| reason.as_str().is_some_and(|text| text.starts_with("Tour describes uncommitted or untracked working-tree evidence; head identifies the checkout baseline"))));
+    assert!(
+        tour["stops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["role"] == "entrypoint")
+    );
+    assert!(!tour["relationships"].as_array().unwrap().is_empty());
+    let limited = momus(repo, &["tour", "--max-files", "1", "--markdown"]);
+    assert!(limited.status.success());
+    assert!(String::from_utf8_lossy(&limited.stdout).contains("file count limit"));
+}
+
+#[test]
+fn dependency_only_review_runs_local_triage_without_api() {
+    let dir = config_only_branch();
+    let repo = dir.path();
+    fs::write(repo.join("Cargo.toml"), "[dependencies]\na=\"1.0.0\"\n").unwrap();
+    git(repo, &["add", "Cargo.toml"]);
+    git(repo, &["commit", "-qm", "manifest"]);
+    fs::write(repo.join("Cargo.toml"), "[dependencies]\na=\"2.0.0\"\n").unwrap();
+    let out = momus(repo, &["review", "--upgrade-triage"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["usage"]["calls"], 0);
+    assert!(!report["upgrades"]["changes"].as_array().unwrap().is_empty());
+    assert!(report["partial"].as_bool().unwrap());
+    let outcomes = report
+        .get("mergeConfidence")
+        .and_then(|summary| summary.get("outcomes"))
+        .and_then(serde_json::Value::as_array)
+        .expect("confidence must contain the outcome array");
+    assert_eq!(
+        outcomes.len(),
+        3,
+        "all independent outcomes must remain present"
+    );
+    let names: std::collections::BTreeSet<_> = outcomes
+        .iter()
+        .map(|outcome| {
+            assert_eq!(
+                outcome.get("probability"),
+                Some(&serde_json::Value::Null),
+                "missing history must be a present unknown probability"
+            );
+            assert_eq!(outcome.get("status"), Some(&serde_json::json!("unknown")));
+            outcome
+                .get("outcome")
+                .and_then(serde_json::Value::as_str)
+                .expect("outcome name must exist")
+        })
+        .collect();
+    assert_eq!(names, ["revert", "incident", "flake"].into_iter().collect());
+    assert!(!report["findings"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn docs_only_review_finding_uses_existing_suppression_flow() {
+    let dir = config_only_branch();
+    let repo = dir.path();
+    fs::write(repo.join("lib.rs"), "pub fn f(x: i32) {}\n").unwrap();
+    fs::write(
+        repo.join("README.md"),
+        "See `lib.rs`.\n```rust\nf();\n```\n",
+    )
+    .unwrap();
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-qm", "documented"]);
+    fs::write(
+        repo.join("README.md"),
+        "See `lib.rs`.\n```rust\nf(); // example\n```\n",
+    )
+    .unwrap();
+    let out = momus(repo, &["review", "--docs-drift"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let findings = report["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 1, "{report}");
+    let finding = &findings[0];
+    fs::create_dir_all(repo.join("reviews")).unwrap();
+    let feedback = serde_json::json!({"entries":[{"fingerprint":finding["fingerprint"],"file":"README.md","dimension":"correctness","probability":1.0,"vote":"down","suppress":true}]});
+    fs::write(
+        repo.join("reviews/feedback.json"),
+        serde_json::to_vec(&feedback).unwrap(),
+    )
+    .unwrap();
+    let out = momus(repo, &["review", "--docs-drift"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(report["findings"].as_array().unwrap().is_empty());
+    assert_eq!(report["workflow"]["suppressedFindings"], 1);
+}
+
+#[test]
+fn committed_review_requires_base_and_rejects_worktree_auxiliary_inputs() {
+    let dir = config_only_branch();
+    fs::write(dir.path().join(".gitignore"), "reviews/\nreport.json\n").unwrap();
+    git(dir.path(), &["add", ".gitignore"]);
+    git(dir.path(), &["commit", "-qm", "ignore review artifacts"]);
+    for args in [
+        vec!["review", "--committed-only"],
+        vec![
+            "review",
+            "--committed-only",
+            "--base",
+            "base",
+            "--docs-drift",
+        ],
+    ] {
+        assert!(!momus(dir.path(), &args).status.success());
+    }
+    let out = momus(
+        dir.path(),
+        &[
+            "review",
+            "--base",
+            "base",
+            "--committed-only",
+            "--allow-empty",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["reviewedCommitted"], true);
+    assert_eq!(report["reviewedClean"], true);
+    assert!(
+        !report["mergeConfidence"]["approval"]["eligible"]
+            .as_bool()
+            .unwrap()
+    );
+}
+
+#[test]
+fn confidence_fixture_reports_synthetic_limits_and_rejects_approval() {
+    let dir = config_only_branch();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/merge-confidence");
+    let paths: Vec<_> = [
+        "routine-report.json",
+        "synthetic-history.json",
+        "opt-in-policy.json",
+        "synthetic-checks.json",
+    ]
+    .iter()
+    .map(|p| root.join(p).to_str().unwrap().to_string())
+    .collect();
+    let out = momus(
+        dir.path(),
+        &[
+            "confidence",
+            "--report",
+            &paths[0],
+            "--history",
+            &paths[1],
+            "--policy",
+            &paths[2],
+            "--checks",
+            &paths[3],
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let summary: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(summary["synthetic"], true);
+    assert_eq!(
+        summary
+            .get("approval")
+            .and_then(|approval| approval.get("enabled")),
+        Some(&serde_json::json!(true)),
+        "the synthetic rejection must exercise an enabled opt-in policy"
+    );
+    assert_eq!(summary["approval"]["eligible"], false);
+    assert!(
+        summary
+            .get("approval")
+            .and_then(|approval| approval.get("reasons"))
+            .and_then(serde_json::Value::as_array)
+            .expect("rejection reasons must be present")
+            .iter()
+            .any(|reason| reason
+                .as_str()
+                .is_some_and(|text| text.to_lowercase().contains("synthetic"))),
+        "enabled policy must reject because history is synthetic: {summary}"
+    );
+    assert_eq!(summary["outcomes"][0]["status"], "syntheticDemonstration");
+}
+
+/// A provider can return a finite score outside the advertised severity
+/// rubric. Confidence estimation must fail closed without losing the source
+/// review that has already completed or its saved findings.
+#[tokio::test(flavor = "multi_thread")]
+async fn invalid_model_severity_preserves_completed_review_without_confidence() {
+    use axum::{Json, Router, routing::post};
+    use serde_json::{Value, json};
+    let app = Router::new().route("/v1/systemone", post(|Json(body): Json<Value>| async move {
+        let answers: serde_json::Map<String, Value> = body["questions"].as_object().unwrap().iter().map(|(id, question)| {
+            let answer = match question["type"].as_str().unwrap() {
+                "noul" => json!({"noul": if id == "correctness" || id == "supported" {0.95} else {0.1}}),
+                "score" => json!({"score": if id == "severity" {4.0} else {1.0}, "confidence":0.95}),
+                "choice" => {
+                    let criteria = question["criteria"].as_object().unwrap();
+                    let selected = if id == "mechanism" { "condition" }
+                        else if id == "owner" { "maintainer" }
+                        else { criteria.keys().find(|key| key.as_str() != "noMatch").unwrap().as_str() };
+                    assert!(criteria.contains_key(selected));
+                    json!({"choice":selected,"confidence":0.95})
+                }
+                _ => panic!("unexpected question type"),
+            };
+            (id.clone(), answer)
+        }).collect();
+        Json(json!({"model":"out-of-scale-stub","answers":answers}))
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let dir = config_only_branch();
+    fs::write(
+        dir.path().join("bug.rs"),
+        "pub fn accepts(value: i32) -> bool { value < 0 }\n",
+    )
+    .unwrap();
+    let repo = dir.path().to_path_buf();
+    let out = tokio::task::spawn_blocking(move || {
+        Command::new(env!("CARGO_BIN_EXE_momus"))
+            .args(["review", "--no-refine", "--no-cache"])
+            .current_dir(&repo)
+            .env_remove("TYPESAFE_API_KEY")
+            .env("TYPESAFE_BASE_URL", url)
+            .env("MOMUS_REPORT", repo.join("report.json"))
+            .env("MOMUS_CONCURRENCY", "1")
+            .env_remove("MOMUS_CONTEXT_BUDGET_CHARS")
+            .output()
+            .expect("momus runs")
+    })
+    .await
+    .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "completed review must still be persisted: {stderr}"
+    );
+    let report: Value =
+        serde_json::from_slice(&out.stdout).expect("stdout must contain the completed report");
+    let saved: Value = serde_json::from_slice(
+        &fs::read(dir.path().join("report.json")).expect("completed report must be saved"),
+    )
+    .unwrap();
+    assert_eq!(saved, report);
+    assert_eq!(report.get("partial"), Some(&json!(true)));
+    assert!(
+        report.get("mergeConfidence").is_none(),
+        "invalid scoring evidence cannot produce estimates or approval: {report}"
+    );
+    let findings = report.get("findings").and_then(Value::as_array).unwrap();
+    assert_eq!(
+        findings.len(),
+        1,
+        "completed source-review evidence must be preserved: {report}"
+    );
+    assert_eq!(findings[0].get("file"), Some(&json!("bug.rs")));
+    assert_eq!(findings[0].get("severity"), Some(&json!(4.0)));
+    assert!(
+        !findings[0]
+            .get("evidence")
+            .and_then(Value::as_str)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        report
+            .get("skipped")
+            .and_then(Value::as_array)
+            .unwrap()
+            .is_empty(),
+        "no source-review request failed"
+    );
+    assert!(
+        stderr.contains("merge outcome assessment unavailable"),
+        "assessment failure must be disclosed: {stderr}"
+    );
+}

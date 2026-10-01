@@ -41,6 +41,14 @@ inputs:
     description: Gitignore-style globs to skip, one per line
     required: false
     default: ""
+  upgrade-triage:
+    description: Enable bounded local Cargo/npm upgrade and changelog triage (requires a version containing this feature)
+    required: false
+    default: "false"
+  docs-drift:
+    description: Enable supported Rust documentation/interface checks
+    required: false
+    default: "false"
   fail-on-blocking:
     description: Fail the step when any finding requests changes (after posting)
     required: false
@@ -160,6 +168,8 @@ runs:
         SCOPES: ${{ inputs.paths }}
         EXCLUDE: ${{ inputs.exclude }}
         SARIF: ${{ inputs.sarif }}
+        UPGRADE_TRIAGE: ${{ inputs.upgrade-triage }}
+        DOCS_DRIFT: ${{ inputs.docs-drift }}
       run: |
         if [ "$(git rev-parse HEAD)" != "$HEAD_SHA" ]; then
           echo "::warning::HEAD is not the PR head ($HEAD_SHA); check out ref: github.event.pull_request.head.sha or inline comments may not line up"
@@ -168,6 +178,8 @@ runs:
         mkdir -p "$out"
         # --allow-empty: a docs- or config-only PR is an empty review, not a failure.
         args=(review --base "$BASE_SHA" --allow-empty)
+        if [ "$UPGRADE_TRIAGE" = true ]; then args+=(--upgrade-triage); fi
+        if [ "$DOCS_DRIFT" = true ]; then args+=(--docs-drift); fi
         while IFS= read -r glob; do
           if [ -n "$glob" ]; then args+=(--exclude "$glob"); fi
         done <<< "$EXCLUDE"

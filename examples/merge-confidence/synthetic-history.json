@@ -1,0 +1,2115 @@
+{
+  "asOf": 5000,
+  "heuristicVersion": 1,
+  "provenance": "generate.py deterministic fabricated data; no real-world calibration",
+  "records": [
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/0; fabricated, not observed history",
+        "observedAt": 200,
+        "occurred": false
+      },
+      "head": "synthetic-000",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/0; fabricated, not observed history",
+        "observedAt": 200,
+        "occurred": false
+      },
+      "mergedAt": 100,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/0; fabricated, not observed history",
+        "observedAt": 200,
+        "occurred": false
+      },
+      "scoreRecordedAt": 99
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/1; fabricated, not observed history",
+        "observedAt": 201,
+        "occurred": false
+      },
+      "head": "synthetic-001",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/1; fabricated, not observed history",
+        "observedAt": 201,
+        "occurred": false
+      },
+      "mergedAt": 101,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/1; fabricated, not observed history",
+        "observedAt": 201,
+        "occurred": false
+      },
+      "scoreRecordedAt": 100
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/2; fabricated, not observed history",
+        "observedAt": 202,
+        "occurred": false
+      },
+      "head": "synthetic-002",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/2; fabricated, not observed history",
+        "observedAt": 202,
+        "occurred": false
+      },
+      "mergedAt": 102,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/2; fabricated, not observed history",
+        "observedAt": 202,
+        "occurred": false
+      },
+      "scoreRecordedAt": 101
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/3; fabricated, not observed history",
+        "observedAt": 203,
+        "occurred": false
+      },
+      "head": "synthetic-003",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/3; fabricated, not observed history",
+        "observedAt": 203,
+        "occurred": false
+      },
+      "mergedAt": 103,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/3; fabricated, not observed history",
+        "observedAt": 203,
+        "occurred": false
+      },
+      "scoreRecordedAt": 102
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/4; fabricated, not observed history",
+        "observedAt": 204,
+        "occurred": false
+      },
+      "head": "synthetic-004",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/4; fabricated, not observed history",
+        "observedAt": 204,
+        "occurred": false
+      },
+      "mergedAt": 104,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/4; fabricated, not observed history",
+        "observedAt": 204,
+        "occurred": false
+      },
+      "scoreRecordedAt": 103
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/5; fabricated, not observed history",
+        "observedAt": 205,
+        "occurred": false
+      },
+      "head": "synthetic-005",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/5; fabricated, not observed history",
+        "observedAt": 205,
+        "occurred": false
+      },
+      "mergedAt": 105,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/5; fabricated, not observed history",
+        "observedAt": 205,
+        "occurred": false
+      },
+      "scoreRecordedAt": 104
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/6; fabricated, not observed history",
+        "observedAt": 206,
+        "occurred": false
+      },
+      "head": "synthetic-006",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/6; fabricated, not observed history",
+        "observedAt": 206,
+        "occurred": false
+      },
+      "mergedAt": 106,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/6; fabricated, not observed history",
+        "observedAt": 206,
+        "occurred": false
+      },
+      "scoreRecordedAt": 105
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/7; fabricated, not observed history",
+        "observedAt": 207,
+        "occurred": false
+      },
+      "head": "synthetic-007",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/7; fabricated, not observed history",
+        "observedAt": 207,
+        "occurred": false
+      },
+      "mergedAt": 107,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/7; fabricated, not observed history",
+        "observedAt": 207,
+        "occurred": false
+      },
+      "scoreRecordedAt": 106
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/8; fabricated, not observed history",
+        "observedAt": 208,
+        "occurred": false
+      },
+      "head": "synthetic-008",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/8; fabricated, not observed history",
+        "observedAt": 208,
+        "occurred": false
+      },
+      "mergedAt": 108,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/8; fabricated, not observed history",
+        "observedAt": 208,
+        "occurred": false
+      },
+      "scoreRecordedAt": 107
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/9; fabricated, not observed history",
+        "observedAt": 209,
+        "occurred": false
+      },
+      "head": "synthetic-009",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/9; fabricated, not observed history",
+        "observedAt": 209,
+        "occurred": false
+      },
+      "mergedAt": 109,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/9; fabricated, not observed history",
+        "observedAt": 209,
+        "occurred": false
+      },
+      "scoreRecordedAt": 108
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/10; fabricated, not observed history",
+        "observedAt": 210,
+        "occurred": false
+      },
+      "head": "synthetic-010",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/10; fabricated, not observed history",
+        "observedAt": 210,
+        "occurred": false
+      },
+      "mergedAt": 110,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/10; fabricated, not observed history",
+        "observedAt": 210,
+        "occurred": false
+      },
+      "scoreRecordedAt": 109
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/11; fabricated, not observed history",
+        "observedAt": 211,
+        "occurred": false
+      },
+      "head": "synthetic-011",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/11; fabricated, not observed history",
+        "observedAt": 211,
+        "occurred": false
+      },
+      "mergedAt": 111,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/11; fabricated, not observed history",
+        "observedAt": 211,
+        "occurred": false
+      },
+      "scoreRecordedAt": 110
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/12; fabricated, not observed history",
+        "observedAt": 212,
+        "occurred": false
+      },
+      "head": "synthetic-012",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/12; fabricated, not observed history",
+        "observedAt": 212,
+        "occurred": false
+      },
+      "mergedAt": 112,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/12; fabricated, not observed history",
+        "observedAt": 212,
+        "occurred": false
+      },
+      "scoreRecordedAt": 111
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/13; fabricated, not observed history",
+        "observedAt": 213,
+        "occurred": false
+      },
+      "head": "synthetic-013",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/13; fabricated, not observed history",
+        "observedAt": 213,
+        "occurred": false
+      },
+      "mergedAt": 113,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/13; fabricated, not observed history",
+        "observedAt": 213,
+        "occurred": false
+      },
+      "scoreRecordedAt": 112
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/14; fabricated, not observed history",
+        "observedAt": 214,
+        "occurred": false
+      },
+      "head": "synthetic-014",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/14; fabricated, not observed history",
+        "observedAt": 214,
+        "occurred": false
+      },
+      "mergedAt": 114,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/14; fabricated, not observed history",
+        "observedAt": 214,
+        "occurred": false
+      },
+      "scoreRecordedAt": 113
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/15; fabricated, not observed history",
+        "observedAt": 215,
+        "occurred": false
+      },
+      "head": "synthetic-015",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/15; fabricated, not observed history",
+        "observedAt": 215,
+        "occurred": false
+      },
+      "mergedAt": 115,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/15; fabricated, not observed history",
+        "observedAt": 215,
+        "occurred": false
+      },
+      "scoreRecordedAt": 114
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/16; fabricated, not observed history",
+        "observedAt": 216,
+        "occurred": false
+      },
+      "head": "synthetic-016",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/16; fabricated, not observed history",
+        "observedAt": 216,
+        "occurred": false
+      },
+      "mergedAt": 116,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/16; fabricated, not observed history",
+        "observedAt": 216,
+        "occurred": false
+      },
+      "scoreRecordedAt": 115
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/17; fabricated, not observed history",
+        "observedAt": 217,
+        "occurred": false
+      },
+      "head": "synthetic-017",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/17; fabricated, not observed history",
+        "observedAt": 217,
+        "occurred": false
+      },
+      "mergedAt": 117,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/17; fabricated, not observed history",
+        "observedAt": 217,
+        "occurred": false
+      },
+      "scoreRecordedAt": 116
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/18; fabricated, not observed history",
+        "observedAt": 218,
+        "occurred": false
+      },
+      "head": "synthetic-018",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/18; fabricated, not observed history",
+        "observedAt": 218,
+        "occurred": false
+      },
+      "mergedAt": 118,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/18; fabricated, not observed history",
+        "observedAt": 218,
+        "occurred": false
+      },
+      "scoreRecordedAt": 117
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/19; fabricated, not observed history",
+        "observedAt": 219,
+        "occurred": false
+      },
+      "head": "synthetic-019",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/19; fabricated, not observed history",
+        "observedAt": 219,
+        "occurred": false
+      },
+      "mergedAt": 119,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/19; fabricated, not observed history",
+        "observedAt": 219,
+        "occurred": false
+      },
+      "scoreRecordedAt": 118
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/20; fabricated, not observed history",
+        "observedAt": 220,
+        "occurred": false
+      },
+      "head": "synthetic-020",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/20; fabricated, not observed history",
+        "observedAt": 220,
+        "occurred": false
+      },
+      "mergedAt": 120,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/20; fabricated, not observed history",
+        "observedAt": 220,
+        "occurred": false
+      },
+      "scoreRecordedAt": 119
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/21; fabricated, not observed history",
+        "observedAt": 221,
+        "occurred": false
+      },
+      "head": "synthetic-021",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/21; fabricated, not observed history",
+        "observedAt": 221,
+        "occurred": false
+      },
+      "mergedAt": 121,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/21; fabricated, not observed history",
+        "observedAt": 221,
+        "occurred": false
+      },
+      "scoreRecordedAt": 120
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/22; fabricated, not observed history",
+        "observedAt": 222,
+        "occurred": false
+      },
+      "head": "synthetic-022",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/22; fabricated, not observed history",
+        "observedAt": 222,
+        "occurred": false
+      },
+      "mergedAt": 122,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/22; fabricated, not observed history",
+        "observedAt": 222,
+        "occurred": false
+      },
+      "scoreRecordedAt": 121
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/23; fabricated, not observed history",
+        "observedAt": 223,
+        "occurred": false
+      },
+      "head": "synthetic-023",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/23; fabricated, not observed history",
+        "observedAt": 223,
+        "occurred": false
+      },
+      "mergedAt": 123,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/23; fabricated, not observed history",
+        "observedAt": 223,
+        "occurred": false
+      },
+      "scoreRecordedAt": 122
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/24; fabricated, not observed history",
+        "observedAt": 224,
+        "occurred": false
+      },
+      "head": "synthetic-024",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/24; fabricated, not observed history",
+        "observedAt": 224,
+        "occurred": false
+      },
+      "mergedAt": 124,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/24; fabricated, not observed history",
+        "observedAt": 224,
+        "occurred": false
+      },
+      "scoreRecordedAt": 123
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/25; fabricated, not observed history",
+        "observedAt": 225,
+        "occurred": false
+      },
+      "head": "synthetic-025",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/25; fabricated, not observed history",
+        "observedAt": 225,
+        "occurred": false
+      },
+      "mergedAt": 125,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/25; fabricated, not observed history",
+        "observedAt": 225,
+        "occurred": false
+      },
+      "scoreRecordedAt": 124
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/26; fabricated, not observed history",
+        "observedAt": 226,
+        "occurred": false
+      },
+      "head": "synthetic-026",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/26; fabricated, not observed history",
+        "observedAt": 226,
+        "occurred": false
+      },
+      "mergedAt": 126,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/26; fabricated, not observed history",
+        "observedAt": 226,
+        "occurred": false
+      },
+      "scoreRecordedAt": 125
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/27; fabricated, not observed history",
+        "observedAt": 227,
+        "occurred": false
+      },
+      "head": "synthetic-027",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/27; fabricated, not observed history",
+        "observedAt": 227,
+        "occurred": false
+      },
+      "mergedAt": 127,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/27; fabricated, not observed history",
+        "observedAt": 227,
+        "occurred": false
+      },
+      "scoreRecordedAt": 126
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/28; fabricated, not observed history",
+        "observedAt": 228,
+        "occurred": false
+      },
+      "head": "synthetic-028",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/28; fabricated, not observed history",
+        "observedAt": 228,
+        "occurred": false
+      },
+      "mergedAt": 128,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/28; fabricated, not observed history",
+        "observedAt": 228,
+        "occurred": false
+      },
+      "scoreRecordedAt": 127
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/29; fabricated, not observed history",
+        "observedAt": 229,
+        "occurred": false
+      },
+      "head": "synthetic-029",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/29; fabricated, not observed history",
+        "observedAt": 229,
+        "occurred": false
+      },
+      "mergedAt": 129,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/29; fabricated, not observed history",
+        "observedAt": 229,
+        "occurred": false
+      },
+      "scoreRecordedAt": 128
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/30; fabricated, not observed history",
+        "observedAt": 230,
+        "occurred": false
+      },
+      "head": "synthetic-030",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/30; fabricated, not observed history",
+        "observedAt": 230,
+        "occurred": false
+      },
+      "mergedAt": 130,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/30; fabricated, not observed history",
+        "observedAt": 230,
+        "occurred": false
+      },
+      "scoreRecordedAt": 129
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/31; fabricated, not observed history",
+        "observedAt": 231,
+        "occurred": false
+      },
+      "head": "synthetic-031",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/31; fabricated, not observed history",
+        "observedAt": 231,
+        "occurred": false
+      },
+      "mergedAt": 131,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/31; fabricated, not observed history",
+        "observedAt": 231,
+        "occurred": false
+      },
+      "scoreRecordedAt": 130
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/32; fabricated, not observed history",
+        "observedAt": 232,
+        "occurred": false
+      },
+      "head": "synthetic-032",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/32; fabricated, not observed history",
+        "observedAt": 232,
+        "occurred": false
+      },
+      "mergedAt": 132,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/32; fabricated, not observed history",
+        "observedAt": 232,
+        "occurred": false
+      },
+      "scoreRecordedAt": 131
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/33; fabricated, not observed history",
+        "observedAt": 233,
+        "occurred": false
+      },
+      "head": "synthetic-033",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/33; fabricated, not observed history",
+        "observedAt": 233,
+        "occurred": false
+      },
+      "mergedAt": 133,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/33; fabricated, not observed history",
+        "observedAt": 233,
+        "occurred": false
+      },
+      "scoreRecordedAt": 132
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/34; fabricated, not observed history",
+        "observedAt": 234,
+        "occurred": false
+      },
+      "head": "synthetic-034",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/34; fabricated, not observed history",
+        "observedAt": 234,
+        "occurred": false
+      },
+      "mergedAt": 134,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/34; fabricated, not observed history",
+        "observedAt": 234,
+        "occurred": false
+      },
+      "scoreRecordedAt": 133
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/35; fabricated, not observed history",
+        "observedAt": 235,
+        "occurred": false
+      },
+      "head": "synthetic-035",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/35; fabricated, not observed history",
+        "observedAt": 235,
+        "occurred": false
+      },
+      "mergedAt": 135,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/35; fabricated, not observed history",
+        "observedAt": 235,
+        "occurred": false
+      },
+      "scoreRecordedAt": 134
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/36; fabricated, not observed history",
+        "observedAt": 236,
+        "occurred": false
+      },
+      "head": "synthetic-036",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/36; fabricated, not observed history",
+        "observedAt": 236,
+        "occurred": false
+      },
+      "mergedAt": 136,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/36; fabricated, not observed history",
+        "observedAt": 236,
+        "occurred": false
+      },
+      "scoreRecordedAt": 135
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/37; fabricated, not observed history",
+        "observedAt": 237,
+        "occurred": false
+      },
+      "head": "synthetic-037",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/37; fabricated, not observed history",
+        "observedAt": 237,
+        "occurred": false
+      },
+      "mergedAt": 137,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/37; fabricated, not observed history",
+        "observedAt": 237,
+        "occurred": false
+      },
+      "scoreRecordedAt": 136
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/38; fabricated, not observed history",
+        "observedAt": 238,
+        "occurred": false
+      },
+      "head": "synthetic-038",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/38; fabricated, not observed history",
+        "observedAt": 238,
+        "occurred": false
+      },
+      "mergedAt": 138,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/38; fabricated, not observed history",
+        "observedAt": 238,
+        "occurred": false
+      },
+      "scoreRecordedAt": 137
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/39; fabricated, not observed history",
+        "observedAt": 239,
+        "occurred": false
+      },
+      "head": "synthetic-039",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/39; fabricated, not observed history",
+        "observedAt": 239,
+        "occurred": false
+      },
+      "mergedAt": 139,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/39; fabricated, not observed history",
+        "observedAt": 239,
+        "occurred": false
+      },
+      "scoreRecordedAt": 138
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/40; fabricated, not observed history",
+        "observedAt": 240,
+        "occurred": true
+      },
+      "head": "synthetic-040",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/40; fabricated, not observed history",
+        "observedAt": 240,
+        "occurred": true
+      },
+      "mergedAt": 140,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/40; fabricated, not observed history",
+        "observedAt": 240,
+        "occurred": true
+      },
+      "scoreRecordedAt": 139
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/41; fabricated, not observed history",
+        "observedAt": 241,
+        "occurred": true
+      },
+      "head": "synthetic-041",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/41; fabricated, not observed history",
+        "observedAt": 241,
+        "occurred": true
+      },
+      "mergedAt": 141,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/41; fabricated, not observed history",
+        "observedAt": 241,
+        "occurred": true
+      },
+      "scoreRecordedAt": 140
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/42; fabricated, not observed history",
+        "observedAt": 242,
+        "occurred": true
+      },
+      "head": "synthetic-042",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/42; fabricated, not observed history",
+        "observedAt": 242,
+        "occurred": true
+      },
+      "mergedAt": 142,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/42; fabricated, not observed history",
+        "observedAt": 242,
+        "occurred": true
+      },
+      "scoreRecordedAt": 141
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/43; fabricated, not observed history",
+        "observedAt": 243,
+        "occurred": true
+      },
+      "head": "synthetic-043",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/43; fabricated, not observed history",
+        "observedAt": 243,
+        "occurred": true
+      },
+      "mergedAt": 143,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/43; fabricated, not observed history",
+        "observedAt": 243,
+        "occurred": true
+      },
+      "scoreRecordedAt": 142
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/44; fabricated, not observed history",
+        "observedAt": 244,
+        "occurred": true
+      },
+      "head": "synthetic-044",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/44; fabricated, not observed history",
+        "observedAt": 244,
+        "occurred": true
+      },
+      "mergedAt": 144,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/44; fabricated, not observed history",
+        "observedAt": 244,
+        "occurred": true
+      },
+      "scoreRecordedAt": 143
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/45; fabricated, not observed history",
+        "observedAt": 245,
+        "occurred": true
+      },
+      "head": "synthetic-045",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/45; fabricated, not observed history",
+        "observedAt": 245,
+        "occurred": true
+      },
+      "mergedAt": 145,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/45; fabricated, not observed history",
+        "observedAt": 245,
+        "occurred": true
+      },
+      "scoreRecordedAt": 144
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/46; fabricated, not observed history",
+        "observedAt": 246,
+        "occurred": true
+      },
+      "head": "synthetic-046",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/46; fabricated, not observed history",
+        "observedAt": 246,
+        "occurred": true
+      },
+      "mergedAt": 146,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/46; fabricated, not observed history",
+        "observedAt": 246,
+        "occurred": true
+      },
+      "scoreRecordedAt": 145
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/47; fabricated, not observed history",
+        "observedAt": 247,
+        "occurred": true
+      },
+      "head": "synthetic-047",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/47; fabricated, not observed history",
+        "observedAt": 247,
+        "occurred": true
+      },
+      "mergedAt": 147,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/47; fabricated, not observed history",
+        "observedAt": 247,
+        "occurred": true
+      },
+      "scoreRecordedAt": 146
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/48; fabricated, not observed history",
+        "observedAt": 248,
+        "occurred": true
+      },
+      "head": "synthetic-048",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/48; fabricated, not observed history",
+        "observedAt": 248,
+        "occurred": true
+      },
+      "mergedAt": 148,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/48; fabricated, not observed history",
+        "observedAt": 248,
+        "occurred": true
+      },
+      "scoreRecordedAt": 147
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/49; fabricated, not observed history",
+        "observedAt": 249,
+        "occurred": true
+      },
+      "head": "synthetic-049",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/49; fabricated, not observed history",
+        "observedAt": 249,
+        "occurred": true
+      },
+      "mergedAt": 149,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/49; fabricated, not observed history",
+        "observedAt": 249,
+        "occurred": true
+      },
+      "scoreRecordedAt": 148
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/50; fabricated, not observed history",
+        "observedAt": 250,
+        "occurred": true
+      },
+      "head": "synthetic-050",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/50; fabricated, not observed history",
+        "observedAt": 250,
+        "occurred": true
+      },
+      "mergedAt": 150,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/50; fabricated, not observed history",
+        "observedAt": 250,
+        "occurred": true
+      },
+      "scoreRecordedAt": 149
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/51; fabricated, not observed history",
+        "observedAt": 251,
+        "occurred": true
+      },
+      "head": "synthetic-051",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/51; fabricated, not observed history",
+        "observedAt": 251,
+        "occurred": true
+      },
+      "mergedAt": 151,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/51; fabricated, not observed history",
+        "observedAt": 251,
+        "occurred": true
+      },
+      "scoreRecordedAt": 150
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/52; fabricated, not observed history",
+        "observedAt": 252,
+        "occurred": true
+      },
+      "head": "synthetic-052",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/52; fabricated, not observed history",
+        "observedAt": 252,
+        "occurred": true
+      },
+      "mergedAt": 152,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/52; fabricated, not observed history",
+        "observedAt": 252,
+        "occurred": true
+      },
+      "scoreRecordedAt": 151
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/53; fabricated, not observed history",
+        "observedAt": 253,
+        "occurred": true
+      },
+      "head": "synthetic-053",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/53; fabricated, not observed history",
+        "observedAt": 253,
+        "occurred": true
+      },
+      "mergedAt": 153,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/53; fabricated, not observed history",
+        "observedAt": 253,
+        "occurred": true
+      },
+      "scoreRecordedAt": 152
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/54; fabricated, not observed history",
+        "observedAt": 254,
+        "occurred": true
+      },
+      "head": "synthetic-054",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/54; fabricated, not observed history",
+        "observedAt": 254,
+        "occurred": true
+      },
+      "mergedAt": 154,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/54; fabricated, not observed history",
+        "observedAt": 254,
+        "occurred": true
+      },
+      "scoreRecordedAt": 153
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/55; fabricated, not observed history",
+        "observedAt": 255,
+        "occurred": true
+      },
+      "head": "synthetic-055",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/55; fabricated, not observed history",
+        "observedAt": 255,
+        "occurred": true
+      },
+      "mergedAt": 155,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/55; fabricated, not observed history",
+        "observedAt": 255,
+        "occurred": true
+      },
+      "scoreRecordedAt": 154
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/56; fabricated, not observed history",
+        "observedAt": 256,
+        "occurred": true
+      },
+      "head": "synthetic-056",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/56; fabricated, not observed history",
+        "observedAt": 256,
+        "occurred": true
+      },
+      "mergedAt": 156,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/56; fabricated, not observed history",
+        "observedAt": 256,
+        "occurred": true
+      },
+      "scoreRecordedAt": 155
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/57; fabricated, not observed history",
+        "observedAt": 257,
+        "occurred": true
+      },
+      "head": "synthetic-057",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/57; fabricated, not observed history",
+        "observedAt": 257,
+        "occurred": true
+      },
+      "mergedAt": 157,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/57; fabricated, not observed history",
+        "observedAt": 257,
+        "occurred": true
+      },
+      "scoreRecordedAt": 156
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/58; fabricated, not observed history",
+        "observedAt": 258,
+        "occurred": true
+      },
+      "head": "synthetic-058",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/58; fabricated, not observed history",
+        "observedAt": 258,
+        "occurred": true
+      },
+      "mergedAt": 158,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/58; fabricated, not observed history",
+        "observedAt": 258,
+        "occurred": true
+      },
+      "scoreRecordedAt": 157
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/59; fabricated, not observed history",
+        "observedAt": 259,
+        "occurred": true
+      },
+      "head": "synthetic-059",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/59; fabricated, not observed history",
+        "observedAt": 259,
+        "occurred": true
+      },
+      "mergedAt": 159,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/59; fabricated, not observed history",
+        "observedAt": 259,
+        "occurred": true
+      },
+      "scoreRecordedAt": 158
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/60; fabricated, not observed history",
+        "observedAt": 2160,
+        "occurred": false
+      },
+      "head": "synthetic-060",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/60; fabricated, not observed history",
+        "observedAt": 2160,
+        "occurred": false
+      },
+      "mergedAt": 2060,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/60; fabricated, not observed history",
+        "observedAt": 2160,
+        "occurred": false
+      },
+      "scoreRecordedAt": 2059
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/61; fabricated, not observed history",
+        "observedAt": 2161,
+        "occurred": false
+      },
+      "head": "synthetic-061",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/61; fabricated, not observed history",
+        "observedAt": 2161,
+        "occurred": false
+      },
+      "mergedAt": 2061,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/61; fabricated, not observed history",
+        "observedAt": 2161,
+        "occurred": false
+      },
+      "scoreRecordedAt": 2060
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/62; fabricated, not observed history",
+        "observedAt": 2162,
+        "occurred": false
+      },
+      "head": "synthetic-062",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/62; fabricated, not observed history",
+        "observedAt": 2162,
+        "occurred": false
+      },
+      "mergedAt": 2062,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/62; fabricated, not observed history",
+        "observedAt": 2162,
+        "occurred": false
+      },
+      "scoreRecordedAt": 2061
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/63; fabricated, not observed history",
+        "observedAt": 2163,
+        "occurred": false
+      },
+      "head": "synthetic-063",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/63; fabricated, not observed history",
+        "observedAt": 2163,
+        "occurred": false
+      },
+      "mergedAt": 2063,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/63; fabricated, not observed history",
+        "observedAt": 2163,
+        "occurred": false
+      },
+      "scoreRecordedAt": 2062
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/64; fabricated, not observed history",
+        "observedAt": 2164,
+        "occurred": false
+      },
+      "head": "synthetic-064",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/64; fabricated, not observed history",
+        "observedAt": 2164,
+        "occurred": false
+      },
+      "mergedAt": 2064,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/64; fabricated, not observed history",
+        "observedAt": 2164,
+        "occurred": false
+      },
+      "scoreRecordedAt": 2063
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/65; fabricated, not observed history",
+        "observedAt": 2165,
+        "occurred": false
+      },
+      "head": "synthetic-065",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/65; fabricated, not observed history",
+        "observedAt": 2165,
+        "occurred": false
+      },
+      "mergedAt": 2065,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/65; fabricated, not observed history",
+        "observedAt": 2165,
+        "occurred": false
+      },
+      "scoreRecordedAt": 2064
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/66; fabricated, not observed history",
+        "observedAt": 2166,
+        "occurred": false
+      },
+      "head": "synthetic-066",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/66; fabricated, not observed history",
+        "observedAt": 2166,
+        "occurred": false
+      },
+      "mergedAt": 2066,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/66; fabricated, not observed history",
+        "observedAt": 2166,
+        "occurred": false
+      },
+      "scoreRecordedAt": 2065
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/67; fabricated, not observed history",
+        "observedAt": 2167,
+        "occurred": false
+      },
+      "head": "synthetic-067",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/67; fabricated, not observed history",
+        "observedAt": 2167,
+        "occurred": false
+      },
+      "mergedAt": 2067,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/67; fabricated, not observed history",
+        "observedAt": 2167,
+        "occurred": false
+      },
+      "scoreRecordedAt": 2066
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/68; fabricated, not observed history",
+        "observedAt": 2168,
+        "occurred": false
+      },
+      "head": "synthetic-068",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/68; fabricated, not observed history",
+        "observedAt": 2168,
+        "occurred": false
+      },
+      "mergedAt": 2068,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/68; fabricated, not observed history",
+        "observedAt": 2168,
+        "occurred": false
+      },
+      "scoreRecordedAt": 2067
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/69; fabricated, not observed history",
+        "observedAt": 2169,
+        "occurred": false
+      },
+      "head": "synthetic-069",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/69; fabricated, not observed history",
+        "observedAt": 2169,
+        "occurred": false
+      },
+      "mergedAt": 2069,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/69; fabricated, not observed history",
+        "observedAt": 2169,
+        "occurred": false
+      },
+      "scoreRecordedAt": 2068
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/70; fabricated, not observed history",
+        "observedAt": 2170,
+        "occurred": false
+      },
+      "head": "synthetic-070",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/70; fabricated, not observed history",
+        "observedAt": 2170,
+        "occurred": false
+      },
+      "mergedAt": 2070,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/70; fabricated, not observed history",
+        "observedAt": 2170,
+        "occurred": false
+      },
+      "scoreRecordedAt": 2069
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/71; fabricated, not observed history",
+        "observedAt": 2171,
+        "occurred": false
+      },
+      "head": "synthetic-071",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/71; fabricated, not observed history",
+        "observedAt": 2171,
+        "occurred": false
+      },
+      "mergedAt": 2071,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/71; fabricated, not observed history",
+        "observedAt": 2171,
+        "occurred": false
+      },
+      "scoreRecordedAt": 2070
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/72; fabricated, not observed history",
+        "observedAt": 2172,
+        "occurred": false
+      },
+      "head": "synthetic-072",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/72; fabricated, not observed history",
+        "observedAt": 2172,
+        "occurred": false
+      },
+      "mergedAt": 2072,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/72; fabricated, not observed history",
+        "observedAt": 2172,
+        "occurred": false
+      },
+      "scoreRecordedAt": 2071
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/73; fabricated, not observed history",
+        "observedAt": 2173,
+        "occurred": false
+      },
+      "head": "synthetic-073",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/73; fabricated, not observed history",
+        "observedAt": 2173,
+        "occurred": false
+      },
+      "mergedAt": 2073,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/73; fabricated, not observed history",
+        "observedAt": 2173,
+        "occurred": false
+      },
+      "scoreRecordedAt": 2072
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/74; fabricated, not observed history",
+        "observedAt": 2174,
+        "occurred": false
+      },
+      "head": "synthetic-074",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/74; fabricated, not observed history",
+        "observedAt": 2174,
+        "occurred": false
+      },
+      "mergedAt": 2074,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/74; fabricated, not observed history",
+        "observedAt": 2174,
+        "occurred": false
+      },
+      "scoreRecordedAt": 2073
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/75; fabricated, not observed history",
+        "observedAt": 2175,
+        "occurred": false
+      },
+      "head": "synthetic-075",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/75; fabricated, not observed history",
+        "observedAt": 2175,
+        "occurred": false
+      },
+      "mergedAt": 2075,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/75; fabricated, not observed history",
+        "observedAt": 2175,
+        "occurred": false
+      },
+      "scoreRecordedAt": 2074
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/76; fabricated, not observed history",
+        "observedAt": 2176,
+        "occurred": false
+      },
+      "head": "synthetic-076",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/76; fabricated, not observed history",
+        "observedAt": 2176,
+        "occurred": false
+      },
+      "mergedAt": 2076,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/76; fabricated, not observed history",
+        "observedAt": 2176,
+        "occurred": false
+      },
+      "scoreRecordedAt": 2075
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/77; fabricated, not observed history",
+        "observedAt": 2177,
+        "occurred": false
+      },
+      "head": "synthetic-077",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/77; fabricated, not observed history",
+        "observedAt": 2177,
+        "occurred": false
+      },
+      "mergedAt": 2077,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/77; fabricated, not observed history",
+        "observedAt": 2177,
+        "occurred": false
+      },
+      "scoreRecordedAt": 2076
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/78; fabricated, not observed history",
+        "observedAt": 2178,
+        "occurred": false
+      },
+      "head": "synthetic-078",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/78; fabricated, not observed history",
+        "observedAt": 2178,
+        "occurred": false
+      },
+      "mergedAt": 2078,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/78; fabricated, not observed history",
+        "observedAt": 2178,
+        "occurred": false
+      },
+      "scoreRecordedAt": 2077
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/79; fabricated, not observed history",
+        "observedAt": 2179,
+        "occurred": false
+      },
+      "head": "synthetic-079",
+      "heuristicScore": 0.0,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/79; fabricated, not observed history",
+        "observedAt": 2179,
+        "occurred": false
+      },
+      "mergedAt": 2079,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/79; fabricated, not observed history",
+        "observedAt": 2179,
+        "occurred": false
+      },
+      "scoreRecordedAt": 2078
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/80; fabricated, not observed history",
+        "observedAt": 2180,
+        "occurred": true
+      },
+      "head": "synthetic-080",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/80; fabricated, not observed history",
+        "observedAt": 2180,
+        "occurred": true
+      },
+      "mergedAt": 2080,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/80; fabricated, not observed history",
+        "observedAt": 2180,
+        "occurred": true
+      },
+      "scoreRecordedAt": 2079
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/81; fabricated, not observed history",
+        "observedAt": 2181,
+        "occurred": true
+      },
+      "head": "synthetic-081",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/81; fabricated, not observed history",
+        "observedAt": 2181,
+        "occurred": true
+      },
+      "mergedAt": 2081,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/81; fabricated, not observed history",
+        "observedAt": 2181,
+        "occurred": true
+      },
+      "scoreRecordedAt": 2080
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/82; fabricated, not observed history",
+        "observedAt": 2182,
+        "occurred": true
+      },
+      "head": "synthetic-082",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/82; fabricated, not observed history",
+        "observedAt": 2182,
+        "occurred": true
+      },
+      "mergedAt": 2082,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/82; fabricated, not observed history",
+        "observedAt": 2182,
+        "occurred": true
+      },
+      "scoreRecordedAt": 2081
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/83; fabricated, not observed history",
+        "observedAt": 2183,
+        "occurred": true
+      },
+      "head": "synthetic-083",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/83; fabricated, not observed history",
+        "observedAt": 2183,
+        "occurred": true
+      },
+      "mergedAt": 2083,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/83; fabricated, not observed history",
+        "observedAt": 2183,
+        "occurred": true
+      },
+      "scoreRecordedAt": 2082
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/84; fabricated, not observed history",
+        "observedAt": 2184,
+        "occurred": true
+      },
+      "head": "synthetic-084",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/84; fabricated, not observed history",
+        "observedAt": 2184,
+        "occurred": true
+      },
+      "mergedAt": 2084,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/84; fabricated, not observed history",
+        "observedAt": 2184,
+        "occurred": true
+      },
+      "scoreRecordedAt": 2083
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/85; fabricated, not observed history",
+        "observedAt": 2185,
+        "occurred": true
+      },
+      "head": "synthetic-085",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/85; fabricated, not observed history",
+        "observedAt": 2185,
+        "occurred": true
+      },
+      "mergedAt": 2085,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/85; fabricated, not observed history",
+        "observedAt": 2185,
+        "occurred": true
+      },
+      "scoreRecordedAt": 2084
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/86; fabricated, not observed history",
+        "observedAt": 2186,
+        "occurred": true
+      },
+      "head": "synthetic-086",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/86; fabricated, not observed history",
+        "observedAt": 2186,
+        "occurred": true
+      },
+      "mergedAt": 2086,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/86; fabricated, not observed history",
+        "observedAt": 2186,
+        "occurred": true
+      },
+      "scoreRecordedAt": 2085
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/87; fabricated, not observed history",
+        "observedAt": 2187,
+        "occurred": true
+      },
+      "head": "synthetic-087",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/87; fabricated, not observed history",
+        "observedAt": 2187,
+        "occurred": true
+      },
+      "mergedAt": 2087,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/87; fabricated, not observed history",
+        "observedAt": 2187,
+        "occurred": true
+      },
+      "scoreRecordedAt": 2086
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/88; fabricated, not observed history",
+        "observedAt": 2188,
+        "occurred": true
+      },
+      "head": "synthetic-088",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/88; fabricated, not observed history",
+        "observedAt": 2188,
+        "occurred": true
+      },
+      "mergedAt": 2088,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/88; fabricated, not observed history",
+        "observedAt": 2188,
+        "occurred": true
+      },
+      "scoreRecordedAt": 2087
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/89; fabricated, not observed history",
+        "observedAt": 2189,
+        "occurred": true
+      },
+      "head": "synthetic-089",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/89; fabricated, not observed history",
+        "observedAt": 2189,
+        "occurred": true
+      },
+      "mergedAt": 2089,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/89; fabricated, not observed history",
+        "observedAt": 2189,
+        "occurred": true
+      },
+      "scoreRecordedAt": 2088
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/90; fabricated, not observed history",
+        "observedAt": 2190,
+        "occurred": true
+      },
+      "head": "synthetic-090",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/90; fabricated, not observed history",
+        "observedAt": 2190,
+        "occurred": true
+      },
+      "mergedAt": 2090,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/90; fabricated, not observed history",
+        "observedAt": 2190,
+        "occurred": true
+      },
+      "scoreRecordedAt": 2089
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/91; fabricated, not observed history",
+        "observedAt": 2191,
+        "occurred": true
+      },
+      "head": "synthetic-091",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/91; fabricated, not observed history",
+        "observedAt": 2191,
+        "occurred": true
+      },
+      "mergedAt": 2091,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/91; fabricated, not observed history",
+        "observedAt": 2191,
+        "occurred": true
+      },
+      "scoreRecordedAt": 2090
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/92; fabricated, not observed history",
+        "observedAt": 2192,
+        "occurred": true
+      },
+      "head": "synthetic-092",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/92; fabricated, not observed history",
+        "observedAt": 2192,
+        "occurred": true
+      },
+      "mergedAt": 2092,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/92; fabricated, not observed history",
+        "observedAt": 2192,
+        "occurred": true
+      },
+      "scoreRecordedAt": 2091
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/93; fabricated, not observed history",
+        "observedAt": 2193,
+        "occurred": true
+      },
+      "head": "synthetic-093",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/93; fabricated, not observed history",
+        "observedAt": 2193,
+        "occurred": true
+      },
+      "mergedAt": 2093,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/93; fabricated, not observed history",
+        "observedAt": 2193,
+        "occurred": true
+      },
+      "scoreRecordedAt": 2092
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/94; fabricated, not observed history",
+        "observedAt": 2194,
+        "occurred": true
+      },
+      "head": "synthetic-094",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/94; fabricated, not observed history",
+        "observedAt": 2194,
+        "occurred": true
+      },
+      "mergedAt": 2094,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/94; fabricated, not observed history",
+        "observedAt": 2194,
+        "occurred": true
+      },
+      "scoreRecordedAt": 2093
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/95; fabricated, not observed history",
+        "observedAt": 2195,
+        "occurred": true
+      },
+      "head": "synthetic-095",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/95; fabricated, not observed history",
+        "observedAt": 2195,
+        "occurred": true
+      },
+      "mergedAt": 2095,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/95; fabricated, not observed history",
+        "observedAt": 2195,
+        "occurred": true
+      },
+      "scoreRecordedAt": 2094
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/96; fabricated, not observed history",
+        "observedAt": 2196,
+        "occurred": true
+      },
+      "head": "synthetic-096",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/96; fabricated, not observed history",
+        "observedAt": 2196,
+        "occurred": true
+      },
+      "mergedAt": 2096,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/96; fabricated, not observed history",
+        "observedAt": 2196,
+        "occurred": true
+      },
+      "scoreRecordedAt": 2095
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/97; fabricated, not observed history",
+        "observedAt": 2197,
+        "occurred": true
+      },
+      "head": "synthetic-097",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/97; fabricated, not observed history",
+        "observedAt": 2197,
+        "occurred": true
+      },
+      "mergedAt": 2097,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/97; fabricated, not observed history",
+        "observedAt": 2197,
+        "occurred": true
+      },
+      "scoreRecordedAt": 2096
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/98; fabricated, not observed history",
+        "observedAt": 2198,
+        "occurred": true
+      },
+      "head": "synthetic-098",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/98; fabricated, not observed history",
+        "observedAt": 2198,
+        "occurred": true
+      },
+      "mergedAt": 2098,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/98; fabricated, not observed history",
+        "observedAt": 2198,
+        "occurred": true
+      },
+      "scoreRecordedAt": 2097
+    },
+    {
+      "flake": {
+        "evidence": "fixture://synthetic/surveillance/99; fabricated, not observed history",
+        "observedAt": 2199,
+        "occurred": true
+      },
+      "head": "synthetic-099",
+      "heuristicScore": 0.9,
+      "incident": {
+        "evidence": "fixture://synthetic/surveillance/99; fabricated, not observed history",
+        "observedAt": 2199,
+        "occurred": true
+      },
+      "mergedAt": 2099,
+      "revert": {
+        "evidence": "fixture://synthetic/surveillance/99; fabricated, not observed history",
+        "observedAt": 2199,
+        "occurred": true
+      },
+      "scoreRecordedAt": 2098
+    }
+  ],
+  "repository": "fixture/repository",
+  "synthetic": true,
+  "trainingCutoff": 1000,
+  "windows": {
+    "flakeSeconds": 100,
+    "incidentSeconds": 100,
+    "revertSeconds": 100
+  }
+}

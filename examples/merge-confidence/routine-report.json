@@ -1,0 +1,48 @@
+{
+  "dimensions": [
+    {
+      "key": "correctness",
+      "label": "correctness",
+      "short": "correctness"
+    },
+    {
+      "key": "security",
+      "label": "security",
+      "short": "security"
+    },
+    {
+      "key": "reliability",
+      "label": "reliability",
+      "short": "reliability"
+    },
+    {
+      "key": "compatibility",
+      "label": "compatibility",
+      "short": "compatibility"
+    },
+    {
+      "key": "testGap",
+      "label": "testGap",
+      "short": "testGap"
+    }
+  ],
+  "findings": [],
+  "matrix": [
+    {
+      "compatibility": 0.0,
+      "correctness": 0.0,
+      "file": "src/main.rs",
+      "reliability": 0.0,
+      "security": 0.0,
+      "testGap": 0.0
+    }
+  ],
+  "mode": "changes",
+  "partial": false,
+  "reviewedBase": "synthetic-base",
+  "reviewedClean": true,
+  "reviewedCommitted": true,
+  "reviewedHead": "synthetic-candidate",
+  "scope": "synthetic routine change",
+  "screenedFiles": 1
+}

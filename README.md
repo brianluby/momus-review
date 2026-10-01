@@ -49,7 +49,7 @@ from inside GitHub Actions. It reads `GITHUB_TOKEN` (needs
 `pull-requests: write`), `GITHUB_REPOSITORY`, and the `pull_request` event
 at `GITHUB_EVENT_PATH`. Findings on a line of the PR's diff become inline
 review comments, at most `--max-comments N` (default 10), best-ranked first;
-everything else goes into one summary comment with counts, P(revert), usage,
+everything else goes into one summary comment with counts, an explicitly uncalibrated risk score, usage,
 and redaction totals. Re-runs are idempotent: each comment carries hidden
 fingerprint and topic markers, so a finding is posted once (after an edit to
 the code around it, the same concern nearby is listed in the summary rather
@@ -370,3 +370,19 @@ GitHub-hosted Linux runner, 2026-09-29.
   long random-looking literals become typed placeholders such as
   `<redacted:aws-access-key>`, so hardcoded-secret findings still surface.
   Each report's `redactions` field counts what was hidden per rule.
+
+## Repository evidence and merge outcomes
+
+```sh
+momus review --base origin/main --upgrade-triage --docs-drift
+momus tour --exclude 'vendor/**' --max-files 500 --markdown
+momus confidence --report reviews/latest.json --history outcome-history.json
+```
+
+Upgrade triage supports Cargo and npm manifests/lockfiles with dependency/version-matched local release notes. Missing changelogs, unsupported ecosystems and unresolved versions stay unknown. Docs comparison initially supports explicitly identified Rust public-function examples in Markdown; its findings cite current/base interfaces and documentation lines. Both are opt-in local analyses, join standard findings/suppression/SARIF output, and disclose incomplete evidence. Tours use bounded, redacted repository indexing, heuristic roles and exact unique static imports; Python and other unsupported import syntax retain explicit unknown relationships. See [upgrade triage](docs/upgrades.md), [docs drift](docs/docs-drift.md) and [repository tours](docs/tours.md).
+
+The JSON `mergeConfidence` separates revert, incident and flake outcomes. Without sufficient observed history each probability is `null`; the legacy `pRevert` remains a heuristic. Chronological held-out evaluation and reproducible synthetic examples are documented in [merge confidence](docs/merge-confidence.md). Synthetic fixtures do not demonstrate real-world calibration.
+
+Automatic approval is disabled by default. The explicit `github-review --auto-approve-policy TRUSTED_POLICY --history TRUSTED_HISTORY` command recomputes eligibility against live GitHub head/base/file/check evidence and a committed-only report. It rejects incomplete/unsupported coverage, unknown outcomes, synthetic history, failed/missing checks, suppression and high-risk findings. Store approval policy/history and the reviewed report as trusted inputs outside PR-author control. See the setup and limitations in the merge-confidence guide.
+
+The Action and reusable review workflow expose `upgrade-triage` and `docs-drift` (both default false). Pin a commit/version containing these features; older released binaries do not understand their CLI flags. Automatic approval uses a separate trusted publishing step with `checks: read`, `statuses: read`, `contents: read` and `pull-requests: write`; it is not enabled by these Action inputs.
