@@ -4,10 +4,10 @@ Finds fault in the gods' own work — so it can find fault in yours.
 
 Momus (Μῶμος) is the Greek god of satire, mockery, and criticism. Legend has
 it he criticized Zeus's own creations. `momus` is a code/security review
-product that does the same to your diffs: fast, calibrated, staged judgments
+product that does the same to your diffs: fast, staged judgments
 with concrete evidence, severity, and owner routing.
 
-- Crate: `momus-review` (free on crates.io as of 2026-09-25)
+- Crate: `momus-review`; install from the [signed binaries or source](docs/distribution.md)
 - Binary: `momus`
 - Engine: [TypeSafe Jev](https://typesafe.ai), through a thin HTTP client
   speaking the `system_one` wire format directly (see `docs/rust-types.md`)
@@ -16,6 +16,13 @@ with concrete evidence, severity, and owner routing.
   (`momus-eval`), with evidence excerpts, an OWASP-aligned security mechanism
   vocabulary, and crypto/misconfig screen steering; pull requests get inline
   review comments through a GitHub Action (see "CI")
+
+**0.9.0 is the beta milestone for team testing.** See the
+[release notes](docs/releases/v0.9.0.md) for the expanded review capabilities,
+offline benchmarks and API documentation. Real-history calibration and the
+comparison benchmark remain acceptance gates for 1.0.0; Jeeves is planned for
+1.1.0. Merge approval stays disabled by default. See the
+[release milestones](docs/roadmap.md#release-milestones) for the remaining work.
 
 ## What It Does
 
@@ -168,13 +175,15 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }} # the PR head, not the merge commit
           fetch-depth: 0                                 # history for the merge base
           persist-credentials: false
-      - uses: brianluby/momus-review@v0.1.0
+      - uses: brianluby/momus-review@v0.9.0
         with:
           api-key: ${{ secrets.TYPESAFE_API_KEY }}
+          version: v0.9.0
 ```
 
 It downloads the prebuilt `momus` for the runner (Linux x64/arm64, macOS
-arm64) and checks its SHA-256, runs `momus review --base <PR base sha>`, and
+arm64) and verifies its checksum, provenance and SBOM attestations, runs
+`momus review --base <PR base sha>`, and
 then `momus github-review`. Inputs:
 
 | input | default | purpose |
@@ -232,7 +241,7 @@ and `--sarif` output directly.
 ## Why Jev, Why This Shape
 
 Jev is a decision model: typed questions (`noul`/`choice`/`score`) against a
-state, with calibrated probabilities — fast enough to sit inside code paths.
+state, with task probabilities — fast enough to sit inside code paths.
 Momus keeps orchestration in code (thresholds, budgets, ranking) and uses Jev
 only for bounded judgments. That gives:
 
@@ -240,7 +249,8 @@ only for bounded judgments. That gives:
   (unlimited by default, cap via `--follow-ups N`), so no finding is silently
   dropped by an arbitrary budget; every report carries per-run `usage`
   (call count, plus token totals when the server reports them)
-- Calibration: probabilities mean something, so thresholds and routing work
+- Explicit uncertainty: thresholds route bounded model judgments; Momus merge
+  outcome probabilities require separate real-history calibration, still pending
 - Composability: narrow calls chain into taint analysis, meta-judgment,
   pairwise ranking — things monolithic prompts fumble
 
