@@ -56,6 +56,12 @@ jobs:
 
       - name: Validate offline product benchmarks and outcome collection
         run: |
+          # Documentation probes compile from temporary directories outside
+          # the repository pin. Use installed toolchain binaries directly so
+          # rustup cannot select or download the runner's default toolchain.
+          fixture_rust_bin="$(dirname "$(rustup which rustc)")"
+          export PATH="$fixture_rust_bin:$PATH"
+          rustc --version
           python3 -B eval/momus/evaluate.py validate
           python3 -B eval/momus/test_evaluate.py
           python3 -B eval/momus/test_materialize.py
