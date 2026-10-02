@@ -1,16 +1,28 @@
-//! Secret redaction applied to every `system_one` state before it leaves the
-//! machine (FIND-005 mitigation, #25).
+//! Best-effort credential redaction for text and JSON string values.
 //!
-//! Each detected secret is replaced by a typed placeholder such as
-//! `<redacted:aws-access-key>`, never deleted: the model still sees that a
-//! credential literal sits there, so hardcoded-secret findings survive
-//! (`cryptoSecrets`, `sensitiveDataExposure`). Replacements never add or
-//! remove a newline, so hunk start lines and region offsets computed locally
-//! stay valid for the redacted text.
+//! The System One client uses these helpers on outgoing state unless redaction
+//! is disabled. Local auxiliary checks and publication adapters also call them
+//! explicitly. The functions perform no I/O and sanitize only the values their
+//! caller supplies; questions, object keys, and unrelated local artifacts are
+//! outside an outgoing-state pass.
 //!
-//! Only outgoing text is redacted. Local evidence, fingerprints, and saved
-//! reports keep the original text; fingerprints therefore stay stable
-//! whether redaction is on or off.
+//! Each matched value is replaced by a typed placeholder such as
+//! `<redacted:aws-access-key>`, retaining evidence of a credential-like literal
+//! for hardcoded-secret review. This does not guarantee a finding. Replacements
+//! never add or remove a newline, so line-based hunk starts and region positions remain
+//! usable. Byte lengths and columns can change and must not be reused.
+//!
+//! Detection uses provider patterns, credential assignments, PEM blocks, and
+//! an entropy heuristic. It deliberately leaves many references, templates,
+//! and benign-looking values alone, and can both miss secrets and redact
+//! nonsecrets. Successful redaction or an empty match log is no secrecy
+//! guarantee. Retain separate handling for inputs whose confidentiality must
+//! be assured before sending or publishing them.
+//!
+//! Outgoing-state redaction changes request state. Ordinary local source
+//! evidence, fingerprints, and saved reports can retain original text unless a caller
+//! explicitly sanitizes an export. Matched plaintext also lives temporarily in
+//! [`Redactions`]; consuming or dropping it does not securely erase memory.
 
 use std::collections::{BTreeMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -23,6 +35,11 @@ use serde_json::Value;
 const PLACEHOLDER_PREFIX: &str = "<redacted:";
 
 /// The placeholder that replaces a secret matched by `rule`.
+///
+/// This only formats `<redacted:{rule}>`; it neither checks that `rule` is a
+/// known detector nor inspects or sanitizes the supplied label. Detection uses
+/// fixed rule names. Callers constructing their own placeholders must provide
+/// a suitable label themselves.
 pub fn placeholder(rule: &str) -> String {
     format!("{PLACEHOLDER_PREFIX}{rule}>")
 }
@@ -206,8 +223,13 @@ fn looks_random(value: &str) -> bool {
         && entropy(value) >= 4.3
 }
 
-/// What one `redact` pass found: rule name → the matched secret values.
-/// Values are kept only long enough to hash them into a `RedactionLog`.
+/// Accumulator of matched rule names and plaintext values from redaction passes.
+///
+/// [`redact`] and [`redact_value`] append to this value; reusing it combines
+/// passes and preserves duplicate matches. [`RedactionLog::record`] consumes
+/// it to retain hash-based counts instead. It owns plaintext until then or
+/// until dropped, with no secure erasure. Its derived `Debug` output includes
+/// those values, so do not log the accumulator when secrets must stay private.
 #[derive(Debug, Default, PartialEq)]
 pub struct Redactions(Vec<(&'static str, String)>);
 
@@ -216,18 +238,53 @@ impl Redactions {
         self.0.push((rule, secret.to_string()));
     }
 
+    /// Whether no match has been appended to this accumulator.
+    ///
+    /// This says nothing about secrets that the detectors did not recognize.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
-    /// Rule names in match order (for tests and diagnostics).
+    /// Rule names in detection-pass order, including duplicates.
+    ///
+    /// Detectors run by rule, so this need not be the order of values in the
+    /// original text. The returned labels do not expose matched plaintext.
     pub fn rules(&self) -> Vec<&'static str> {
         self.0.iter().map(|(rule, _)| *rule).collect()
     }
 }
 
-/// Redacts every secret in `text`, returning the redacted text and what was
-/// replaced. The output has exactly as many newlines as the input.
+/// Replaces values recognized by the built-in detectors and appends their matches.
+///
+/// The returned text has exactly as many `\n` characters as the input. Context
+/// surrounding an ordinary match is retained; a PEM block can have its body
+/// blanked while retaining its line breaks and diff markers. Columns and byte
+/// offsets can change. The original `text` is borrowed and remains untouched.
+///
+/// `found` is not cleared: use a fresh [`Redactions`] for an individual pass,
+/// or deliberately reuse it to accumulate matches. Recognized placeholders and
+/// common references are left alone. Detection is best effort, so neither a
+/// successful return nor no matches certifies that the text is safe to disclose.
+///
+/// ```
+/// use momus_review::domain::redact::{redact, RedactionLog, Redactions};
+///
+/// let source = "+const password = \"hunter2hunter2\";\n+next();\n";
+/// let mut log = RedactionLog::default();
+/// for _ in 0..2 {
+///     let mut found = Redactions::default();
+///     let output = redact(source, &mut found);
+///     assert_eq!(output, "+const password = \"<redacted:generic-secret>\";\n+next();\n");
+///     assert_eq!(output.matches('\n').count(), source.matches('\n').count());
+///     assert_eq!(found.rules(), vec!["generic-secret"]);
+///     let mut second_pass = Redactions::default();
+///     assert_eq!(redact(&output, &mut second_pass), output);
+///     assert!(second_pass.is_empty());
+///     log.record(found);
+/// }
+/// // Repeated requests with the same matched value contribute one hash entry.
+/// assert_eq!(log.summary().get("generic-secret"), Some(&1));
+/// ```
 pub fn redact(text: &str, found: &mut Redactions) -> String {
     let mut out = redact_pem(text, found);
     for rule in RULES.iter() {
@@ -353,8 +410,30 @@ fn redact_pem(text: &str, found: &mut Redactions) -> String {
     out
 }
 
-/// Redacts every string inside a JSON value in place (object keys are schema
-/// names we control and are left alone).
+/// Recursively redacts JSON string values in place, accumulating matches.
+///
+/// Arrays and object values are visited; object keys and non-string scalar
+/// values are unchanged. The outgoing-state caller uses schema names it owns
+/// as keys. A caller with user-controlled or potentially sensitive keys must
+/// handle those keys separately. This function inherits [`redact`]'s best-effort
+/// detection and newline-preservation contract and does not clear `found`.
+///
+/// ```
+/// use momus_review::domain::redact::{redact_value, Redactions};
+/// use serde_json::json;
+///
+/// let mut state = json!({
+///     "context": [{"text": "AKIAIOSFODNN7EXAMPLE"}],
+///     "AKIAIOSFODNN7EXAMPLE": "schema key is left untouched",
+///     "line": 7,
+/// });
+/// let mut found = Redactions::default();
+/// redact_value(&mut state, &mut found);
+/// assert_eq!(state["context"][0]["text"], "<redacted:aws-access-key>");
+/// assert_eq!(state["AKIAIOSFODNN7EXAMPLE"], "schema key is left untouched");
+/// assert_eq!(state["line"], 7);
+/// assert_eq!(found.rules(), vec!["aws-access-key"]);
+/// ```
 pub fn redact_value(value: &mut Value, found: &mut Redactions) {
     match value {
         Value::String(s) => {
@@ -369,16 +448,27 @@ pub fn redact_value(value: &mut Value, found: &mut Redactions) {
     }
 }
 
-/// Per-run audit of what redaction replaced: distinct secret values per rule.
+/// Per-run diagnostic counts of hash-distinct matched values per rule.
 /// The same file is sent many times (one screen per dimension, follow-ups,
 /// refinement), so counting occurrences would overstate what was hidden.
-/// Values are stored only as hashes.
+///
+/// Recorded values are retained only as `DefaultHasher` outputs, with separate
+/// sets for each rule. Those hashes are neither cryptographic protection nor
+/// stable persisted identities; collisions can undercount distinct values.
+/// Counts describe detector matches, not a verified inventory of secrets or
+/// proof that an output was safe to transmit. Plaintext is held in
+/// [`Redactions`] until [`record`](Self::record) consumes it.
 #[derive(Debug, Default)]
 pub struct RedactionLog {
     seen: BTreeMap<&'static str, HashSet<u64>>,
 }
 
 impl RedactionLog {
+    /// Consumes matches and deduplicates their hashes independently per rule.
+    ///
+    /// Repeated values matched under one rule count once; a value matched under
+    /// two rules can count in both. Consuming matches does not securely erase
+    /// their former plaintext allocations.
     pub fn record(&mut self, found: Redactions) {
         for (rule, secret) in found.0 {
             let mut hasher = DefaultHasher::new();
@@ -387,7 +477,11 @@ impl RedactionLog {
         }
     }
 
-    /// Rule name → distinct values redacted.
+    /// Sorted rule names mapped to the number of distinct stored hashes.
+    ///
+    /// Returns an owned snapshot without resetting the log. It contains no
+    /// plaintext, but it can undercount because hashes may collide and it
+    /// cannot report values missed by the detectors.
     pub fn summary(&self) -> BTreeMap<String, usize> {
         self.seen
             .iter()

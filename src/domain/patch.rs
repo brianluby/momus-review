@@ -1,10 +1,44 @@
 //! Unified-diff helpers shared by the Git adapter and the review workflow.
+//!
+//! These helpers consume the plain, per-file unified diffs produced by the Git
+//! adapter. They are evidence and context helpers, not patch validators or a
+//! patch application engine. Callers supplying their own text must keep hunk
+//! ranges ordered, consistent with the body, and within ordinary file bounds;
+//! combined diffs and concatenated multi-file patches are outside this contract.
+//! Line numbers refer to the new file unless a function explicitly says base.
 
 use crate::domain::report::Hunk;
 
 const UNTRACKED_CHUNK_LINES: usize = 80;
 
-/// Splits a unified diff into hunks, tracking the new-file start line of each.
+/// Extracts hunks from a per-file unified diff in encounter order.
+///
+/// File headers before the first `@@ ` line are discarded. Each recognized
+/// header opens a hunk, whose `start_line` comes from the header's `+` range and
+/// whose ID is `hunk_1`, `hunk_2`, and so on, local to this call. An unparseable
+/// new start defaults to 1; text without a recognized header returns no hunks.
+/// Neither outcome establishes that the input is a valid or empty change.
+/// Header counts and body lines are not validated.
+///
+/// The start is usually one-based, but a zero-length range can name line 0
+/// before the beginning of the file. Use [`first_added_line`] to skip leading
+/// context when locating an addition, and check commentability separately
+/// before publishing an inline comment.
+///
+/// ```
+/// use momus_review::domain::patch::{base_line, first_added_line, parse_hunks};
+///
+/// let hunks = parse_hunks("--- a.rs\n+++ a.rs\n@@ -10,3 +10,3 @@\n before\n-old\n+new\n after");
+/// assert_eq!(hunks.len(), 1);
+/// assert_eq!(hunks[0].id, "hunk_1");
+/// assert_eq!(hunks[0].start_line, 10);
+/// assert_eq!(first_added_line(&hunks[0]), 11);
+///
+/// let deletion = parse_hunks("@@ -3,2 +2,0 @@\n-x\n-y");
+/// assert_eq!(first_added_line(&deletion[0]), 2); // Fallback, not an added line.
+/// assert_eq!(base_line(&deletion[0].patch, 3), 5);
+/// assert!(parse_hunks("no unified hunk header").is_empty());
+/// ```
 pub fn parse_hunks(patch: &str) -> Vec<Hunk> {
     let mut hunks: Vec<Hunk> = Vec::new();
     let mut current: Option<Vec<&str>> = None;
@@ -40,10 +74,16 @@ pub fn parse_hunks(patch: &str) -> Vec<Hunk> {
     hunks
 }
 
-/// The new-file line of the hunk's first added line: where a finding in this
-/// hunk points, rather than the hunk's leading context. A deletion-only hunk
-/// has no added line and falls back to its start line (still inside the diff,
-/// so a review comment can anchor there).
+/// Returns the new-file line of the first addition, skipping leading context.
+///
+/// Context lines advance the new-file position; removals and no-newline markers
+/// do not. The first line of `hunk.patch` is assumed to be its header, and
+/// `hunk.start_line` must agree with that header. No consistency check is made.
+///
+/// If there is no addition, the result is `hunk.start_line`. For a pure deletion
+/// that is the position before the deleted range, which may be 0 or outside the
+/// lines available for a RIGHT-side inline comment. The caller must validate
+/// that fallback against the destination's commenting rules.
 pub fn first_added_line(hunk: &Hunk) -> usize {
     let mut line = hunk.start_line;
     for text in hunk.patch.split('\n').skip(1) {
@@ -60,10 +100,34 @@ pub fn first_added_line(hunk: &Hunk) -> usize {
 /// Splits `hunk` into consecutive sub-hunks, starting a new piece at each
 /// new-file line in `cuts`, so a large hunk (a whole new file, a rewritten
 /// function) offers smaller evidence candidates and a finding anchors near
-/// its code instead of at the hunk's first line. Every piece is a valid hunk
-/// with its own `@@` header. Removed lines stay with the lines that follow
-/// them (a replacement stays whole); cuts that fall outside the hunk or would
-/// leave a piece with no new-side line are ignored. Ids are the caller's.
+/// its code instead of at the hunk's first line. For a valid input hunk, each
+/// piece has an `@@` header with counts recomputed from its body. Removed lines
+/// stay with the lines that follow them (a replacement stays whole); cuts that
+/// fall outside the hunk or would
+/// leave a piece with no new-side line are ignored. Cuts are absolute new-file
+/// line numbers, not offsets into `hunk.patch`; their order and duplicates do
+/// not create additional cuts.
+///
+/// If the header cannot be parsed, or no cut produces multiple pieces, a clone
+/// of the original hunk is returned, including its ID. Actual split pieces have
+/// empty IDs: the caller must assign IDs before presenting selectable evidence.
+/// This function does not validate the original header counts or patch body.
+///
+/// ```
+/// use momus_review::domain::patch::{first_added_line, parse_hunks, split_hunk};
+///
+/// let original = parse_hunks("@@ -10,3 +10,3 @@\n before\n-old\n+new\n after");
+/// let mut pieces = split_hunk(&original[0], &[11]);
+/// assert_eq!(pieces.len(), 2);
+/// assert_eq!(pieces[0].patch, "@@ -10,1 +10,1 @@\n before");
+/// assert_eq!(pieces[1].patch, "@@ -11,2 +11,2 @@\n-old\n+new\n after");
+/// assert_eq!(first_added_line(&pieces[1]), 11);
+/// assert!(pieces.iter().all(|piece| piece.id.is_empty()));
+/// for (index, piece) in pieces.iter_mut().enumerate() {
+///     piece.id = format!("candidate_{}", index + 1);
+/// }
+/// assert_eq!(pieces[1].id, "candidate_2");
+/// ```
 pub fn split_hunk(hunk: &Hunk, cuts: &[usize]) -> Vec<Hunk> {
     let mut body = hunk.patch.split('\n');
     let Some((old_start, old_len, new_start, new_len)) = body.next().and_then(hunk_ranges) else {
@@ -151,10 +215,19 @@ pub fn split_hunk(hunk: &Hunk, cuts: &[usize]) -> Vec<Hunk> {
     pieces.iter().map(Piece::hunk).collect()
 }
 
-/// Maps a new-file line to the matching base (pre-change) line using the
-/// patch's hunk headers. A line inside a hunk maps to the same offset in the
+/// Chooses a nearby base (pre-change) line for a new-file context window.
+///
+/// A line inside a hunk maps to the same offset in the
 /// hunk's old range (clamped to it); a line between hunks is shifted by the
 /// net lines added or removed before it.
+///
+/// This is a positional approximation, not an assertion that the lines contain
+/// the same text. Added lines have no exact base counterpart; an all-additions
+/// range maps to its old start, clamped to at least 1. A zero-length new range
+/// names the line before a deletion and leaves that line's position unchanged.
+/// Malformed headers are skipped, and an empty patch gives `new_line.max(1)`.
+/// Callers must supply a one-based line and ordered, bounded ranges and must
+/// clamp the result to actual base content when extracting a window.
 pub fn base_line(patch: &str, new_line: usize) -> usize {
     // Net old-minus-new line shift after the hunks seen so far.
     let mut offset: i64 = 0;
@@ -201,6 +274,13 @@ fn hunk_ranges(header: &str) -> Option<(usize, usize, usize, usize)> {
 
 /// Renders a brand-new file as an all-additions diff, chunked so hunk
 /// selection still points at a specific region of the file.
+///
+/// Each hunk contains at most 80 newline-separated segments, with new-file
+/// starts continuing across hunks. This is a synthetic review representation:
+/// there are no file headers or no-newline markers, and an empty source or a
+/// trailing newline contributes an empty added segment. Do not use the result
+/// to reconstruct the source's exact final-newline state or as an applyable
+/// file patch without the required file metadata.
 pub fn patch_for_new_file(source: &str) -> String {
     let lines: Vec<&str> = source.split('\n').collect();
     let chunk_count = lines.len().div_ceil(UNTRACKED_CHUNK_LINES);

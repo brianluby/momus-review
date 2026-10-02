@@ -1,6 +1,18 @@
-//! Git adapter: discovers changed source files under a scope (with unified
-//! diffs) and complete source files for codebase scans. Every worktree read
-//! is guarded against symlinks, special files, and ancestor-swap races.
+//! Git-backed discovery and source evidence for directory scopes in a checkout.
+//!
+//! [`changed_files`], [`changed_files_since`] and [`repository_files`] observe
+//! the working tree; [`changed_files_at`] and [`repository_files_at`] select
+//! commit objects with a full pinned identity. Diffs come from Git with external
+//! diff drivers, color and text conversion disabled. Direct worktree reads
+//! refuse final-component symlinks and non-regular files, check that resolved
+//! paths remain in the repository, and compare device/inode/size after reading.
+//! These checks do not make a live checkout an atomic snapshot or authenticate
+//! Git objects. Callers establish repository trust and review identity.
+//!
+//! Ordinary source discovery errors on unexpected I/O or invalid UTF-8. The
+//! bounded auxiliary inventory instead retains individual unavailable evidence
+//! as [`RepositoryEvidence::unknowns`]; callers must inspect that list before
+//! claiming a complete comparison.
 
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
@@ -123,23 +135,58 @@ fn merge_base_at(repo_root: &Path, rev: &str, head: &str) -> Result<DiffBase> {
     Ok(DiffBase::Commit(base))
 }
 
-/// Resolves the repository under `scope` to its current `HEAD` commit sha
-/// (40 hex chars). Used to key per-sha review history; fails loudly when
-/// `scope` is not inside a repository.
+/// Return Git's current `HEAD` identity for the directory `scope`.
+///
+/// The spelling follows the repository's object format, including 40-character
+/// SHA-1 and 64-character SHA-256 identities. This reads `HEAD` at call time;
+/// it does not pin subsequent operations or verify checkout cleanliness.
+///
+/// # Errors
+///
+/// Errors if Git cannot run, `scope` is not a usable repository directory,
+/// `HEAD` cannot resolve (including an unborn repository), or stdout is not UTF-8.
 pub fn head_sha(scope: &Path) -> Result<String> {
     git_value(scope, &["rev-parse", "HEAD"])
 }
 
+/// Resolve the merge base of the supplied revision and the checkout's `HEAD`.
+///
+/// This is the reviewed fork point, which can differ from the current tip of
+/// `base`. Resolution observes current Git refs and does not verify their
+/// provenance or fetch missing history.
+///
+/// # Errors
+///
+/// Rejects an empty or option-looking revision, a revision that cannot resolve
+/// to a commit, missing common history (including insufficient shallow history),
+/// Git failures and non-UTF-8 output.
 pub fn review_base_sha(scope: &Path, base: &str) -> Result<String> {
     Ok(merge_base(scope, base)?.rev().to_string())
 }
 
-/// Verify all tracked and untracked status is clean. Ignored tool artifacts
-/// are excluded; committed-only review reads their source context from Git.
+/// Return whether Git's porcelain status has no tracked or untracked entries.
+///
+/// Runs `status --porcelain --untracked-files=all`; Git-ignored files are not
+/// included. This status observation is not a lock or a committed-source
+/// attestation. Callers bind and recheck `HEAD` separately around a review.
+///
+/// # Errors
+///
+/// Propagates Git execution/status failures and non-UTF-8 output; an inability
+/// to establish status is not reported as `true`.
 pub fn tracked_checkout_clean(scope: &Path) -> Result<bool> {
     Ok(git(scope, &["status", "--porcelain", "--untracked-files=all"])?.is_empty())
 }
 
+/// Locate Git's worktree root for `scope` and canonicalize that filesystem path.
+///
+/// This preserves path whitespace and resolves filesystem aliases. It does not
+/// require a clean checkout or establish ownership of the repository.
+///
+/// # Errors
+///
+/// Propagates Git failures, non-UTF-8 root output and filesystem canonicalization
+/// errors. A missing path or directory outside a worktree cannot supply a root.
 pub fn repository_root(scope: &Path) -> Result<PathBuf> {
     Ok(PathBuf::from(git_value(scope, &["rev-parse", "--show-toplevel"])?).canonicalize()?)
 }
@@ -242,17 +289,41 @@ fn is_benign_open_error(e: &std::io::Error) -> bool {
     )
 }
 
-/// Discovers changed source files across `scopes`: tracked diffs plus
-/// untracked contents rendered as all-additions patches. Paths matching
-/// `exclude` are skipped before any read; overlapping scopes are deduped.
+/// Discover working-tree source changes against `HEAD`, plus untracked sources.
+///
+/// A genuinely unborn branch uses Git's object-format-aware empty tree. Tracked
+/// changes carry unified diffs and unmodified base bytes; untracked regular
+/// files become all-additions patches with an empty base. Deleted paths are not
+/// source-review subjects. Only supported source extensions are considered,
+/// and explicit exclusions are applied before source content is collected.
+///
+/// Each existing directory scope is canonicalized and mapped to its checkout.
+/// Results use repository-relative paths and deduplicate by that path string,
+/// including overlapping scopes. This API does not reject multiple checkouts;
+/// callers needing a single identity must establish that separately.
+///
+/// # Errors
+///
+/// Propagates scope/repository resolution, Git, invalid UTF-8, unreadable base
+/// source, unexpected direct-read I/O and detected file-mutation failures.
+/// Missing or unsafe untracked files can be skipped by guarded reads. A broken
+/// detached `HEAD` is an error, not an empty-tree fallback.
 pub fn changed_files(scopes: &[PathBuf], exclude: &Exclude) -> Result<Vec<ChangedFile>> {
     collect_changed_files(scopes, exclude, None, None)
 }
 
-/// `changed_files` against the merge base of `base` and `HEAD` instead of
-/// `HEAD` (`momus review --base`): the branch's commits plus uncommitted
-/// changes to tracked files; untracked files are ignored. On a clean CI
-/// checkout of a PR head that is exactly the PR's diff.
+/// Discover tracked working-tree changes from the merge base of `base` and `HEAD`.
+///
+/// This includes branch commits and uncommitted tracked edits. Untracked files
+/// are always omitted, even if Git would otherwise discover them. Source
+/// filtering, path deduplication and deletion handling follow [`changed_files`].
+/// The baseline is the fork point, not necessarily the current `base` tip; this
+/// remains a working-tree read rather than committed-only review.
+///
+/// # Errors
+///
+/// In addition to [`changed_files`] errors, rejects invalid/option-looking base
+/// revisions or missing common history. This function never fetches a base.
 pub fn changed_files_since(
     scopes: &[PathBuf],
     exclude: &Exclude,
@@ -261,6 +332,24 @@ pub fn changed_files_since(
     collect_changed_files(scopes, exclude, Some(base), None)
 }
 
+/// Discover source diffs between the merge base of `base`/`head` and pinned `head`.
+///
+/// Each provided scope must share one canonical checkout. `head` must be a
+/// full lowercase 40- or 64-character Git identity; symbolic names such as
+/// `HEAD` and short IDs are rejected. Nonempty scopes also require it to resolve
+/// to a commit. Empty scopes return no files without resolving the object.
+/// Both diff and baseline evidence come from Git objects, so worktree edits and untracked
+/// files do not enter the result. The checkout itself need not be clean.
+/// Source filtering, path deduplication and omitted deletions follow
+/// [`changed_files`]. For bounded immutable full-file context, also use
+/// [`repository_files_at`].
+///
+/// # Errors
+///
+/// Propagates invalid pinned identity, incompatible checkout scopes, invalid
+/// base/common history, Git output and unavailable or non-text base evidence.
+/// This function does not attest the objects' origin or validate every changed
+/// destination's file mode; committed context validation is separate.
 pub fn changed_files_at(
     scopes: &[PathBuf],
     exclude: &Exclude,
@@ -421,9 +510,19 @@ fn changed_files_in_scope(
     Ok(files)
 }
 
-/// Discovers every non-ignored source file across `scopes` (tracked +
-/// untracked). Paths matching `exclude` are skipped before any read;
-/// overlapping scopes are deduped.
+/// Read current tracked and non-ignored untracked source files in directory scopes.
+///
+/// Supported source and test paths are included; explicit exclusions are
+/// applied before direct reads. Contents come from guarded working-tree reads,
+/// not the index or `HEAD`, and results deduplicate repository-relative paths
+/// across scopes. The operation does not enforce one checkout or verify that
+/// all reads came from a single moment.
+///
+/// # Errors
+///
+/// Propagates scope/repository/Git failures, invalid UTF-8 source, unexpected
+/// I/O and detected file mutation. Guarded reads skip vanished paths, final
+/// symlinks and non-regular files instead of adding a partial `SourceFile`.
 pub fn repository_files(scopes: &[PathBuf], exclude: &Exclude) -> Result<Vec<SourceFile>> {
     let mut files = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -484,16 +583,38 @@ fn relative_scope<'a>(repo_root: &Path, real_scope: &'a Path) -> &'a str {
         .unwrap_or(".")
 }
 
-/// Optional analyses share one bounded inventory, including documentation,
-/// dependency files and deletions that ordinary source review omits.
+/// Working-tree inventory for bounded auxiliary documentation/dependency analyses.
+///
+/// A nonempty `unknowns` list records coverage limits or unavailable evidence,
+/// even when other files and changes were collected successfully. Its absence
+/// is not an authenticity or clean-checkout attestation.
 #[derive(Debug, Default)]
 pub struct RepositoryEvidence {
+    /// Selected current text, excluding deletions and individually skipped files.
     pub files: Vec<SourceFile>,
+    /// Comparisons against the selected base, retaining rename paths and deletions.
     pub changes: Vec<crate::domain::repository::RepositoryChange>,
+    /// Concrete reasons evidence was omitted, excluded, unsafe or beyond bounds.
     pub unknowns: Vec<String>,
+    /// Observed checkout `HEAD`; empty for an inventory with no supplied scopes.
     pub head: String,
 }
 
+/// Classify supported source, documentation and dependency-evidence path names.
+///
+/// This checks extensions and recognized manifest/lockfile/release-note names.
+/// It does not read a file, validate content, apply exclusions or guarantee
+/// usable text; for example, a selected binary lockfile can still be unknown.
+///
+/// ```
+/// use momus_review::adapters::git::evidence_path;
+///
+/// assert!(evidence_path("src/lib.rs"));
+/// assert!(evidence_path("docs/README.md"));
+/// assert!(evidence_path("vendor/Cargo.toml"));
+/// assert!(evidence_path("bun.lockb")); // Eligible name, not proof of readable text.
+/// assert!(!evidence_path("assets/logo.png"));
+/// ```
 pub fn evidence_path(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
     is_source_path(path)
@@ -543,8 +664,33 @@ pub fn evidence_path(path: &str) -> bool {
         )
 }
 
-/// Deterministic resource limits apply before file reads. Unknown/skipped
-/// evidence is reported, never converted to an empty successful comparison.
+/// Collect bounded current files and base comparisons for auxiliary analyses.
+///
+/// All directory scopes must resolve to one canonical checkout and observed
+/// `HEAD`. With `base`, comparisons use its merge base with `HEAD`, ignore
+/// untracked files and still read current tracked worktree contents. Without
+/// `base`, comparisons use `HEAD` (or an unborn empty tree) and include untracked
+/// paths; resolving the reported head still requires an existing `HEAD`.
+/// Renames preserve their old path and deleted files carry `content: None`.
+///
+/// Paths are visited in sorted order within each scope and deduplicated across
+/// scopes. `max_files` bounds candidate-path counting, `max_file_bytes` bounds
+/// each current/base text read, and `max_total_bytes` bounds retained text: base
+/// bytes plus current bytes, counting current text twice when retained in both
+/// `files` and `changes`. The total budget is checked after those texts are
+/// read; it is not a total I/O-byte limit.
+///
+/// Explicit exclusions, unsupported rename destinations, unsafe/unreadable or
+/// binary text, missing base evidence and resource-limit omissions are retained
+/// as `unknowns`. Other usable files can still be returned. Inspect those
+/// reasons before claiming complete auxiliary evidence; the inventory does not
+/// establish a clean checkout or an atomic source snapshot.
+///
+/// # Errors
+///
+/// Scope/root/head/base resolution, incompatible checkout identities, malformed
+/// Git inventory, invalid size metadata and inventory-command failures abort
+/// collection. Individual current/base read failures instead produce unknowns.
 pub fn repository_evidence(
     scopes: &[PathBuf],
     exclude: &Exclude,
@@ -750,7 +896,29 @@ fn git_diff_at(cwd: &Path, base: &str, head: Option<&str>, args: &[&str]) -> Res
     }
 }
 
-/// Source/test context read entirely from one pinned immutable Git tree.
+/// Read bounded source/test context entirely from a pinned commit's Git blobs.
+///
+/// Each provided directory scope must belong to one canonical checkout. `head`
+/// must be a full lowercase 40- or 64-character identity, not a ref name or
+/// abbreviation. Nonempty scopes require a commit object; empty scopes return
+/// no files without resolving that object. Current worktree/index contents and
+/// untracked files, including ignored worktree artifacts, are not read. Source paths matching
+/// `exclude` are omitted before blob reads; results deduplicate
+/// repository-relative paths across scopes.
+///
+/// Only regular blob modes `100644` and `100755` are accepted for selected
+/// source paths. The complete inventory is limited to 10,000 selected files,
+/// 10,000,000 bytes per blob and 100,000,000 bytes total. Batch reads check blob
+/// identity, advertised size, terminators, UTF-8 and absence of NUL bytes. This
+/// preserves pinned context consistency, not evidence of who authored or
+/// authorized the commit. The checkout need not be clean.
+///
+/// # Errors
+///
+/// Returns an error on invalid identity, scopes from different checkouts, Git
+/// failures, unsupported file modes, exceeded bounds or malformed/non-text
+/// blob evidence. Unlike bounded auxiliary collection, incomplete committed
+/// context is not returned as a successful partial inventory.
 pub fn repository_files_at(
     scopes: &[PathBuf],
     exclude: &Exclude,

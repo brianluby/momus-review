@@ -1,6 +1,6 @@
 //! Compiled exclusion globs: filter discovered paths before they are read or
-//! screened. Patterns follow gitignore semantics against repo-relative,
-//! forward-slash paths:
+//! screened. Patterns use a limited gitignore-style expansion against
+//! repo-relative, forward-slash file paths, rather than parsing a `.gitignore`:
 //!
 //! * `*` and `?` never cross `/`; `**` matches across directories.
 //! * A pattern with no `/` (other than a trailing one) matches at any depth:
@@ -10,18 +10,52 @@
 //! * A pattern also excludes everything beneath a matching directory, and a
 //!   trailing `/` (`vendor/`) matches directories only.
 //! * Negation (`!pattern`) is not supported and is rejected.
+//!
+//! Matching operates on the supplied path string without filesystem access,
+//! path normalization or link checks. It is a discovery filter, not a boundary
+//! that authorizes reading a path.
 
 use anyhow::bail;
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 
+/// A compiled union of exclusion globs for repository-relative file paths.
+///
+/// The default matcher is empty and excludes nothing. Cloning preserves the
+/// compiled rules; matching does not consult Git's ignore files.
 #[derive(Clone, Default)]
 pub struct Exclude {
     set: GlobSet,
 }
 
 impl Exclude {
-    /// Compiles the patterns into a matcher. `frontend/src/assets/**` excludes
-    /// that whole subtree; `*.min.js` excludes by name at any depth.
+    /// Compile trimmed patterns, ignoring blank strings.
+    ///
+    /// Bare names match at any depth; a slash-containing pattern is rooted at
+    /// the repository. Patterns also match descendants of a matching directory.
+    /// A trailing slash selects those descendants without matching a file with
+    /// the directory's bare name. `*`/`?` stay within one path segment and `**`
+    /// can span directories. A leading slash anchors a pattern to the root.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a leading `!` after trimming, malformed glob syntax,
+    /// or a glob-set compilation failure. Lines starting with `#` are patterns,
+    /// not `.gitignore` comments.
+    ///
+    /// ```
+    /// use momus_review::adapters::exclude::Exclude;
+    /// # fn main() -> anyhow::Result<()> {
+    /// let excluded = Exclude::new(&["vendor/".into(), "src/*.rs".into()])?;
+    /// assert!(excluded.is_match("nested/vendor/library.js"));
+    /// assert!(!excluded.is_match("vendor"));
+    /// assert!(excluded.is_match("src/main.rs"));
+    /// assert!(!excluded.is_match("src/nested/main.rs"));
+    /// assert!(!excluded.is_match("other/src/main.rs"));
+    /// assert!(Exclude::new(&["!keep.rs".into()]).is_err());
+    /// assert!(Exclude::new(&["[unterminated".into()]).is_err());
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn new(patterns: &[String]) -> anyhow::Result<Self> {
         let mut builder = GlobSetBuilder::new();
         for pattern in patterns {
@@ -39,11 +73,15 @@ impl Exclude {
         Ok(Exclude { set: builder.build()? })
     }
 
-    /// Whether `path` (a repo-relative, forward-slash path) matches any pattern.
+    /// Test a caller-supplied repository-relative, forward-slash file path.
+    ///
+    /// Returns true if any compiled glob matches. The string is not normalized
+    /// or checked for traversal; callers must establish its scope independently.
     pub fn is_match(&self, path: &str) -> bool {
         self.set.is_match(path)
     }
 
+    /// Return whether no effective rules were compiled, including blank-only input.
     pub fn is_empty(&self) -> bool {
         self.set.is_empty()
     }

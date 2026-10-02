@@ -5,18 +5,26 @@
 //! sha256(base_url, model, questions JSON, redacted state JSON)
 //! ```
 //!
-//! and stored as one JSON file per key holding **the response only** —
-//! never the request state or questions — so the cache is not sensitive
-//! the way the report is. Writes go through `report_store::write_atomic`
-//! (unique temp file + rename), so concurrent requests at
-//! `MOMUS_CONCURRENCY` cannot leave a partial entry behind.
+//! and stored as one JSON file per key holding the supplied response. The
+//! adapter does not add request state or questions to that file, but a response
+//! can itself contain source text or secrets. Use caller-controlled storage
+//! with the same access policy as the response. Writes use
+//! `report_store::write_atomic`, so racing
+//! successful writes replace the entry as a whole.
 //!
-//! Mutable aliases are resolved from live responses in each run, never from
-//! a saved alias map. Pin a versioned model for a completely offline warm run.
+//! `TypeSafeClient` resolves an unknown requested ID ending in `latest` from a
+//! live response each run; no alias map is saved. Explicit stable IDs can reuse
+//! entries without that initial alias resolution. Missing or invalid entries
+//! still require a live request in the client.
 //!
-//! Failures are never cached (only successful responses are stored), and
-//! every I/O here is best-effort: a read or write that fails costs a
-//! re-request, never the review.
+//! This adapter accepts arbitrary JSON; it does not validate a response's
+//! answers, model identity or authenticity. `TypeSafeClient` stores validated
+//! successful answers under a stable response model, checks cached answers and
+//! model identity, and makes a live request on a miss or invalid response.
+//! Malformed JSON and I/O errors are misses here. The filename hashes the
+//! request inputs, not the stored response: valid but edited JSON is not
+//! detected by this adapter. Best-effort I/O does not turn the cache into a
+//! source of authenticated review evidence.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -27,9 +35,12 @@ use sha2::{Digest, Sha256};
 
 use crate::adapters::report_store::write_atomic;
 
-/// The local result cache. Clones of the client share one; the alias map
-/// lock is held only for map reads and inserts, never across an await
-/// (the same discipline as the redaction log).
+/// Response storage keyed by exact request inputs, with a run-local model map.
+///
+/// Clients can share this value through an `Arc`. The alias-map lock is held
+/// only while reading or updating the map; filesystem operations do not hold
+/// it. Neither opening a directory nor reading an entry authenticates its
+/// owner or contents.
 #[derive(Debug)]
 pub struct ResultCache {
     /// `None` = disabled (`--no-cache`): every lookup misses, stores no-op.
@@ -38,7 +49,10 @@ pub struct ResultCache {
 }
 
 impl ResultCache {
-    /// `MOMUS_CACHE_DIR`, or `reviews/cache` beside the report store.
+    /// Use nonblank `MOMUS_CACHE_DIR`, otherwise the relative `reviews/cache` path.
+    ///
+    /// Construction performs no I/O and does not create or verify the directory.
+    /// A nonblank environment value is used as supplied, without trimming it.
     pub fn from_env() -> Self {
         let dir = std::env::var("MOMUS_CACHE_DIR")
             .ok()
@@ -48,7 +62,12 @@ impl ResultCache {
         Self::open(dir)
     }
 
-    /// The cache at `dir`. The first live response resolves aliases anew in every run.
+    /// Enable storage at `dir` with an empty, in-memory alias map.
+    ///
+    /// This performs no I/O. Previously stored entries remain available for
+    /// explicit model identities, but alias resolutions are not loaded from
+    /// disk. The caller must choose the directory and establish which returned
+    /// model identities are stable enough to reuse.
     pub fn open(dir: PathBuf) -> Self {
         Self {
             dir: Some(dir),
@@ -56,7 +75,26 @@ impl ResultCache {
         }
     }
 
-    /// A disabled cache: lookups always miss and nothing is written.
+    /// Disable disk access: every lookup misses and every store is a no-op.
+    ///
+    /// The in-memory alias map still works, allowing a client to track a live
+    /// response's identity without persisting answers. This example uses no
+    /// filesystem or network:
+    ///
+    /// ```
+    /// use momus_review::adapters::cache::ResultCache;
+    /// use serde_json::json;
+    ///
+    /// let cache = ResultCache::disabled();
+    /// assert!(!cache.enabled());
+    /// assert_eq!(cache.resolve_model("model-latest"), "model-latest");
+    /// cache.record_model("model-latest", "model-v1");
+    /// assert_eq!(cache.resolve_model("model-latest"), "model-v1");
+    /// let state = json!({"file": "example.rs"});
+    /// let questions = json!({"correctness": "assess"});
+    /// cache.store("https://example.invalid", "model-v1", &state, &questions, &json!({"answer": 1}));
+    /// assert!(cache.lookup("https://example.invalid", "model-latest", &state, &questions).is_none());
+    /// ```
     pub fn disabled() -> Self {
         Self {
             dir: None,
@@ -64,8 +102,11 @@ impl ResultCache {
         }
     }
 
-    /// The versioned id `requested` last resolved to, or `requested` itself
-    /// while unknown (the first live call resolves it).
+    /// Return the last recorded resolution, or the unchanged requested string.
+    ///
+    /// This is a map lookup, not a server query or verification that an ID is
+    /// versioned. A fresh cache instance knows no aliases. `TypeSafeClient`
+    /// obtains a live response before reusing an unresolved `latest` alias.
     pub fn resolve_model(&self, requested: &str) -> String {
         self.aliases
             .lock()
@@ -75,7 +116,10 @@ impl ResultCache {
             .unwrap_or_else(|| requested.to_string())
     }
 
-    /// Records a live resolution for this run only.
+    /// Replace a requested ID's run-local mapping with a caller-supplied ID.
+    ///
+    /// No producer or version validation occurs here. Equal strings are a no-op
+    /// and do not clear an existing mapping; nothing is persisted to disk.
     pub fn record_model(&self, requested: &str, resolved: &str) {
         if requested == resolved {
             return;
@@ -90,15 +134,22 @@ impl ResultCache {
         aliases.insert(requested.to_string(), resolved.to_string());
     }
 
-    /// Whether disk lookups and writes are enabled for this cache.
+    /// Report whether a storage path was configured, not whether it is usable.
+    ///
+    /// A missing or unwritable directory can still return `true`; lookup/store
+    /// handle subsequent I/O failures as a miss or ignored write.
     pub fn enabled(&self) -> bool {
         self.dir.is_some()
     }
 
-    /// The cached response for this unit, if a successful one was stored.
-    /// `model` is the id the request would carry; it is resolved through
-    /// the alias map first, so a pinned version never answers for an alias
-    /// that has moved. A missing or corrupt entry is a miss.
+    /// Read JSON addressed by URL, resolved model, state and questions.
+    ///
+    /// `model` is resolved through the run-local map; the other inputs are
+    /// serialized exactly as supplied. Disabled storage, an unreadable file,
+    /// invalid UTF-8 or invalid JSON returns `None`. Any parseable JSON value
+    /// returns `Some`, including a value with the wrong model or answer shape.
+    /// The caller must validate those fields before using a hit. Reading follows
+    /// ordinary filesystem links and does not authenticate storage contents.
     pub fn lookup(
         &self,
         base_url: &str,
@@ -112,11 +163,38 @@ impl ResultCache {
         serde_json::from_str(&text).ok()
     }
 
-    /// Stores a successful response for this unit. `model` is the
-    /// **resolved** id the response itself reported (not the requested
-    /// alias), so the entry is filed where subsequent lookups for that
-    /// model — alias-resolved or explicit — will find it. Best-effort: a
-    /// failed write only costs a re-request.
+    /// Serialize the supplied response under the exact supplied model ID.
+    ///
+    /// Unlike [`lookup`](Self::lookup), this does not resolve aliases. Pass a
+    /// stable ID established from a validated response; this method itself
+    /// checks neither successful-answer semantics nor correspondence between
+    /// `model` and `response`. Disabled storage and write failures are silent
+    /// no-ops. Only the response is serialized, but it can contain sensitive
+    /// data copied into that response by the producer.
+    ///
+    /// Request input changes select different entries. Reordering JSON object
+    /// keys preserves the address under this crate's serialization settings:
+    ///
+    /// ```
+    /// use momus_review::adapters::cache::ResultCache;
+    /// use serde_json::json;
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let directory = tempfile::tempdir()?;
+    /// let cache = ResultCache::open(directory.path().to_path_buf());
+    /// let state = json!({"file": "example.rs", "revision": 1});
+    /// let questions = json!({"correctness": "assess"});
+    /// let response = json!({"answer": 0.2});
+    /// let url = "https://example.invalid";
+    /// cache.store(url, "model-v1", &state, &questions, &response);
+    /// let reordered = json!({"revision": 1, "file": "example.rs"});
+    /// assert_eq!(cache.lookup(url, "model-v1", &reordered, &questions), Some(response));
+    /// assert!(cache.lookup("https://other.invalid", "model-v1", &state, &questions).is_none());
+    /// assert!(cache.lookup(url, "model-v2", &state, &questions).is_none());
+    /// assert!(cache.lookup(url, "model-v1", &json!({"revision": 2}), &questions).is_none());
+    /// assert!(cache.lookup(url, "model-v1", &state, &json!({"security": "assess"})).is_none());
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn store(
         &self,
         base_url: &str,
@@ -133,11 +211,10 @@ impl ResultCache {
     }
 }
 
-/// The content address of one unit: sha256 over a canonical serialization
-/// of everything that determines the answer — the server, the model, the
-/// policy questions, and the redacted state. Any wording, policy,
-/// redaction-rule, or model change produces a different key. `serde_json`
-/// sorts object keys, so the serialization is deterministic.
+/// Hash the serialized URL string, model string, questions and state.
+/// Object keys are sorted by the crate's `serde_json` configuration. Inputs
+/// such as credentials or redaction-rule identity are not separate key fields;
+/// a rule change affects the address only when it changes supplied JSON.
 fn key(base_url: &str, model: &str, state: &Value, questions: &Value) -> String {
     let unit = serde_json::json!({
         "base_url": base_url,
