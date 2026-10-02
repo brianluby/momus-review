@@ -273,6 +273,132 @@ class ScorerTests(unittest.TestCase):
             self.sync()
             self.assertEqual(self.score()["totals"]["caughtIssues"], 0)
 
+    def test_native_absolute_scope_matches_version_two_receipt_without_report_rewriting(self):
+        receipt_path = self.root / self.entry()["receipt"]
+        receipt = evaluate.load_json(receipt_path)
+        scope = str((self.root / "materialized-repository").resolve())
+        receipt.update(schemaVersion=2, reviewedScope=scope)
+        self.write(receipt_path, receipt)
+        report = self.report()
+        report["scope"] = scope
+        self.write(self.report_path(), report)
+        report_bytes = self.report_path().read_bytes()
+        self.sync()
+        result = self.score()
+        self.assertEqual(result["totals"]["caughtIssues"], 1)
+        self.assertTrue(self.result_case("unit-defect", result)["complete"])
+        self.assertTrue(self.result_case("unit-defect", result)["attemptComplete"])
+        _, parsed = evaluate.validate_run(self.run_path, self.manifest, evaluate.sha256(self.manifest_path))
+        self.assertEqual(parsed["unit-defect"]["reviewedScope"], scope)
+        self.assertEqual(self.report_path().read_bytes(), report_bytes)
+
+    def test_version_two_receipt_rejects_wrong_absolute_root_subpath_and_relative_scope(self):
+        receipt_path = self.root / self.entry()["receipt"]
+        receipt = evaluate.load_json(receipt_path)
+        scope = str((self.root / "materialized-repository").resolve())
+        receipt.update(schemaVersion=2, reviewedScope=scope)
+        self.write(receipt_path, receipt)
+        original = self.report()
+        for reported_scope in (scope + "/src", str((self.root / "different-repository").resolve()), "."):
+            with self.subTest(scope=reported_scope):
+                report = copy.deepcopy(original)
+                report["scope"] = reported_scope
+                self.write(self.report_path(), report)
+                self.sync()
+                result = self.score()
+                self.assertEqual(result["totals"]["issues"], 2)
+                self.assertEqual(result["totals"]["caughtIssues"], 0)
+                self.assertEqual(result["totals"]["missedIssues"], 2)
+                case = self.result_case("unit-defect", result)
+                self.assertFalse(case["complete"])
+                self.assertFalse(case["attemptComplete"])
+                self.assertIn("exact receipt-bound", case["incompleteReason"])
+
+    def test_receipt_version_two_scope_requires_normalized_absolute_path(self):
+        receipt_path = self.root / self.entry()["receipt"]
+        original = evaluate.load_json(receipt_path)
+        invalid = ("relative/repository", "/tmp/repository/../other", "/tmp/repository//src", "/tmp/repository/", "//tmp/repository", "/tmp/repository\x00", None, 123)
+        for scope in invalid:
+            with self.subTest(scope=scope):
+                receipt = copy.deepcopy(original)
+                receipt.update(schemaVersion=2, reviewedScope=scope)
+                self.write(receipt_path, receipt)
+                self.sync()
+                with self.assertRaises(evaluate.ValidationError):
+                    self.score()
+        receipt = copy.deepcopy(original)
+        receipt["schemaVersion"] = 2
+        self.write(receipt_path, receipt)
+        self.sync()
+        with self.assertRaisesRegex(evaluate.ValidationError, "missing fields"):
+            self.score()
+
+    def test_canonical_windows_drive_and_unc_scopes_score_on_another_host(self):
+        receipt_path = self.root / self.entry()["receipt"]
+        original_receipt = evaluate.load_json(receipt_path)
+        original_report = self.report()
+        for scope in (r"C:\Users\reviewer\AppData\Local\Temp\momus-input", r"\\fileserver\review-share\momus-input"):
+            with self.subTest(scope=scope):
+                receipt = copy.deepcopy(original_receipt)
+                receipt.update(schemaVersion=2, reviewedScope=scope)
+                self.write(receipt_path, receipt)
+                report = copy.deepcopy(original_report)
+                report["scope"] = scope
+                self.write(self.report_path(), report)
+                self.sync()
+                result = self.score()
+                self.assertEqual(result["totals"]["caughtIssues"], 1)
+                self.assertTrue(self.result_case("unit-defect", result)["complete"])
+
+    def test_windows_scope_aliases_relative_paths_and_traversal_are_rejected(self):
+        receipt_path = self.root / self.entry()["receipt"]
+        original = evaluate.load_json(receipt_path)
+        invalid = (r"C:relative", r"\root-relative", r"C:\Users\..\momus-input", r"C:\Users\.\momus-input", r"C:\\Users\momus-input", "C:/Users/reviewer/momus-input", r"\\server\share\..\momus-input", r"\\server\share\\momus-input", r"\\server\..\momus-input", r"\\server\.\momus-input", r"\\..\share\momus-input", r"\\.\share\momus-input", r"\\server")
+        for scope in invalid:
+            with self.subTest(scope=scope):
+                receipt = copy.deepcopy(original)
+                receipt.update(schemaVersion=2, reviewedScope=scope)
+                self.write(receipt_path, receipt)
+                self.sync()
+                with self.assertRaises(evaluate.ValidationError):
+                    self.score()
+
+    def test_windows_receipt_scope_still_requires_exact_report_identity(self):
+        receipt_path = self.root / self.entry()["receipt"]
+        original_receipt = evaluate.load_json(receipt_path)
+        original_report = self.report()
+        mismatches = ((r"C:\Users\reviewer\momus-input", r"C:\Users\reviewer\other-input"), (r"C:\Users\reviewer\momus-input", r"C:\Users\reviewer\momus-input\src"), (r"\\fileserver\review-share\momus-input", r"\\fileserver\review-share\other-input"))
+        for expected, reported in mismatches:
+            with self.subTest(expected=expected, reported=reported):
+                receipt = copy.deepcopy(original_receipt)
+                receipt.update(schemaVersion=2, reviewedScope=expected)
+                self.write(receipt_path, receipt)
+                report = copy.deepcopy(original_report)
+                report["scope"] = reported
+                self.write(self.report_path(), report)
+                self.sync()
+                result = self.score()
+                self.assertEqual(result["totals"]["issues"], 2)
+                self.assertEqual(result["totals"]["caughtIssues"], 0)
+                self.assertEqual(result["totals"]["missedIssues"], 2)
+                self.assertFalse(self.result_case("unit-defect", result)["attemptComplete"])
+
+    def test_legacy_version_one_scope_is_exact_and_does_not_accept_new_fields(self):
+        _, parsed = evaluate.validate_run(self.run_path, self.manifest, evaluate.sha256(self.manifest_path))
+        self.assertEqual(parsed["unit-defect"]["reviewedScope"], ".")
+        report = self.report()
+        report["scope"] = str(self.root.resolve())
+        self.write(self.report_path(), report)
+        self.sync()
+        self.assertEqual(self.score()["totals"]["caughtIssues"], 0)
+        receipt_path = self.root / self.entry()["receipt"]
+        receipt = evaluate.load_json(receipt_path)
+        receipt["reviewedScope"] = str(self.root.resolve())
+        self.write(receipt_path, receipt)
+        self.sync()
+        with self.assertRaisesRegex(evaluate.ValidationError, "unknown fields"):
+            self.score()
+
     def test_screening_coverage_gate_catches_omitted_file_and_dimension(self):
         original = self.report()
         omitted_file = copy.deepcopy(original)
@@ -413,6 +539,34 @@ class ScorerTests(unittest.TestCase):
         self.sync()
         with self.assertRaisesRegex(evaluate.ValidationError, "unknown fields"):
             self.score()
+
+    def test_cli_malformed_oversized_integer_and_deep_json_exit_two_without_traceback(self):
+        path = self.root / "parser-limit.json"
+        for content in ('{"schemaVersion":' + "9" * 5000 + '}', "[" * 2000 + "0" + "]" * 2000):
+            with self.subTest(kind="oversized integer" if content.startswith("{") else "deep nesting"):
+                path.write_text(content)
+                stdout, stderr = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                    status = evaluate.main(["validate", "--manifest", str(path)])
+                self.assertEqual(status, 2)
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertIn("validation error:", stderr.getvalue())
+                self.assertNotIn("Traceback", stderr.getvalue())
+
+    def test_load_json_wraps_native_parser_limits_but_preserves_validation_errors(self):
+        path = self.root / "parser-limit.json"
+        path.write_text("{}")
+        for error in (ValueError("decoder integer limit"), RecursionError("decoder recursion limit")):
+            with self.subTest(error=type(error).__name__):
+                with mock.patch.object(evaluate.json, "loads", side_effect=error):
+                    with self.assertRaises(evaluate.ValidationError) as raised:
+                        evaluate.load_json(path)
+                self.assertIn(str(path), str(raised.exception))
+                self.assertIn(str(error), str(raised.exception))
+        path.write_text('{"a": 1, "a": 2}')
+        with self.assertRaises(evaluate.ValidationError) as raised:
+            evaluate.load_json(path)
+        self.assertEqual(str(raised.exception), "JSON: duplicate object key 'a'")
 
     def test_malformed_native_boolean_and_finding_types_are_rejected(self):
         original = self.report()

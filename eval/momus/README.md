@@ -114,8 +114,11 @@ rtk proxy python3 -B eval/momus/materialize.py \
   --receipt /tmp/momus-run/receipts/rust-invoice-defect.json
 ```
 
-The receipt contains exact `reviewedBase`/`reviewedHead` Git identities and
-manifest/source hashes. Materialization is deterministic and copies neither
+The version-2 receipt contains exact `reviewedBase`/`reviewedHead` Git identities,
+manifest/source hashes and `reviewedScope`, the absolute workspace path emitted
+by native `momus review .`. Git identities are deterministic; the scope binding
+changes with the chosen output directory. Review the workspace at that path;
+moving it requires a new materialization receipt. The materializer copies neither
 labels nor evaluator metadata into the Git tree. Independent adjudication must
 verify those receipts and the actual review scope. Hashes bind consistency;
 they do not authenticate an externally supplied report or source assertion.

@@ -87,12 +87,13 @@ def materialize(manifest_path, case_id, output, receipt):
                 git_tree_hash(root, head) != case["source"]["headSha256"]:
             raise ValueError("Copied Git source objects differ from the validated source snapshots")
         result = {
-            "schemaVersion": 1, "datasetVersion": manifest["datasetVersion"],
+            "schemaVersion": 2, "datasetVersion": manifest["datasetVersion"],
             "manifestSha256": hashlib.sha256(manifest_bytes).hexdigest(),
             "caseId": case_id,
             "source": {key: case["source"][key] for key in
                        ("baseSha256", "headSha256", "diffSha256")},
             "reviewedBase": base, "reviewedHead": head,
+            "reviewedScope": str(output),
         }
         # Roll back only a receipt exclusively created by this call, including
         # failures during its write or close.

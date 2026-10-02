@@ -6,7 +6,8 @@ anything, or infer a detection from a filename or mechanism category. Python
 copy; the resulting content-tree identity must equal the declared head.
 Paths, symlinks, schemas, JSON types, duplicate keys/identifiers, finite numbers
 and source/report/receipt hashes are checked before scoring. A validation
-failure exits with status 2 and produces no result.
+failure, including JSON parser integer-size and nesting limits, exits with
+status 2 and produces no result.
 
 ```sh
 rtk proxy python3 eval/momus/evaluate.py validate
@@ -60,9 +61,17 @@ receipts and reports into that evidence directory before referencing them.
 Absent manifest cases are explicitly reported as missing and retain their full
 issue/case denominators. A missing report cannot establish an abstention.
 
-Materialization receipts have exactly `schemaVersion: 1`, `datasetVersion`,
+Materialization receipts have `schemaVersion`, `datasetVersion`,
 `manifestSha256`, `caseId`, `source` (`baseSha256`, `headSha256`, `diffSha256`),
-`reviewedBase` and `reviewedHead`. Git identities are full lowercase 40-digit
+`reviewedBase` and `reviewedHead`. Version 2 additionally requires
+`reviewedScope`, the exact normalized absolute path to the materialized
+repository, spelled as a native POSIX, Windows drive or Windows UNC path.
+Archived Windows identities are syntax-checked independently of the scorer's
+host OS; report-to-receipt equality remains exact. Relative/drive-relative,
+traversal, dot-segment and non-normalized separator aliases are rejected.
+Version 1 permits only the original fields and binds legacy scope
+to literal `.`; the stored version-1 unit receipts remain unchanged. New
+materializations use version 2. Git identities are full lowercase 40-digit
 commits. Source hashes must equal the validated manifest, and native report
 `reviewedBase`/`reviewedHead` must equal this exact receipt. Hash bindings detect
 changed evidence; the trusted materializer establishes the original mapping
@@ -71,8 +80,12 @@ the review received those trees.
 
 ## Native review completeness
 
-Run `momus review .` inside each sanitized materialized repository. Scope must
-be exactly `.` and native mode must be `changes`. Use committed source review
+Run `momus review .` inside each sanitized materialized repository. Momus
+canonicalizes that scope to an absolute path; the native report's scope must
+exactly equal the version-2 receipt's `reviewedScope` and native mode must be
+`changes`. A different absolute root, a subdirectory or relative `.` cannot
+substitute for the receipt-bound root. Retain raw report bytes and their hashes;
+do not rewrite scopes after review. Use committed source review
 for the core slice and the dependency caller/API slice. The scorer requires
 `reviewedClean` and `reviewedCommitted`, the full five-dimension matrix for every
 changed head source file, matching screening counters and complete changed test
@@ -80,6 +93,10 @@ context. Rust, Python and JavaScript/TypeScript source/test conventions match
 the product's `src/domain/language.rs`; deleted files are not head review
 subjects. Source coverage is derived independently from base/head tree bytes,
 so a selective report cannot claim a complete case by setting `partial: false`.
+
+Native CLI-to-scorer acceptance has been performed on macOS. Windows drive/UNC
+handling has offline syntax and identity regressions; no Windows end-to-end
+acceptance has been performed.
 
 Docs uses the supported local `--docs-drift` checker with the exact clean
 materialized working tree and receipt-bound base/head identities. Its native
