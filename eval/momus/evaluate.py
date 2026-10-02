@@ -299,7 +299,10 @@ def validate_manifest(manifest_path, require_inventory=True):
 
 
 def number(value, label, maximum=None):
-    require(type(value) in {int, float} and math.isfinite(value) and value >= 0, f"{label}: expected finite nonnegative number")
+    # Python integers are finite, but converting an arbitrarily large integer
+    # in math.isfinite() can overflow before the range check rejects it.
+    require(type(value) in {int, float}, f"{label}: expected finite nonnegative number")
+    require((type(value) is int or math.isfinite(value)) and value >= 0, f"{label}: expected finite nonnegative number")
     require(maximum is None or value <= maximum, f"{label}: number out of range")
 
 
@@ -597,6 +600,8 @@ def report_attempt_incomplete(report, case, manifest_path):
     if report.get("tier", {}).get("dismissed"):
         return "native report dismissed review subjects"
     workflow = report.get("workflow", {})
+    if workflow.get("droppedContextChars", 0) or workflow.get("droppedContextItems", 0):
+        return "native report dropped review context"
     if workflow.get("followedSignals", 0) < workflow.get("thresholdSignals", 0):
         return "native report did not follow every threshold signal"
     if case["dimension"] == "docs":

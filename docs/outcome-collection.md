@@ -153,7 +153,11 @@ Use an existing trusted report from a clean committed-object review. Capture
 requires `mode: changes`, `partial: false`, canonical `reviewedHead` and
 `reviewedBase`, `reviewedClean: true`, `reviewedCommitted: true`, and an already
 emitted version-1 `mergeConfidence.heuristicScore` consistent with `pRevert`.
-It never calculates or revises the score. The report receipt must identify the
+Known native `workflow.droppedContextChars` and `droppedContextItems` counters,
+when present, must be zero integers: Momus can record context clipping while
+leaving `partial` false. Existing stored reports need not supply optional
+counters their producer did not emit. It never calculates or revises the score.
+The report receipt must identify the
 protocol's exact `pipelineIdentity` and score authority.
 
 Independently verify the current open PR and supply an envelope whose payload
@@ -286,7 +290,7 @@ rtk proxy python3 -m unittest discover -s eval/outcomes -p 'test_*.py'
 ```
 
 Keep collection-validation runs distinct from real held-out evaluation. The
-30 deterministic tests cover source/producer binding, edited and hindsight
+33 deterministic tests cover source/producer binding, edited and hindsight
 captures, explicit unknown telemetry, separate windows, complete negative
 surveillance, event-versus-availability chronology, maturity, identity joins,
 duplicates/conflicts, malformed inputs, overflow and deterministic export.

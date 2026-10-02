@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
 import evaluate
 
@@ -202,6 +203,43 @@ class ScorerTests(unittest.TestCase):
         self.assertEqual(result["totals"]["appropriateAbstentions"], 0)
         self.assertIsNone(result["rates"]["abstentionSuccessRate"])
 
+    def test_dropped_context_cannot_earn_defect_credit_even_when_native_not_partial(self):
+        original = self.report()
+        self.assertFalse(original["partial"])
+        for counter in ("droppedContextChars", "droppedContextItems"):
+            with self.subTest(counter=counter):
+                report = copy.deepcopy(original)
+                report["workflow"][counter] = 1
+                self.write(self.report_path(), report)
+                self.sync()
+                result = self.score()
+                case = self.result_case("unit-defect", result)
+                self.assertFalse(case["complete"])
+                self.assertFalse(case["attemptComplete"])
+                self.assertEqual(case["incompleteReason"], "native report dropped review context")
+                self.assertEqual(result["totals"]["issues"], 2)
+                self.assertEqual(result["totals"]["caughtIssues"], 0)
+                self.assertEqual(result["totals"]["missedIssues"], 2)
+                self.assertEqual(result["totals"]["withheldMatches"], 1)
+
+    def test_dropped_context_cannot_earn_abstention_success(self):
+        original = self.report("unit-abstain")
+        self.assertFalse(original["partial"])
+        for counter in ("droppedContextChars", "droppedContextItems"):
+            with self.subTest(counter=counter):
+                report = copy.deepcopy(original)
+                report["workflow"][counter] = 1
+                self.write(self.report_path("unit-abstain"), report)
+                self.sync()
+                result = self.score()
+                case = self.result_case("unit-abstain", result)
+                self.assertFalse(case["complete"])
+                self.assertFalse(case["attemptComplete"])
+                self.assertFalse(case["appropriateAbstention"])
+                self.assertEqual(result["totals"]["abstentionCases"], 1)
+                self.assertEqual(result["totals"]["appropriateAbstentions"], 0)
+                self.assertIsNone(result["rates"]["abstentionSuccessRate"])
+
     def test_abstention_requires_independent_rationale(self):
         self.adjudication("unit-abstain")["abstention"] = None
         self.sync()
@@ -392,6 +430,26 @@ class ScorerTests(unittest.TestCase):
         self.sync()
         with self.assertRaisesRegex(evaluate.ValidationError, "expected integer"):
             self.score()
+
+    def test_extreme_integer_probability_is_validation_error_and_cli_exit_two(self):
+        report = self.report()
+        report["findings"][0]["probability"] = 10 ** 1000
+        self.write(self.report_path(), report)
+        self.sync()
+        with self.assertRaisesRegex(evaluate.ValidationError, "number out of range"):
+            self.score()
+        # Bypass only the product minimum inventory for this tiny stored test
+        # corpus. The CLI still executes the real parse, identity and scoring
+        # validation path, and must fail cleanly without a result/traceback.
+        original_validator = evaluate.validate_manifest
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with mock.patch.object(evaluate, "validate_manifest", side_effect=lambda path, require_inventory=True: original_validator(path, False)):
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                status = evaluate.main(["score", "--manifest", str(self.manifest_path), "--run", str(self.run_path), "--adjudications", str(self.adj_path)])
+        self.assertEqual(status, 2)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("validation error:", stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
 
     def test_evidence_path_traversal_and_symlinks_are_rejected(self):
         self.entry()["report"] = "../outside.json"

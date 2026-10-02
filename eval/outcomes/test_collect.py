@@ -97,6 +97,49 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(self.frozen["scoreRecordedAt"], 100)
         self.assertEqual(collect.trusted_capture(self.captures[0], self.protocol, 2000), self.frozen)
 
+    def test_native_dropped_context_never_qualifies_as_complete_capture(self):
+        for name in ("droppedContextChars", "droppedContextItems"):
+            for value in (1, 100, -1, True, "0", None):
+                with self.subTest(name=name, value=value):
+                    report = dict(self.report, workflow={name: value})
+                    raw = collect.canonical(report)
+                    self.assert_invalid(lambda: collect.capture(
+                        self.protocol, raw, receipt(raw, "scores", 100, self.pipeline), self.context, now=102))
+
+    def test_absent_optional_workflow_counters_and_explicit_zero_still_capture(self):
+        for workflow in ({}, {"screenedCells": 5}, {"droppedContextChars": 0},
+                         {"droppedContextChars": 0, "droppedContextItems": 0}):
+            with self.subTest(workflow=workflow):
+                report = dict(self.report, workflow=workflow)
+                raw = collect.canonical(report)
+                frozen = collect.capture(self.protocol, raw, receipt(raw, "scores", 100, self.pipeline),
+                                         self.context, now=102)
+                self.assertEqual(frozen["heuristicScore"], 0.3)
+                self.assertEqual(frozen["reportJson"].encode(), raw)
+        self.assertEqual(collect.capture(self.protocol, self.raw, self.report_receipt, self.context, now=102), self.frozen)
+
+    def test_oversized_integer_score_has_controlled_api_and_cli_validation_error(self):
+        report = copy.deepcopy(self.report)
+        report["mergeConfidence"]["heuristicScore"] = 10**1000
+        report["pRevert"] = 10**1000
+        raw = collect.canonical(report)
+        self.assert_invalid(lambda: collect.capture(self.protocol, raw, receipt(raw, "scores", 100, self.pipeline),
+                                                    self.context, now=102))
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for name, value in (("protocol", self.protocol), ("report-receipt", receipt(raw, "scores", 100, self.pipeline)),
+                                ("open-pr", self.context)):
+                (root / f"{name}.json").write_bytes(collect.canonical(value))
+            (root / "report.json").write_bytes(raw)
+            output = root / "frozen.json"
+            args = ["capture", "--protocol", str(root / "protocol.json"), "--report", str(root / "report.json"),
+                    "--report-receipt", str(root / "report-receipt.json"), "--open-pr", str(root / "open-pr.json"),
+                    "--output", str(output)]
+            with contextlib.redirect_stderr(io.StringIO()) as error:
+                self.assertEqual(collect.main(args), 2)
+            self.assertIn("heuristicScore must be finite in [0,1]", error.getvalue())
+            self.assertFalse(output.exists())
+
     def test_missing_telemetry_exports_three_unknowns_and_separate_merge_commit(self):
         history, audit = self.export()
         record = history["records"][0]

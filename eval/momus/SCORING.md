@@ -9,9 +9,9 @@ and source/report/receipt hashes are checked before scoring. A validation
 failure exits with status 2 and produces no result.
 
 ```sh
-python3 eval/momus/evaluate.py validate
-python3 -m unittest discover -s eval/momus -p 'test_*.py'
-python3 eval/momus/evaluate.py prepare --output /tmp/momus-evidence
+rtk proxy python3 eval/momus/evaluate.py validate
+rtk proxy python3 -m unittest discover -s eval/momus -p 'test_*.py'
+rtk proxy python3 eval/momus/evaluate.py prepare --output /tmp/momus-evidence
 ```
 
 `prepare` creates a full inventory of missing cases and pending independent
@@ -19,11 +19,11 @@ adjudications. It performs no review and refuses a nonempty output directory.
 After a separately authorized measured run and independent adjudication:
 
 ```sh
-python3 eval/momus/evaluate.py score \
+rtk proxy python3 eval/momus/evaluate.py score \
   --run /tmp/momus-evidence/run.json \
   --adjudications /tmp/momus-evidence/adjudications.json \
   --split holdout --slice core --output /tmp/momus-evidence/core-results.json
-python3 eval/momus/evaluate.py score \
+rtk proxy python3 eval/momus/evaluate.py score \
   --run /tmp/momus-evidence/run.json \
   --adjudications /tmp/momus-evidence/adjudications.json \
   --split holdout --slice auxiliary --output /tmp/momus-evidence/auxiliary-results.json
@@ -97,8 +97,10 @@ are supplied. Attaching that incomplete artifact to the scored report makes
 the report partial and earns zero detection credit.
 
 Native partial reports, skipped requests, budget deferrals, unmerged shards,
-dismissed subjects, incomplete follow-ups, absent source verification and
-auxiliary unknowns are recorded as incomplete. No finding from an incomplete
+dismissed subjects, dropped context characters/items, incomplete follow-ups,
+absent source verification and auxiliary unknowns are recorded as incomplete.
+Either nonzero native context-drop counter makes the review attempt incomplete
+even when the native report's `partial` flag is false. No finding from an incomplete
 case earns issue credit, even if the run receipt declares it complete. Source
 annotations still `pending` also earn zero credit. A complete report with any
 unadjudicated finding is incomplete for issue scoring.
@@ -148,7 +150,7 @@ Appropriate abstention needs an actual recorded abstention, no findings, validat
 missing-evidence labels, verified source identity and a complete review attempt.
 A native report partial only because evidence is unavailable may earn
 abstention success while remaining incomplete for detection. Failed, missing,
-budget/skipped or incomplete-coverage attempts cannot earn abstention success.
+budget/skipped, context-truncated or incomplete-coverage attempts cannot earn abstention success.
 An unexpected abstention on a defect/clean case is explicit and does not claim
 a completed review.
 

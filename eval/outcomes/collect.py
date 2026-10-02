@@ -137,6 +137,17 @@ def report_score(report, p):
     require(type(budget) is dict and type(budget.get("deferred")) is int and budget["deferred"] == 0,
             "capture requires explicit absence of deferred review work")
     require(report.get("shard") is None, "capture requires a complete unsharded review")
+    # Momus records context clipping independently of partial. An affirmative
+    # native drop counter defeats complete-review qualification even when the
+    # report's matrix/counters otherwise cover every source subject. Older
+    # stored reports need not invent fields absent from their producer schema.
+    if "workflow" in report:
+        workflow = report["workflow"]
+        require(type(workflow) is dict, "native workflow must be an object")
+        for name in ("droppedContextChars", "droppedContextItems"):
+            if name in workflow:
+                require(type(workflow[name]) is int and workflow[name] == 0,
+                        f"capture requires absence of dropped review context: {name}")
     head(report.get("reviewedHead"), "report.reviewedHead")
     head(report.get("reviewedBase"), "report.reviewedBase")
     summary = report.get("mergeConfidence")
@@ -144,7 +155,7 @@ def report_score(report, p):
     require(type(summary.get("heuristicVersion")) is int and summary["heuristicVersion"] == p["heuristicVersion"],
             "report heuristicVersion is missing or incompatible")
     score = summary.get("heuristicScore")
-    require(type(score) in (int, float) and math.isfinite(score) and 0 <= score <= 1,
+    require(type(score) in (int, float) and 0 <= score <= 1 and math.isfinite(score),
             "heuristicScore must be finite in [0,1]")
     require(type(report.get("pRevert")) in (int, float) and report["pRevert"] == score,
             "report score fields disagree")
