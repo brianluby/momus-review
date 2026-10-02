@@ -1,0 +1,22 @@
+--- a/src/invoice.rs
++++ b/src/invoice.rs
+@@ -1 +1,7 @@
+-pub fn total(cents: u64) -> u64 { cents }
++pub fn discounted_total(cents: u64, basis_points: u16) -> u64 {
++    assert!(basis_points <= 10000);
++    cents - cents * (u64::from(basis_points) / 10000)
++}
++#[cfg(test)] mod tests {
++    #[test] fn no_discount() { assert_eq!(super::discounted_total(2000, 0), 2000); }
++}
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,2 +1,7 @@
+ mod invoice;
+-fn main() { assert_eq!(invoice::total(2000), 2000); }
++fn main() {
++    assert_eq!(invoice::discounted_total(2000, 2500), 1500);
++    assert_eq!(invoice::discounted_total(2001, 2500), 1501);
++    assert_eq!(invoice::discounted_total(u64::MAX, 10000), 0);
++    assert_eq!(invoice::discounted_total(u64::MAX, 0), u64::MAX);
++}

@@ -1,0 +1,22 @@
+--- a/dispatcher.js
++++ b/dispatcher.js
+@@ -1,2 +1,2 @@
+-const {take} = require("./queue");
+-exports.dispatch = queue => take(queue);
++const {drain} = require("./queue");
++exports.dispatch = queue => drain(queue);
+--- a/queue.js
++++ b/queue.js
+@@ -1 +1,5 @@
+-exports.take = queue => queue.shift();
++exports.drain = queue => {
++  const jobs = [];
++  while (queue.length) jobs.push(queue.shift());
++  return jobs;
++};
+--- a/tests.js
++++ b/tests.js
+@@ -1,2 +1,2 @@
+ const assert = require("node:assert/strict");
+-assert.equal(require("./queue").take(["a"]), "a");
++assert.deepEqual(require("./dispatcher").dispatch(["a"]), ["a"]);

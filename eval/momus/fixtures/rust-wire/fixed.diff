@@ -1,0 +1,17 @@
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,2 +1,6 @@
+ mod wire;
+-fn main() { assert!(wire::encode().contains("\"state\":\"ready\"")); }
++fn main() {
++    let response = wire::encode("health-123");
++    assert!(response.contains("\"state\":\"ready\""));
++    assert!(response.contains("health-123"));
++}
+--- a/src/wire.rs
++++ b/src/wire.rs
+@@ -1 +1,3 @@
+-pub fn encode() -> String { "{\"state\":\"ready\"}".into() }
++pub fn encode(trace: &str) -> String {
++    format!("{{\"state\":\"ready\",\"trace\":\"{}\"}}", trace)
++}

@@ -62,3 +62,12 @@ The three findings this surfaces:
 The 20 security findings on un-curated routes are not counted as false
 positives — the `known_vulnerable` list is a conservative subset, not the full
 challenge map.
+
+## Momus-owned product corpus
+
+The separate [Momus-owned suite](momus/README.md) adds source-reviewed authored
+defect/fixed controls, insufficient-evidence cases and supported docs/dependency
+inputs. Its issue-level scorer uses exact source-bound independent adjudications;
+the historical Juice Shop evaluator and results above remain unchanged. The new
+suite is validated offline only; its [product-results template](momus/results-template.md)
+is blank. Public PR #40 controls are development-only, never holdout evidence.

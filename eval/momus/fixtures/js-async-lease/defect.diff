@@ -1,0 +1,41 @@
+--- a/forward.js
++++ b/forward.js
+@@ -1,6 +1,6 @@
+-exports.forward = (lease, message) => {
++exports.forward = async (lease, message) => {
+   try {
+-    return lease.sendSync(message);
++    return lease.sendAsync(message);
+   } finally {
+     lease.release();
+   }
+--- a/lease.js
++++ b/lease.js
+@@ -4,6 +4,12 @@
+     if (this.released) throw new Error("inactive lease");
+     return `sent:${message}`;
+   }
++  async sendAsync(message) {
++    await Promise.resolve();
++    if (this.released) throw new Error("lease released before send completed");
++    if (message === "fail") throw new Error("transport rejected send");
++    return `sent:${message}`;
++  }
+   release() { this.released = true; }
+ }
+ module.exports = {Lease};
+--- a/tests.js
++++ b/tests.js
+@@ -1,2 +1,4 @@
+ const assert = require("node:assert/strict");
+-assert.equal(require("./worker").handle("ping"), "sent:ping");
++const {forward} = require("./forward");
++const lease = {sendAsync: async message => `sent:${message}`, release() {}};
++forward(lease, "ping").then(value => assert.equal(value, "sent:ping"));
+--- a/worker.js
++++ b/worker.js
+@@ -1,3 +1,3 @@
+ const {Lease} = require("./lease");
+ const {forward} = require("./forward");
+-exports.handle = message => forward(new Lease(), message);
++exports.handle = async message => forward(new Lease(), message);

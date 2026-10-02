@@ -1,0 +1,19 @@
+--- a/notes.js
++++ b/notes.js
+@@ -1 +1,6 @@
+-exports.get = (rows, tenant, id) => rows.find(row => row.tenant === tenant && row.id === id);
++exports.updateTitle = (rows, tenant, id, title) => {
++  const row = rows.find(row => row.id === id);
++  if (!row) return false;
++  row.title = title;
++  return true;
++};
+--- a/tests.js
++++ b/tests.js
+@@ -1,3 +1,5 @@
+ const assert = require("node:assert/strict");
+ const notes = require("./notes");
+-assert.equal(notes.get([], "red", 9), undefined);
++const rows = [{tenant:"red", id:1, title:"old"}];
++assert.equal(notes.updateTitle(rows, "red", 1, "new"), true);
++assert.equal(rows[0].title, "new");

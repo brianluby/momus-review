@@ -1,0 +1,1473 @@
+{
+  "schemaVersion": 1,
+  "datasetVersion": "momus-owned-v1",
+  "cases": [
+    {
+      "id": "rust-invoice-defect",
+      "pairId": "rust-invoice",
+      "split": "holdout",
+      "slice": "core",
+      "language": "rust",
+      "expectation": "defect",
+      "dimension": "correctness",
+      "base": "fixtures/rust-invoice/base",
+      "head": "fixtures/rust-invoice/defect",
+      "diff": "fixtures/rust-invoice/defect.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored invoice discount change; no imported project or PR example.",
+        "baseSha256": "4c784bdcf773b80c78c54c1165bc0896aa033eb7d59755f1aeb3bd880773eae9",
+        "headSha256": "66c43a29689e9f45712370db6a6b64ac49c54428131a917469e851ba3feed061",
+        "diffSha256": "58ff8012be6c50816838ad26f87c20455f2685656819320488d8e31ebd2a7675"
+      },
+      "issues": [
+        {
+          "id": "rust-invoice-issue",
+          "file": "src/invoice.rs",
+          "startLine": 3,
+          "endLine": 3,
+          "dimension": "correctness",
+          "trigger": "Checkout applies a 2500-basis-point discount to 2000 cents.",
+          "contract": "Multiply before integer division, round the discount amount down and subtract it; the payable total is 1500 cents.",
+          "consequence": "The division truncates 2500/10000 to zero and charges 2000 cents, overcharging by 500.",
+          "acceptableFinding": "Identify integer-division order in discounted_total, the 2500/2000 trigger and the wrong checkout total.",
+          "explanation": {
+            "sourceCorrectness": "Ground the claim in src/invoice.rs:3 and the visible caller/tests and repository contract.",
+            "specificity": "Explain the concrete trigger: Checkout applies a 2500-basis-point discount to 2000 cents.",
+            "actionability": "Multiply cents by basis points in u128, divide the discount amount by 10000, then subtract that rounded discount from cents.",
+            "uncertainty": "Limit the conclusion to this authored fixture and its explicit contract; do not infer production exposure or benchmark-wide performance."
+          },
+          "fix": "Multiply cents by basis points in u128, divide the discount amount by 10000, then subtract that rounded discount from cents."
+        }
+      ],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "rust-invoice-defect"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified trigger, violated contract, consequence, exact source location and acceptable finding; read both paired heads and reran behavioral controls. All stored patches transform exact base bytes to declared head. See annotation-review.md for bounded per-pair rationale."
+      }
+    },
+    {
+      "id": "rust-invoice-fixed",
+      "pairId": "rust-invoice",
+      "split": "holdout",
+      "slice": "core",
+      "language": "rust",
+      "expectation": "clean",
+      "dimension": "correctness",
+      "base": "fixtures/rust-invoice/base",
+      "head": "fixtures/rust-invoice/fixed",
+      "diff": "fixtures/rust-invoice/fixed.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored invoice discount change; no imported project or PR example.",
+        "baseSha256": "4c784bdcf773b80c78c54c1165bc0896aa033eb7d59755f1aeb3bd880773eae9",
+        "headSha256": "a2281357de85538c2aeee809e4bc0c2cb9de92c12a490efab90be0a2a1878426",
+        "diffSha256": "be553d43d0236626cd337e448f83d107a58e588d674ac251104a6cbcf7e98100"
+      },
+      "issues": [],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "rust-invoice-fixed"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified trigger, violated contract, consequence, exact source location and acceptable finding; read both paired heads and reran behavioral controls. All stored patches transform exact base bytes to declared head. See annotation-review.md for bounded per-pair rationale."
+      }
+    },
+    {
+      "id": "rust-authority-defect",
+      "pairId": "rust-authority",
+      "split": "holdout",
+      "slice": "core",
+      "language": "rust",
+      "expectation": "defect",
+      "dimension": "security",
+      "base": "fixtures/rust-authority/base",
+      "head": "fixtures/rust-authority/defect",
+      "diff": "fixtures/rust-authority/defect.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored authenticated-role boundary change.",
+        "baseSha256": "dd2ec7af0cbf5ceb685d566e1cfb3686dc95e7d551b03200db71ea875cdca9c9",
+        "headSha256": "8db76eef3d0b1572fb14e3dd6c6c778739d87baa34b75ecc1fecf2bf29ee9783",
+        "diffSha256": "df4ddaec1a19823cdfb26357b82b1f56a406009c905841e340d8320b9bcb74e1"
+      },
+      "issues": [
+        {
+          "id": "rust-authority-issue",
+          "file": "src/auth.rs",
+          "startLine": 3,
+          "endLine": 3,
+          "dimension": "security",
+          "trigger": "An authenticated viewer passes request_role=admin when requesting workspace deletion.",
+          "contract": "Only server-authenticated Actor.can_manage may authorize deletion; request_role is untrusted.",
+          "consequence": "The caller-controlled admin string grants deletion authority to a viewer.",
+          "acceptableFinding": "Trace the request role into the authorization OR branch and distinguish it from the authenticated permission.",
+          "explanation": {
+            "sourceCorrectness": "Ground the claim in src/auth.rs:3 and the visible caller/tests and repository contract.",
+            "specificity": "Explain the concrete trigger: An authenticated viewer passes request_role=admin when requesting workspace deletion.",
+            "actionability": "Ignore the untrusted display role for authorization and check only Actor.can_manage.",
+            "uncertainty": "Limit the conclusion to this authored fixture and its explicit contract; do not infer production exposure or benchmark-wide performance."
+          },
+          "fix": "Ignore the untrusted display role for authorization and check only Actor.can_manage."
+        }
+      ],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "rust-authority-defect"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified trigger, violated contract, consequence, exact source location and acceptable finding; read both paired heads and reran behavioral controls. All stored patches transform exact base bytes to declared head. See annotation-review.md for bounded per-pair rationale."
+      }
+    },
+    {
+      "id": "rust-authority-fixed",
+      "pairId": "rust-authority",
+      "split": "holdout",
+      "slice": "core",
+      "language": "rust",
+      "expectation": "clean",
+      "dimension": "security",
+      "base": "fixtures/rust-authority/base",
+      "head": "fixtures/rust-authority/fixed",
+      "diff": "fixtures/rust-authority/fixed.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored authenticated-role boundary change.",
+        "baseSha256": "dd2ec7af0cbf5ceb685d566e1cfb3686dc95e7d551b03200db71ea875cdca9c9",
+        "headSha256": "004b5ff1782a4ee3ecd0c4f932bc173511d96b63e7610b92c136edbdc591fbe9",
+        "diffSha256": "933c8605022befdcc1f4f453851b62dfba6d03f4e0829db858ec8f6e5402e6e7"
+      },
+      "issues": [],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "rust-authority-fixed"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified trigger, violated contract, consequence, exact source location and acceptable finding; read both paired heads and reran behavioral controls. All stored patches transform exact base bytes to declared head. See annotation-review.md for bounded per-pair rationale."
+      }
+    },
+    {
+      "id": "rust-backoff-defect",
+      "pairId": "rust-backoff",
+      "split": "holdout",
+      "slice": "core",
+      "language": "rust",
+      "expectation": "defect",
+      "dimension": "reliability",
+      "base": "fixtures/rust-backoff/base",
+      "head": "fixtures/rust-backoff/defect",
+      "diff": "fixtures/rust-backoff/defect.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored retry backoff cap implementation.",
+        "baseSha256": "3df001d461645334b4b00b4dd53e3663bdea2fd275f03841b080b17afb2e45fd",
+        "headSha256": "fee90e20e5ecb57791ec28dbc424a18128677160ecc6f949f27f0bfbc1dc53a6",
+        "diffSha256": "2431ae7c08cdaf2a99c1c2be1e987eaa4973315bc1b593f8d329247cee381be3"
+      },
+      "issues": [
+        {
+          "id": "rust-backoff-issue",
+          "file": "src/retry.rs",
+          "startLine": 2,
+          "endLine": 2,
+          "dimension": "reliability",
+          "trigger": "A restored retry job has attempt=64.",
+          "contract": "All u32 persisted counters must yield a bounded delay without panic.",
+          "consequence": "The shift overflows before min applies; debug builds panic before the cap, aborting delay calculation instead of returning a bounded delay.",
+          "acceptableFinding": "Identify the shift/overflow occurring before the cap and connect it to restored counters and aborted delay calculation; do not infer job loss from absent persistence evidence.",
+          "explanation": {
+            "sourceCorrectness": "Ground the claim in src/retry.rs:2 and the visible caller/tests and repository contract.",
+            "specificity": "Explain the concrete trigger: A restored retry job has attempt=64.",
+            "actionability": "Use saturating exponentiation and checked multiplication, then cap the resulting delay.",
+            "uncertainty": "Limit the conclusion to this authored fixture and its explicit contract; do not infer production exposure or benchmark-wide performance."
+          },
+          "fix": "Use saturating exponentiation and checked multiplication, then cap the resulting delay."
+        }
+      ],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "rust-backoff-defect"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified trigger, violated contract, consequence, exact source location and acceptable finding; read both paired heads and reran behavioral controls. All stored patches transform exact base bytes to declared head. See annotation-review.md for bounded per-pair rationale."
+      }
+    },
+    {
+      "id": "rust-backoff-fixed",
+      "pairId": "rust-backoff",
+      "split": "holdout",
+      "slice": "core",
+      "language": "rust",
+      "expectation": "clean",
+      "dimension": "reliability",
+      "base": "fixtures/rust-backoff/base",
+      "head": "fixtures/rust-backoff/fixed",
+      "diff": "fixtures/rust-backoff/fixed.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored retry backoff cap implementation.",
+        "baseSha256": "3df001d461645334b4b00b4dd53e3663bdea2fd275f03841b080b17afb2e45fd",
+        "headSha256": "60c8f193776cea7055b472d442a0f8a60f69c56d615847b0ce2b5ebd717b1dcf",
+        "diffSha256": "d9f11d0c991819f8bacea346fb10369983a5f6347c93642355fff37743ac50ae"
+      },
+      "issues": [],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "rust-backoff-fixed"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified trigger, violated contract, consequence, exact source location and acceptable finding; read both paired heads and reran behavioral controls. All stored patches transform exact base bytes to declared head. See annotation-review.md for bounded per-pair rationale."
+      }
+    },
+    {
+      "id": "rust-wire-defect",
+      "pairId": "rust-wire",
+      "split": "holdout",
+      "slice": "core",
+      "language": "rust",
+      "expectation": "defect",
+      "dimension": "compatibility",
+      "base": "fixtures/rust-wire/base",
+      "head": "fixtures/rust-wire/defect",
+      "diff": "fixtures/rust-wire/defect.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored additive tracing feature and stable wire contract.",
+        "baseSha256": "d01b72e1a0b4103726f5a911ffa2a6ed394a26ac348498b2e85f49a95e8814e4",
+        "headSha256": "99831874e6e8c29ca9a991325c60b602936ec69a59056b81d58b1c26565637a7",
+        "diffSha256": "5741d67ea4a9d3db0e9dfc1e444c276f54c447107d3bbb0d929e51f306e4dfc3"
+      },
+      "issues": [
+        {
+          "id": "rust-wire-issue",
+          "file": "src/wire.rs",
+          "startLine": 2,
+          "endLine": 2,
+          "dimension": "compatibility",
+          "trigger": "An existing health client parses the state key after the trace feature is deployed.",
+          "contract": "The state response key remains stable while trace is additive.",
+          "consequence": "Renaming state to status makes an otherwise healthy worker unreadable to existing clients.",
+          "acceptableFinding": "Name the removed state key and cite the existing client, rather than asserting that any new JSON field is incompatible.",
+          "explanation": {
+            "sourceCorrectness": "Ground the claim in src/wire.rs:2 and the visible caller/tests and repository contract.",
+            "specificity": "Explain the concrete trigger: An existing health client parses the state key after the trace feature is deployed.",
+            "actionability": "Retain state and add trace without renaming the existing wire key.",
+            "uncertainty": "Limit the conclusion to this authored fixture and its explicit contract; do not infer production exposure or benchmark-wide performance."
+          },
+          "fix": "Retain state and add trace without renaming the existing wire key."
+        }
+      ],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "rust-wire-defect"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified trigger, violated contract, consequence, exact source location and acceptable finding; read both paired heads and reran behavioral controls. All stored patches transform exact base bytes to declared head. See annotation-review.md for bounded per-pair rationale."
+      }
+    },
+    {
+      "id": "rust-wire-fixed",
+      "pairId": "rust-wire",
+      "split": "holdout",
+      "slice": "core",
+      "language": "rust",
+      "expectation": "clean",
+      "dimension": "compatibility",
+      "base": "fixtures/rust-wire/base",
+      "head": "fixtures/rust-wire/fixed",
+      "diff": "fixtures/rust-wire/fixed.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored additive tracing feature and stable wire contract.",
+        "baseSha256": "d01b72e1a0b4103726f5a911ffa2a6ed394a26ac348498b2e85f49a95e8814e4",
+        "headSha256": "55c1f1fee19de0a3a881d93f718adb9772f3549e572c5ca04758f681517ed7d8",
+        "diffSha256": "f15805a2fdd19972d79d0c64915c9d3d31fdeba4d1929cb1464a4ed73fe85dbc"
+      },
+      "issues": [],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "rust-wire-fixed"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified trigger, violated contract, consequence, exact source location and acceptable finding; read both paired heads and reran behavioral controls. All stored patches transform exact base bytes to declared head. See annotation-review.md for bounded per-pair rationale."
+      }
+    },
+    {
+      "id": "js-tenant-defect",
+      "pairId": "js-tenant",
+      "split": "holdout",
+      "slice": "core",
+      "language": "javascript",
+      "expectation": "defect",
+      "dimension": "security",
+      "base": "fixtures/js-tenant/base",
+      "head": "fixtures/js-tenant/defect",
+      "diff": "fixtures/js-tenant/defect.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored tenant-scoped note update endpoint.",
+        "baseSha256": "8f638a50864d770e6e1b7ad09e50ebc23735ec0bdea3b182fb4cbba7f13c5514",
+        "headSha256": "cc2b00cbb6edbb247aaffe7d4cb5513012b4cb07b435916e535a7af4f4c94609",
+        "diffSha256": "b931fdb206db9d566c0d5c8ed9d782ec57a8b071628b46fc902a93828d29fa9b"
+      },
+      "issues": [
+        {
+          "id": "js-tenant-issue",
+          "file": "notes.js",
+          "startLine": 2,
+          "endLine": 2,
+          "dimension": "security",
+          "trigger": "Tenant red submits id=9 that exists only in tenant blue.",
+          "contract": "Locate notes by both tenant and id before mutation.",
+          "consequence": "The id-only lookup mutates tenant blue's title using tenant red's request.",
+          "acceptableFinding": "Describe the id-only row lookup, the cross-tenant trigger and unauthorized mutation.",
+          "explanation": {
+            "sourceCorrectness": "Ground the claim in notes.js:2 and the visible caller/tests and repository contract.",
+            "specificity": "Explain the concrete trigger: Tenant red submits id=9 that exists only in tenant blue.",
+            "actionability": "Include row.tenant === tenant in the update lookup, as the existing get contract does.",
+            "uncertainty": "Limit the conclusion to this authored fixture and its explicit contract; do not infer production exposure or benchmark-wide performance."
+          },
+          "fix": "Include row.tenant === tenant in the update lookup, as the existing get contract does."
+        }
+      ],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "js-tenant-defect"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified trigger, violated contract, consequence, exact source location and acceptable finding; read both paired heads and reran behavioral controls. All stored patches transform exact base bytes to declared head. See annotation-review.md for bounded per-pair rationale."
+      }
+    },
+    {
+      "id": "js-tenant-fixed",
+      "pairId": "js-tenant",
+      "split": "holdout",
+      "slice": "core",
+      "language": "javascript",
+      "expectation": "clean",
+      "dimension": "security",
+      "base": "fixtures/js-tenant/base",
+      "head": "fixtures/js-tenant/fixed",
+      "diff": "fixtures/js-tenant/fixed.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored tenant-scoped note update endpoint.",
+        "baseSha256": "8f638a50864d770e6e1b7ad09e50ebc23735ec0bdea3b182fb4cbba7f13c5514",
+        "headSha256": "139e7cd5ab63726a66102629cd209fddbc0ed65a3c143398c56cbcf0f3cb2819",
+        "diffSha256": "415e3240cd2d2a03ee7f112b5d4bf3e3cecf25e548abff490e438bf0813fe6af"
+      },
+      "issues": [],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "js-tenant-fixed"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified trigger, violated contract, consequence, exact source location and acceptable finding; read both paired heads and reran behavioral controls. All stored patches transform exact base bytes to declared head. See annotation-review.md for bounded per-pair rationale."
+      }
+    },
+    {
+      "id": "js-drain-defect",
+      "pairId": "js-drain",
+      "split": "holdout",
+      "slice": "core",
+      "language": "javascript",
+      "expectation": "defect",
+      "dimension": "reliability",
+      "base": "fixtures/js-drain/base",
+      "head": "fixtures/js-drain/defect",
+      "diff": "fixtures/js-drain/defect.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored batch dispatch addition with mutable queue ownership.",
+        "baseSha256": "4c649ee9f71f5c83189c2b0c29610b8b8477925ebe76b3503992aea6603456a5",
+        "headSha256": "542a4ca5b82f65bc7b5dc6d155485948ed103a45b9906d19c8d60f82b2daac81",
+        "diffSha256": "8645f961e64ab5a36e505764163d981985304cbdf952a9f62323dd44f0523d54"
+      },
+      "issues": [
+        {
+          "id": "js-drain-issue",
+          "file": "queue.js",
+          "startLine": 3,
+          "endLine": 3,
+          "dimension": "reliability",
+          "trigger": "Dispatcher receives three queued jobs a, b and c.",
+          "contract": "Drain all queued jobs exactly once and leave the owned queue empty.",
+          "consequence": "Shifting shrinks queue.length while the loop index grows; c remains queued and is not dispatched.",
+          "acceptableFinding": "Explain the index/length interaction and show that a three-job batch dispatches only two jobs.",
+          "explanation": {
+            "sourceCorrectness": "Ground the claim in queue.js:3 and the visible caller/tests and repository contract.",
+            "specificity": "Explain the concrete trigger: Dispatcher receives three queued jobs a, b and c.",
+            "actionability": "Loop while the queue is nonempty or snapshot the original length before removing jobs.",
+            "uncertainty": "Limit the conclusion to this authored fixture and its explicit contract; do not infer production exposure or benchmark-wide performance."
+          },
+          "fix": "Loop while the queue is nonempty or snapshot the original length before removing jobs."
+        }
+      ],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "js-drain-defect"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified trigger, violated contract, consequence, exact source location and acceptable finding; read both paired heads and reran behavioral controls. All stored patches transform exact base bytes to declared head. See annotation-review.md for bounded per-pair rationale."
+      }
+    },
+    {
+      "id": "js-drain-fixed",
+      "pairId": "js-drain",
+      "split": "holdout",
+      "slice": "core",
+      "language": "javascript",
+      "expectation": "clean",
+      "dimension": "reliability",
+      "base": "fixtures/js-drain/base",
+      "head": "fixtures/js-drain/fixed",
+      "diff": "fixtures/js-drain/fixed.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored batch dispatch addition with mutable queue ownership.",
+        "baseSha256": "4c649ee9f71f5c83189c2b0c29610b8b8477925ebe76b3503992aea6603456a5",
+        "headSha256": "4249b90de0f0f34a47766285fe76e07905099845c05fd17d41f84e81d9eaa378",
+        "diffSha256": "fa989117585c863a68259f7dabedbb55ffb02a06a8a97621436df3a5f4e2eeb9"
+      },
+      "issues": [],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "js-drain-fixed"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified trigger, violated contract, consequence, exact source location and acceptable finding; read both paired heads and reran behavioral controls. All stored patches transform exact base bytes to declared head. See annotation-review.md for bounded per-pair rationale."
+      }
+    },
+    {
+      "id": "js-async-lease-defect",
+      "pairId": "js-async-lease",
+      "split": "holdout",
+      "slice": "core",
+      "language": "javascript",
+      "expectation": "defect",
+      "dimension": "reliability",
+      "base": "fixtures/js-async-lease/base",
+      "head": "fixtures/js-async-lease/defect",
+      "diff": "fixtures/js-async-lease/defect.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored synchronous-to-asynchronous leased transport change with observable completion and rejection behavior.",
+        "baseSha256": "d7fb4df18ed6d12504ddad215b326582775681592f0342691c0442bd04b69e3d",
+        "headSha256": "f4041ff2426251298f01df27d88a5c6d6631fe5f487309f1a781477bd7c5b739",
+        "diffSha256": "c02e1df994471a1390de632ddf2437db289548c4a03b906521d8d8551c76a7ec"
+      },
+      "issues": [
+        {
+          "id": "js-async-lease-issue",
+          "file": "forward.js",
+          "startLine": 3,
+          "endLine": 3,
+          "dimension": "reliability",
+          "trigger": "worker.handle('ping') awaits a send that yields before reading the active lease.",
+          "contract": "The worker must retain the lease until the send promise settles and release it after completion or rejection.",
+          "consequence": "Returning the promise directly runs finally immediately, releasing the lease before sendAsync resumes; the otherwise valid send rejects.",
+          "acceptableFinding": "Explain async promise adoption versus the timing of finally and the concrete released-lease error after the microtask yield.",
+          "explanation": {
+            "sourceCorrectness": "Ground the claim in forward.js:3 and the visible caller/tests and repository contract.",
+            "specificity": "Explain the concrete trigger: worker.handle('ping') awaits a send that yields before reading the active lease.",
+            "actionability": "Await lease.sendAsync inside try so finally releases the lease only after success or rejection.",
+            "uncertainty": "Limit the conclusion to this authored fixture and its explicit contract; do not infer production exposure or benchmark-wide performance."
+          },
+          "fix": "Await lease.sendAsync inside try so finally releases the lease only after success or rejection."
+        }
+      ],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "js-async-lease-defect"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified trigger, violated contract, consequence, exact source location and acceptable finding; read both paired heads and reran behavioral controls. All stored patches transform exact base bytes to declared head. See annotation-review.md for bounded per-pair rationale."
+      }
+    },
+    {
+      "id": "js-async-lease-fixed",
+      "pairId": "js-async-lease",
+      "split": "holdout",
+      "slice": "core",
+      "language": "javascript",
+      "expectation": "clean",
+      "dimension": "reliability",
+      "base": "fixtures/js-async-lease/base",
+      "head": "fixtures/js-async-lease/fixed",
+      "diff": "fixtures/js-async-lease/fixed.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored synchronous-to-asynchronous leased transport change with observable completion and rejection behavior.",
+        "baseSha256": "d7fb4df18ed6d12504ddad215b326582775681592f0342691c0442bd04b69e3d",
+        "headSha256": "f6de3690b60d9ae8b5310b55c04dad860c28381ad7f373a032052620337cfac7",
+        "diffSha256": "9bb48a27b7eb94b058e0cdceaffda12bfe4595a37a1d84a9ec5a98962d2a979a"
+      },
+      "issues": [],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "js-async-lease-fixed"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified trigger, violated contract, consequence, exact source location and acceptable finding; read both paired heads and reran behavioral controls. All stored patches transform exact base bytes to declared head. See annotation-review.md for bounded per-pair rationale."
+      }
+    },
+    {
+      "id": "js-pagination-defect",
+      "pairId": "js-pagination",
+      "split": "holdout",
+      "slice": "core",
+      "language": "javascript",
+      "expectation": "defect",
+      "dimension": "compatibility",
+      "base": "fixtures/js-pagination/base",
+      "head": "fixtures/js-pagination/defect",
+      "diff": "fixtures/js-pagination/defect.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored catalog pagination metadata feature.",
+        "baseSha256": "90c09db8ec36c4f9d6b51da35e78aedcbb246e23e994466d18ee236f55394a03",
+        "headSha256": "2d3d820087bea4e89b90c8969ca1b1e12bed2cc2798b2bcf89072176b445e40d",
+        "diffSha256": "0b10aeb9e93f417c270a54c646364a7708fe55c331ef228512426c45e3a31952"
+      },
+      "issues": [
+        {
+          "id": "js-pagination-issue",
+          "file": "catalog.js",
+          "startLine": 3,
+          "endLine": 3,
+          "dimension": "compatibility",
+          "trigger": "The unchanged collector requests the first page of a four-row catalog.",
+          "contract": "Existing callers read nextCursor; hasMore must be added without removing nextCursor.",
+          "consequence": "The renamed next property makes collector.firstCursor return undefined instead of 2.",
+          "acceptableFinding": "Tie the removed nextCursor return property to the unchanged collector and truncated traversal.",
+          "explanation": {
+            "sourceCorrectness": "Ground the claim in catalog.js:3 and the visible caller/tests and repository contract.",
+            "specificity": "Explain the concrete trigger: The unchanged collector requests the first page of a four-row catalog.",
+            "actionability": "Return nextCursor: next alongside the additive hasMore field.",
+            "uncertainty": "Limit the conclusion to this authored fixture and its explicit contract; do not infer production exposure or benchmark-wide performance."
+          },
+          "fix": "Return nextCursor: next alongside the additive hasMore field."
+        }
+      ],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "js-pagination-defect"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified trigger, violated contract, consequence, exact source location and acceptable finding; read both paired heads and reran behavioral controls. All stored patches transform exact base bytes to declared head. See annotation-review.md for bounded per-pair rationale."
+      }
+    },
+    {
+      "id": "js-pagination-fixed",
+      "pairId": "js-pagination",
+      "split": "holdout",
+      "slice": "core",
+      "language": "javascript",
+      "expectation": "clean",
+      "dimension": "compatibility",
+      "base": "fixtures/js-pagination/base",
+      "head": "fixtures/js-pagination/fixed",
+      "diff": "fixtures/js-pagination/fixed.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored catalog pagination metadata feature.",
+        "baseSha256": "90c09db8ec36c4f9d6b51da35e78aedcbb246e23e994466d18ee236f55394a03",
+        "headSha256": "a4df3f050d2cc75aa3848f4d9b44e2034bb4a8b6fb0b18088b7ceec3ce7041db",
+        "diffSha256": "78636241c5dc921a6ed854723f496cbdaf236fb79a59eeaa7570ce88a11a7692"
+      },
+      "issues": [],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "js-pagination-fixed"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified trigger, violated contract, consequence, exact source location and acceptable finding; read both paired heads and reran behavioral controls. All stored patches transform exact base bytes to declared head. See annotation-review.md for bounded per-pair rationale."
+      }
+    },
+    {
+      "id": "js-refund-tests-defect",
+      "pairId": "js-refund-tests",
+      "split": "holdout",
+      "slice": "core",
+      "language": "javascript",
+      "expectation": "defect",
+      "dimension": "testGap",
+      "base": "fixtures/js-refund-tests/base",
+      "head": "fixtures/js-refund-tests/defect",
+      "diff": "fixtures/js-refund-tests/defect.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored regression-test omission for an otherwise correct idempotent refund implementation.",
+        "baseSha256": "d3f77a6be4c223a5ff9d8d5cc60efb7e87cf0f473049d12d73ae7064e55ba351",
+        "headSha256": "cfa9b2fa222f26f791880355c12dd4ef9f21fb4b1ae6fe717489190c7856b77d",
+        "diffSha256": "cd0b1961730284a5a8762fb71de38f7b763f47087c8229e762c0ff0500d2db36"
+      },
+      "issues": [
+        {
+          "id": "js-refund-tests-issue",
+          "file": "tests.js",
+          "startLine": 4,
+          "endLine": 4,
+          "dimension": "testGap",
+          "trigger": "A repeat-key guard is removed in a future regression while the new test suite runs.",
+          "contract": "The public refund idempotency contract needs a test asserting repeated keys do not credit twice.",
+          "consequence": "The suite observes only the first refund; a mutation deleting the guard still passes while duplicate credits occur.",
+          "acceptableFinding": "Identify the missing repeat-key test and the specific surviving guard-removal mutation; do not claim the current production guard is broken.",
+          "explanation": {
+            "sourceCorrectness": "Ground the claim in tests.js:4 and the visible caller/tests and repository contract.",
+            "specificity": "Explain the concrete trigger: A repeat-key guard is removed in a future regression while the new test suite runs.",
+            "actionability": "Call refund twice with the same key and assert the second result is false and balance remains unchanged.",
+            "uncertainty": "Limit the conclusion to this authored fixture and its explicit contract; do not infer production exposure or benchmark-wide performance."
+          },
+          "fix": "Call refund twice with the same key and assert the second result is false and balance remains unchanged."
+        }
+      ],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "js-refund-tests-defect"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified explicit test contract, correct current implementation, missing-versus-present rejection assertions and surviving-versus-killed mutant. This is a regression-test gap, not a current production bypass. See annotation-review.md."
+      }
+    },
+    {
+      "id": "js-refund-tests-fixed",
+      "pairId": "js-refund-tests",
+      "split": "holdout",
+      "slice": "core",
+      "language": "javascript",
+      "expectation": "clean",
+      "dimension": "testGap",
+      "base": "fixtures/js-refund-tests/base",
+      "head": "fixtures/js-refund-tests/fixed",
+      "diff": "fixtures/js-refund-tests/fixed.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored regression-test omission for an otherwise correct idempotent refund implementation.",
+        "baseSha256": "d3f77a6be4c223a5ff9d8d5cc60efb7e87cf0f473049d12d73ae7064e55ba351",
+        "headSha256": "789ee0da9842ff9dffc2f8bb51c134c5f21beb9cf7299a148881a5ebf77ca3dd",
+        "diffSha256": "90308647833779f80b222f75e386fa3592533eaf7de3b69802b3e530a653e8c2"
+      },
+      "issues": [],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "js-refund-tests-fixed"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified explicit test contract, correct current implementation, missing-versus-present rejection assertions and surviving-versus-killed mutant. This is a regression-test gap, not a current production bypass. See annotation-review.md."
+      }
+    },
+    {
+      "id": "python-cents-defect",
+      "pairId": "python-cents",
+      "split": "holdout",
+      "slice": "core",
+      "language": "python",
+      "expectation": "defect",
+      "dimension": "correctness",
+      "base": "fixtures/python-cents/base",
+      "head": "fixtures/python-cents/defect",
+      "diff": "fixtures/python-cents/defect.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored decimal-price import feature.",
+        "baseSha256": "edfd63677275e2d2248c63c7f159741a26e02ddcf0b2aa897d4bfff9ef747f03",
+        "headSha256": "758e189101369c1abada834e853491628a08c41c5bd28430aa365a69d71e2302",
+        "diffSha256": "12395fa509ca625b5b35f7f1bd4d400c7b4810ed03e57751ad0980daf9ecfc4a"
+      },
+      "issues": [
+        {
+          "id": "python-cents-issue",
+          "file": "prices.py",
+          "startLine": 2,
+          "endLine": 2,
+          "dimension": "correctness",
+          "trigger": "The importer receives price='0.29'.",
+          "contract": "Decimal input must retain its exact cents without binary floating-point truncation.",
+          "consequence": "float('0.29') * 100 is below 29 and int truncates the imported price to 28 cents.",
+          "acceptableFinding": "Show the 0.29 trigger and binary-float-to-int undercount in parse_cents, rather than a general numeric-style complaint.",
+          "explanation": {
+            "sourceCorrectness": "Ground the claim in prices.py:2 and the visible caller/tests and repository contract.",
+            "specificity": "Explain the concrete trigger: The importer receives price='0.29'.",
+            "actionability": "Parse with Decimal and scale by 100 before converting an input already constrained to cent precision.",
+            "uncertainty": "Limit the conclusion to this authored fixture and its explicit contract; do not infer production exposure or benchmark-wide performance."
+          },
+          "fix": "Parse with Decimal and scale by 100 before converting an input already constrained to cent precision."
+        }
+      ],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "python-cents-defect"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified trigger, violated contract, consequence, exact source location and acceptable finding; read both paired heads and reran behavioral controls. All stored patches transform exact base bytes to declared head. See annotation-review.md for bounded per-pair rationale."
+      }
+    },
+    {
+      "id": "python-cents-fixed",
+      "pairId": "python-cents",
+      "split": "holdout",
+      "slice": "core",
+      "language": "python",
+      "expectation": "clean",
+      "dimension": "correctness",
+      "base": "fixtures/python-cents/base",
+      "head": "fixtures/python-cents/fixed",
+      "diff": "fixtures/python-cents/fixed.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored decimal-price import feature.",
+        "baseSha256": "edfd63677275e2d2248c63c7f159741a26e02ddcf0b2aa897d4bfff9ef747f03",
+        "headSha256": "bcbe03f06aad0b6c6c5e3dde55fd7449863525740cf2714a534590faf409990e",
+        "diffSha256": "728a4719f8f543c552b2ed5ff1bbd00b11f7a9a486f11403815af3e62283fca5"
+      },
+      "issues": [],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "python-cents-fixed"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified trigger, violated contract, consequence, exact source location and acceptable finding; read both paired heads and reran behavioral controls. All stored patches transform exact base bytes to declared head. See annotation-review.md for bounded per-pair rationale."
+      }
+    },
+    {
+      "id": "python-export-defect",
+      "pairId": "python-export",
+      "split": "holdout",
+      "slice": "core",
+      "language": "python",
+      "expectation": "defect",
+      "dimension": "security",
+      "base": "fixtures/python-export/base",
+      "head": "fixtures/python-export/defect",
+      "diff": "fixtures/python-export/defect.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored nested-export path handling change.",
+        "baseSha256": "51073ed09c7e48a2bec71daf78a17afabb354ad3586a097840c588ef0f349b4b",
+        "headSha256": "79fe110220bf3f92c71fd43e5b29acf1d2d9b16557723a158f1f7ee8ff02603d",
+        "diffSha256": "2f75c0439844a63cd53b4cdbf9869ac0c71c4b35c995eded0bcb7afa21846e1f"
+      },
+      "issues": [
+        {
+          "id": "python-export-issue",
+          "file": "exports.py",
+          "startLine": 2,
+          "endLine": 2,
+          "dimension": "security",
+          "trigger": "The HTTP query name is '../private.csv'.",
+          "contract": "Every resolved download path must remain under the configured export root.",
+          "consequence": "resolve normalizes traversal but does not confine it; the handler selects a file outside the export directory.",
+          "acceptableFinding": "Trace untrusted query name through download_path and distinguish normalization from containment validation.",
+          "explanation": {
+            "sourceCorrectness": "Ground the claim in exports.py:2 and the visible caller/tests and repository contract.",
+            "specificity": "Explain the concrete trigger: The HTTP query name is '../private.csv'.",
+            "actionability": "Resolve both paths, require target.relative_to(root) to succeed, and reject ValueError before opening the file.",
+            "uncertainty": "Limit the conclusion to this authored fixture and its explicit contract; do not infer production exposure or benchmark-wide performance."
+          },
+          "fix": "Resolve both paths, require target.relative_to(root) to succeed, and reject ValueError before opening the file."
+        }
+      ],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "python-export-defect"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified trigger, violated contract, consequence, exact source location and acceptable finding; read both paired heads and reran behavioral controls. All stored patches transform exact base bytes to declared head. See annotation-review.md for bounded per-pair rationale."
+      }
+    },
+    {
+      "id": "python-export-fixed",
+      "pairId": "python-export",
+      "split": "holdout",
+      "slice": "core",
+      "language": "python",
+      "expectation": "clean",
+      "dimension": "security",
+      "base": "fixtures/python-export/base",
+      "head": "fixtures/python-export/fixed",
+      "diff": "fixtures/python-export/fixed.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored nested-export path handling change.",
+        "baseSha256": "51073ed09c7e48a2bec71daf78a17afabb354ad3586a097840c588ef0f349b4b",
+        "headSha256": "bf602421d18ea172634f344798db4a7525d85de71649b2e5d5a088f387cd14f2",
+        "diffSha256": "bb6c0d64171bbc8b5e951a878d97746c6ee8d06a41ddb1ff4f6142b386391939"
+      },
+      "issues": [],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "python-export-fixed"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified trigger, violated contract, consequence, exact source location and acceptable finding; read both paired heads and reran behavioral controls. All stored patches transform exact base bytes to declared head. See annotation-review.md for bounded per-pair rationale."
+      }
+    },
+    {
+      "id": "python-config-defect",
+      "pairId": "python-config",
+      "split": "holdout",
+      "slice": "core",
+      "language": "python",
+      "expectation": "defect",
+      "dimension": "compatibility",
+      "base": "fixtures/python-config/base",
+      "head": "fixtures/python-config/defect",
+      "diff": "fixtures/python-config/defect.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored millisecond configuration addition retaining a legacy config sample.",
+        "baseSha256": "5d093487f8d90da52b7d85026717ee4b76fd91c1e03789341cd06ace9ef6073a",
+        "headSha256": "021cb59ac70f5dc2c1df5948def5a82550b094f8498d8fa187dd26fd3c291174",
+        "diffSha256": "60c71bb0c7e4f894b7f0d2ce967018230bdb6a90cec9cd0e9f5315a41c5c234e"
+      },
+      "issues": [
+        {
+          "id": "python-config-issue",
+          "file": "config.py",
+          "startLine": 2,
+          "endLine": 2,
+          "dimension": "compatibility",
+          "trigger": "The unchanged legacy config example {'timeout':2} is loaded by the scheduler.",
+          "contract": "Legacy timeout seconds remain honored unless timeout_ms is explicitly supplied.",
+          "consequence": "The parser ignores timeout and silently changes the legacy job limit from 2 to 10 seconds.",
+          "acceptableFinding": "Name the old timeout key, the existing sample/caller and the fallback value causing the regression.",
+          "explanation": {
+            "sourceCorrectness": "Ground the claim in config.py:2 and the visible caller/tests and repository contract.",
+            "specificity": "Explain the concrete trigger: The unchanged legacy config example {'timeout':2} is loaded by the scheduler.",
+            "actionability": "Use timeout_ms only when present, otherwise preserve the timeout-seconds lookup.",
+            "uncertainty": "Limit the conclusion to this authored fixture and its explicit contract; do not infer production exposure or benchmark-wide performance."
+          },
+          "fix": "Use timeout_ms only when present, otherwise preserve the timeout-seconds lookup."
+        }
+      ],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "python-config-defect"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified trigger, violated contract, consequence, exact source location and acceptable finding; read both paired heads and reran behavioral controls. All stored patches transform exact base bytes to declared head. See annotation-review.md for bounded per-pair rationale."
+      }
+    },
+    {
+      "id": "python-config-fixed",
+      "pairId": "python-config",
+      "split": "holdout",
+      "slice": "core",
+      "language": "python",
+      "expectation": "clean",
+      "dimension": "compatibility",
+      "base": "fixtures/python-config/base",
+      "head": "fixtures/python-config/fixed",
+      "diff": "fixtures/python-config/fixed.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored millisecond configuration addition retaining a legacy config sample.",
+        "baseSha256": "5d093487f8d90da52b7d85026717ee4b76fd91c1e03789341cd06ace9ef6073a",
+        "headSha256": "81e2175fd8d411e86a5b2d2cd705304b5a8df5133f83920d050ded29ee982675",
+        "diffSha256": "a07f69b8ad61269aec5adbf260c12902a09121c84b3173a2ea02d9d6dbc183aa"
+      },
+      "issues": [],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "python-config-fixed"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified trigger, violated contract, consequence, exact source location and acceptable finding; read both paired heads and reran behavioral controls. All stored patches transform exact base bytes to declared head. See annotation-review.md for bounded per-pair rationale."
+      }
+    },
+    {
+      "id": "python-signature-tests-defect",
+      "pairId": "python-signature-tests",
+      "split": "holdout",
+      "slice": "core",
+      "language": "python",
+      "expectation": "defect",
+      "dimension": "testGap",
+      "base": "fixtures/python-signature-tests/base",
+      "head": "fixtures/python-signature-tests/defect",
+      "diff": "fixtures/python-signature-tests/defect.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored negative-test omission for a correct HMAC verifier.",
+        "baseSha256": "08dee70fc8200a31548ae125ba1607ff7c80d5f949c0f43998d5f0220a87b2c8",
+        "headSha256": "04f1b51688d2a2e28be44e2608d8601599357181f1df8bb01a513f1696eb3125",
+        "diffSha256": "f4bdc89ca37ceb041f8137dde521f28d0555d6ff22562acd77822410f18369b8"
+      },
+      "issues": [
+        {
+          "id": "python-signature-tests-issue",
+          "file": "tests.py",
+          "startLine": 4,
+          "endLine": 4,
+          "dimension": "testGap",
+          "trigger": "The verifier comparison is accidentally replaced by unconditional True in a later change.",
+          "contract": "Tests must assert tampered payloads and invalid signatures are rejected.",
+          "consequence": "The acceptance-only test passes the always-accept mutant, allowing an authentication bypass regression to escape.",
+          "acceptableFinding": "Point to the absent rejection assertions and the unconditional-accept mutant; do not report a bypass in the current correct implementation.",
+          "explanation": {
+            "sourceCorrectness": "Ground the claim in tests.py:4 and the visible caller/tests and repository contract.",
+            "specificity": "Explain the concrete trigger: The verifier comparison is accidentally replaced by unconditional True in a later change.",
+            "actionability": "Add tampered-payload and mismatched-signature rejection assertions while retaining the valid-signature case.",
+            "uncertainty": "Limit the conclusion to this authored fixture and its explicit contract; do not infer production exposure or benchmark-wide performance."
+          },
+          "fix": "Add tampered-payload and mismatched-signature rejection assertions while retaining the valid-signature case."
+        }
+      ],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "python-signature-tests-defect"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified explicit test contract, correct current implementation, missing-versus-present rejection assertions and surviving-versus-killed mutant. This is a regression-test gap, not a current production bypass. See annotation-review.md."
+      }
+    },
+    {
+      "id": "python-signature-tests-fixed",
+      "pairId": "python-signature-tests",
+      "split": "holdout",
+      "slice": "core",
+      "language": "python",
+      "expectation": "clean",
+      "dimension": "testGap",
+      "base": "fixtures/python-signature-tests/base",
+      "head": "fixtures/python-signature-tests/fixed",
+      "diff": "fixtures/python-signature-tests/fixed.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored negative-test omission for a correct HMAC verifier.",
+        "baseSha256": "08dee70fc8200a31548ae125ba1607ff7c80d5f949c0f43998d5f0220a87b2c8",
+        "headSha256": "5b0580c36bb116ed82b80a85f7c17bc032a5cb0f8b70d9a65c4600b3e66035f0",
+        "diffSha256": "d152dedb702aaf78671530ab7a0dd433fe519e28312252a52d9b53a8124c6e9c"
+      },
+      "issues": [],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "python-signature-tests-fixed"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified explicit test contract, correct current implementation, missing-versus-present rejection assertions and surviving-versus-killed mutant. This is a regression-test gap, not a current production bypass. See annotation-review.md."
+      }
+    },
+    {
+      "id": "docs-client-arity-defect",
+      "pairId": "docs-client-arity",
+      "split": "holdout",
+      "slice": "auxiliary",
+      "language": "docs",
+      "expectation": "defect",
+      "dimension": "docs",
+      "base": "fixtures/docs-client-arity/base",
+      "head": "fixtures/docs-client-arity/defect",
+      "diff": "fixtures/docs-client-arity/defect.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored Rust API/documentation fixed-arity mismatch, within the supported docs checker.",
+        "baseSha256": "58896ed15e3516fac9405d89f6b93543180dbea5a4c8b94b3555af5aadbac4e8",
+        "headSha256": "b86f5d25d3a961cebf0218ec384321a038d16f285ebc03eca6bf7738032441cb",
+        "diffSha256": "5d90bc7d78a311407ff79a3b29005c2ab4179059091f652d25dcc739de736b2c"
+      },
+      "issues": [
+        {
+          "id": "docs-client-arity-issue",
+          "file": "README.md",
+          "startLine": 7,
+          "endLine": 7,
+          "dimension": "correctness",
+          "trigger": "A reader compiles the unchanged source-linked quickstart excerpt with connect imported after it gains the retries parameter.",
+          "contract": "The source-linked Rust quickstart must call the current fixed-arity public function.",
+          "consequence": "The example supplies one argument to a two-argument function and fails to compile.",
+          "acceptableFinding": "Tie README's source link and connect call to src/client.rs's changed signature; report a concrete arity mismatch.",
+          "explanation": {
+            "sourceCorrectness": "Ground the claim in README.md:7 and the visible caller/tests and repository contract.",
+            "specificity": "Explain the concrete trigger: A reader compiles the unchanged source-linked quickstart excerpt with connect imported after it gains the retries parameter.",
+            "actionability": "Pass the retry count in the quickstart and describe the updated public arguments.",
+            "uncertainty": "Limit the conclusion to this authored fixture and its explicit contract; do not infer production exposure or benchmark-wide performance."
+          },
+          "fix": "Pass the retry count in the quickstart and describe the updated public arguments."
+        }
+      ],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "docs-client-arity-defect"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified trigger, violated contract, consequence, exact source location and acceptable finding; read both paired heads and reran behavioral controls. All stored patches transform exact base bytes to declared head. See annotation-review.md for bounded per-pair rationale."
+      }
+    },
+    {
+      "id": "docs-client-arity-fixed",
+      "pairId": "docs-client-arity",
+      "split": "holdout",
+      "slice": "auxiliary",
+      "language": "docs",
+      "expectation": "clean",
+      "dimension": "docs",
+      "base": "fixtures/docs-client-arity/base",
+      "head": "fixtures/docs-client-arity/fixed",
+      "diff": "fixtures/docs-client-arity/fixed.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored Rust API/documentation fixed-arity mismatch, within the supported docs checker.",
+        "baseSha256": "58896ed15e3516fac9405d89f6b93543180dbea5a4c8b94b3555af5aadbac4e8",
+        "headSha256": "ac7b0ee29f5d4afdc6d79076d44ee76d6edc80f059b283af5d1c4744bca9f248",
+        "diffSha256": "4cad93934c7d4ef63ddf5e23ecaa2e9c7b01b303eee7619798ba2e9a681c49ea"
+      },
+      "issues": [],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "docs-client-arity-fixed"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified trigger, violated contract, consequence, exact source location and acceptable finding; read both paired heads and reran behavioral controls. All stored patches transform exact base bytes to declared head. See annotation-review.md for bounded per-pair rationale."
+      }
+    },
+    {
+      "id": "dependency-codec-api-defect",
+      "pairId": "dependency-codec-api",
+      "split": "holdout",
+      "slice": "auxiliary",
+      "language": "dependency",
+      "expectation": "defect",
+      "dimension": "dependency",
+      "base": "fixtures/dependency-codec-api/base",
+      "head": "fixtures/dependency-codec-api/defect",
+      "diff": "fixtures/dependency-codec-api/defect.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored local dependency stand-in with exact target release notes and visible downstream caller; no registry package claims.",
+        "baseSha256": "4d3877f0a1d24afd7cc0f01ff676b575963f8852aec9fcea3c7d57fd073d1fff",
+        "headSha256": "e6583036e48446295614201d2b5e68216d7feb64da541f9adc0588cca109d354",
+        "diffSha256": "44e2e723b4872d92840085457a5e3810670936833fdf884f0862d1ee773473af"
+      },
+      "issues": [
+        {
+          "id": "dependency-codec-api-issue",
+          "file": "vendor/codec-fixture/index.js",
+          "startLine": 1,
+          "endLine": 1,
+          "dimension": "compatibility",
+          "trigger": "The package pin and vendored interface upgrade to codec-fixture 2.0.0 while app.writeRecord still calls encode.",
+          "contract": "The v2 release explicitly removes encode; every downstream caller must migrate to stringify.",
+          "consequence": "Writing a record raises TypeError because the installed v2 module has no encode function.",
+          "acceptableFinding": "Cite the changed export in vendor/codec-fixture/index.js:1, the remaining encode caller in app.js:2 and the exact version/target release notes. A generic major-version advisory alone does not establish this issue.",
+          "explanation": {
+            "sourceCorrectness": "Ground the claim in vendor/codec-fixture/index.js:1 and the visible caller/tests and repository contract.",
+            "specificity": "Explain the concrete trigger: The package pin and vendored interface upgrade to codec-fixture 2.0.0 while app.writeRecord still calls encode.",
+            "actionability": "Migrate app.writeRecord to codec.stringify with the existing output regression test.",
+            "uncertainty": "Limit the conclusion to this authored fixture and its explicit contract; do not infer production exposure or benchmark-wide performance."
+          },
+          "fix": "Migrate app.writeRecord to codec.stringify with the existing output regression test."
+        }
+      ],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "dependency-codec-api-defect"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent verified changed vendor/codec-fixture/index.js:1 removes encode, exact v2 notes/package pin identify the migration, and unchanged app.js:2 concretely fails with TypeError. Acceptable findings must establish that downstream causal chain; generic upgrade advisories receive no issue credit. Paired stringify caller reproduces the fixed contract. See annotation-review.md."
+      }
+    },
+    {
+      "id": "dependency-codec-api-fixed",
+      "pairId": "dependency-codec-api",
+      "split": "holdout",
+      "slice": "auxiliary",
+      "language": "dependency",
+      "expectation": "clean",
+      "dimension": "dependency",
+      "base": "fixtures/dependency-codec-api/base",
+      "head": "fixtures/dependency-codec-api/fixed",
+      "diff": "fixtures/dependency-codec-api/fixed.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored local dependency stand-in with exact target release notes and visible downstream caller; no registry package claims.",
+        "baseSha256": "4d3877f0a1d24afd7cc0f01ff676b575963f8852aec9fcea3c7d57fd073d1fff",
+        "headSha256": "00372cc26bae840ae3ff736ad1855d2ddb4abfadb8292c39ebb536a3c497781c",
+        "diffSha256": "ef01d927ee6fef74943b0219218bdcafaf19ec523e7d2bebc5389cdf69ee909d"
+      },
+      "issues": [],
+      "abstention": null,
+      "reproducer": [
+        "python3",
+        "reproduce.py",
+        "--case",
+        "dependency-codec-api-fixed"
+      ],
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent independently verified trigger, violated contract, consequence, exact source location and acceptable finding; read both paired heads and reran behavioral controls. All stored patches transform exact base bytes to declared head. See annotation-review.md for bounded per-pair rationale."
+      }
+    },
+    {
+      "id": "rust-macro-unknown",
+      "pairId": null,
+      "split": "holdout",
+      "slice": "core",
+      "language": "rust",
+      "expectation": "abstain",
+      "dimension": "security",
+      "base": "fixtures/rust-macro-unknown/base",
+      "head": "fixtures/rust-macro-unknown/head",
+      "diff": "fixtures/rust-macro-unknown/change.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored bounded-evidence case; absent private/external context is explicit, not an observed defect.",
+        "baseSha256": "57f865d9d2652019df8ab02547459051fefbb4b62723b69316aea780bc931bc9",
+        "headSha256": "db005646e8007f3f10938dc39e4bce37a6412d1329b3adfa77f6ecc9be9137f4",
+        "diffSha256": "d1b3ce32e6336aa427d5bf9993f92d8edb7380c6f32b78ec053aecd19b1b6007"
+      },
+      "issues": [],
+      "abstention": {
+        "missingEvidence": [
+          "The authorization-generating private macro implementation and storage caller contract are not supplied."
+        ],
+        "acceptableResponse": "State that authorization cannot be determined from the macro invocation; request expansion/source before asserting a bypass."
+      },
+      "reproducer": null,
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent read base/head and explicit missing-evidence boundaries; proposed concrete finding cannot be established from supplied context. See annotation-review.md."
+      }
+    },
+    {
+      "id": "js-transport-unknown",
+      "pairId": null,
+      "split": "holdout",
+      "slice": "core",
+      "language": "javascript",
+      "expectation": "abstain",
+      "dimension": "reliability",
+      "base": "fixtures/js-transport-unknown/base",
+      "head": "fixtures/js-transport-unknown/head",
+      "diff": "fixtures/js-transport-unknown/change.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored bounded-evidence case; absent private/external context is explicit, not an observed defect.",
+        "baseSha256": "35b6d1ba17968acbf16180dd8c4b5219d517f48df4ea15040ded2f0c58c68c54",
+        "headSha256": "707216933727db43a500b226a33552b74c8e47c39d713c56c6a7a2f0a07aca37",
+        "diffSha256": "bd9675aa5b54af29ec8c2fc0a304273987f0ed00a709eb524d6706a7587ec757"
+      },
+      "issues": [],
+      "abstention": {
+        "missingEvidence": [
+          "No transport SDK implementation, version or acknowledgment/durability semantics are visible."
+        ],
+        "acceptableResponse": "Flag durability as unknown and request the SDK contract; do not infer data loss from option names alone."
+      },
+      "reproducer": null,
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent read base/head and explicit missing-evidence boundaries; proposed concrete finding cannot be established from supplied context. See annotation-review.md."
+      }
+    },
+    {
+      "id": "python-dependency-unknown",
+      "pairId": null,
+      "split": "holdout",
+      "slice": "core",
+      "language": "python",
+      "expectation": "abstain",
+      "dimension": "compatibility",
+      "base": "fixtures/python-dependency-unknown/base",
+      "head": "fixtures/python-dependency-unknown/head",
+      "diff": "fixtures/python-dependency-unknown/change.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored bounded-evidence case; absent private/external context is explicit, not an observed defect.",
+        "baseSha256": "5efccf732ee85c69522e02663a1a58e8a1ec15de3b021f0c93e6ca468211b780",
+        "headSha256": "17b8ad0b237a7f13debe695a660b5e9263c8f10e1e81eb3b848e3937401035b4",
+        "diffSha256": "3e99c2103bb92b3eeed10be1d39b4a8355cce5f19bd3ab79b5356a9e9fb4c483"
+      },
+      "issues": [],
+      "abstention": {
+        "missingEvidence": [
+          "The exact dependency source, target/intervening release notes and API compatibility contract are unavailable."
+        ],
+        "acceptableResponse": "Report compatibility uncertainty for the unresolved external upgrade, without inventing a removed analyze API."
+      },
+      "reproducer": null,
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent read base/head and explicit missing-evidence boundaries; proposed concrete finding cannot be established from supplied context. See annotation-review.md."
+      }
+    },
+    {
+      "id": "rust-external-tests-unknown",
+      "pairId": null,
+      "split": "holdout",
+      "slice": "core",
+      "language": "rust",
+      "expectation": "abstain",
+      "dimension": "testGap",
+      "base": "fixtures/rust-external-tests-unknown/base",
+      "head": "fixtures/rust-external-tests-unknown/head",
+      "diff": "fixtures/rust-external-tests-unknown/change.diff",
+      "source": {
+        "kind": "authored",
+        "license": "MIT",
+        "description": "Original authored bounded-evidence case; absent private/external context is explicit, not an observed defect.",
+        "baseSha256": "ece4ace0c6a6654f435371142aa6a161cfbe9fe99a4b8810e4c34c21119f3ce0",
+        "headSha256": "c5b53cc5ed176c9e74ef0ed1ab5fbdccc8a1392dfb0ae8fda3dd4130b9519669",
+        "diffSha256": "4e1133fb45604fb779617697ece716b08b3ee74397aa1d1097d7015caf0bcc29"
+      },
+      "issues": [],
+      "abstention": {
+        "missingEvidence": [
+          "The external integration-test repository and coverage inventory were intentionally excluded from the supplied evidence."
+        ],
+        "acceptableResponse": "Suggest checking denominator-zero coverage, but abstain from claiming that the absent external suite lacks it."
+      },
+      "reproducer": null,
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent read base/head and explicit missing-evidence boundaries; proposed concrete finding cannot be established from supplied context. See annotation-review.md."
+      }
+    },
+    {
+      "id": "pr40-utf8-hardening",
+      "pairId": null,
+      "split": "development",
+      "slice": "core",
+      "language": "rust",
+      "expectation": "clean",
+      "dimension": "reliability",
+      "base": "development/pr40-utf8-hardening/base",
+      "head": "development/pr40-utf8-hardening/head",
+      "diff": "development/pr40-utf8-hardening/change.diff",
+      "source": {
+        "kind": "observed-control",
+        "license": "MIT",
+        "repository": "https://github.com/brianluby/momus-review",
+        "revision": "4bbcd16312774109ca2c147989a032c4401ed627",
+        "description": "Public PR #40 exposed development control. src/adapters/git.rs copied verbatim from base d64edff1b47982a408ffca4a551d4d83cdc06740 and head 4bbcd16312774109ca2c147989a032c4401ed627; README is authored contract context. This records an observed intentional change, not an observed defect; bot comments are not ground truth. This selected-file context is not a runnable full Momus clone.",
+        "baseSha256": "fd6ce6088f56e06d14e4c1eb69a3037e753e81e87f66bc57191f48686929cbd6",
+        "headSha256": "30aa8a542fa2260cf0494deae4205ce208457b16152179d1731cf5e8c2019fba",
+        "diffSha256": "c132e89a47cf27cac28719bdff84501502039d5d01e66a6dd1c9c39780534ab4"
+      },
+      "issues": [],
+      "abstention": null,
+      "reproducer": null,
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent verified intentional hardening against immutable public PR40 Git objects, exact stored diff/head bytes and regression assertions. Development-only control, not an observed defect or held-out evidence. See annotation-review.md."
+      }
+    },
+    {
+      "id": "pr40-auxiliary-identity",
+      "pairId": null,
+      "split": "development",
+      "slice": "core",
+      "language": "rust",
+      "expectation": "clean",
+      "dimension": "correctness",
+      "base": "development/pr40-auxiliary-identity/base",
+      "head": "development/pr40-auxiliary-identity/head",
+      "diff": "development/pr40-auxiliary-identity/change.diff",
+      "source": {
+        "kind": "observed-control",
+        "license": "MIT",
+        "repository": "https://github.com/brianluby/momus-review",
+        "revision": "4bbcd16312774109ca2c147989a032c4401ed627",
+        "description": "Public PR #40 exposed development control. src/review/auxiliary.rs copied verbatim from base d64edff1b47982a408ffca4a551d4d83cdc06740 and head 4bbcd16312774109ca2c147989a032c4401ed627; README is authored contract context. This records an observed intentional change, not an observed defect; bot comments are not ground truth. This selected-file context is not a runnable full Momus clone.",
+        "baseSha256": "bee630292fbf9727edefaf30c41a678b2d66d88499d66ab5f1b4913697095632",
+        "headSha256": "57d7850c8143c3272c5f9d581fd418aa29e289d00392a48a9771aac3f24033b5",
+        "diffSha256": "2088e24793181d69a4dabb44a6467373ae8223c7ce1c8e2d686eb40abd75e5ac"
+      },
+      "issues": [],
+      "abstention": null,
+      "reproducer": null,
+      "annotation": {
+        "status": "validated",
+        "reviewer": "independent-source-review:outcome_evidence",
+        "rationale": "Separate agent verified intentional hardening against immutable public PR40 Git objects, exact stored diff/head bytes and regression assertions. Development-only control, not an observed defect or held-out evidence. See annotation-review.md."
+      }
+    }
+  ]
+}

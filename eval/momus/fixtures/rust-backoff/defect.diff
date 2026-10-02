@@ -1,0 +1,16 @@
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,2 +1,2 @@
+ mod retry;
+-fn main() { assert_eq!(retry::delay_ms(0), 100); }
++fn main() { assert_eq!(retry::delay_ms(64), 10000); }
+--- a/src/retry.rs
++++ b/src/retry.rs
+@@ -1 +1,6 @@
+-pub fn delay_ms(_attempt: u32) -> u64 { 100 }
++pub fn delay_ms(attempt: u32) -> u64 {
++    (100 * (1u64 << attempt)).min(10000)
++}
++#[cfg(test)] mod tests {
++    #[test] fn initial_delay() { assert_eq!(super::delay_ms(0), 100); }
++}

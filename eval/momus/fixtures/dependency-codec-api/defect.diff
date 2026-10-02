@@ -1,0 +1,22 @@
+--- a/package.json
++++ b/package.json
+@@ -1,5 +1,5 @@
+ {
+   "name": "record-writer",
+   "version": "1.0.0",
+-  "dependencies": {"codec-fixture": "1.2.0"}
++  "dependencies": {"codec-fixture": "2.0.0"}
+ }
+--- a/vendor/codec-fixture/CHANGELOG.md
++++ b/vendor/codec-fixture/CHANGELOG.md
+@@ -1,2 +1,5 @@
++# codec-fixture 2.0.0
++Breaking: removed encode(record); migration required to stringify(record).
++
+ # codec-fixture 1.2.0
+ Initial encode(record) API.
+--- a/vendor/codec-fixture/index.js
++++ b/vendor/codec-fixture/index.js
+@@ -1 +1 @@
+-exports.encode = record => JSON.stringify(record);
++exports.stringify = record => JSON.stringify(record);

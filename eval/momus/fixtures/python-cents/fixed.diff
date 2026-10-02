@@ -1,0 +1,14 @@
+--- a/prices.py
++++ b/prices.py
+@@ -1,2 +1,4 @@
++from decimal import Decimal
++
+ def parse_cents(value):
+-    return int(value) * 100
++    return int(Decimal(value) * 100)
+--- a/tests.py
++++ b/tests.py
+@@ -1,2 +1,2 @@
+ from prices import parse_cents
+-assert parse_cents("2") == 200
++assert parse_cents("2.50") == 250

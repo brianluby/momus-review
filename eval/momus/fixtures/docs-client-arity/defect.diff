@@ -1,0 +1,13 @@
+--- a/src/client.rs
++++ b/src/client.rs
+@@ -1 +1,3 @@
+-pub fn connect(endpoint: &str) -> String { endpoint.into() }
++pub fn connect(endpoint: &str, retries: u8) -> String {
++    format!("{}:{}", endpoint, retries)
++}
+--- a/tests.rs
++++ b/tests.rs
+@@ -1,2 +1,2 @@
+ mod client;
+-fn main() { assert_eq!(client::connect("db"), "db"); }
++fn main() { assert_eq!(client::connect("db", 3), "db:3"); }

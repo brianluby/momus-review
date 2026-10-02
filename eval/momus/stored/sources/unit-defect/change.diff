@@ -1,0 +1,6 @@
+--- a/adapter.py
++++ b/adapter.py
+@@ -1,2 +1,2 @@
+ def first(items):
+-    return items[0]
++    return items[1]

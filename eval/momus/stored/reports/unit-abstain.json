@@ -1,0 +1,60 @@
+{
+  "budget": {
+    "deferred": 0,
+    "limit": null,
+    "reserved": 0
+  },
+  "contextFiles": [],
+  "dimensions": [
+    {
+      "key": "compatibility",
+      "label": "compatibility",
+      "short": "compatibility"
+    },
+    {
+      "key": "correctness",
+      "label": "correctness",
+      "short": "correctness"
+    },
+    {
+      "key": "reliability",
+      "label": "reliability",
+      "short": "reliability"
+    },
+    {
+      "key": "security",
+      "label": "security",
+      "short": "security"
+    },
+    {
+      "key": "testGap",
+      "label": "testGap",
+      "short": "testGap"
+    }
+  ],
+  "findings": [],
+  "matrix": [
+    {
+      "compatibility": 0.1,
+      "correctness": 0.1,
+      "file": "adapter.py",
+      "reliability": 0.1,
+      "security": 0.1,
+      "testGap": 0.1
+    }
+  ],
+  "mode": "changes",
+  "partial": false,
+  "reviewedBase": "0000000000000000000000000000000000000003",
+  "reviewedClean": true,
+  "reviewedCommitted": true,
+  "reviewedHead": "0000000000000000000000000000000000000067",
+  "scope": ".",
+  "screenedFiles": 1,
+  "skipped": [],
+  "workflow": {
+    "followedSignals": 0,
+    "screenedCells": 5,
+    "thresholdSignals": 0
+  }
+}

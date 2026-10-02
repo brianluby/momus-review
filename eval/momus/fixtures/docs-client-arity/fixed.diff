@@ -1,0 +1,27 @@
+--- a/README.md
++++ b/README.md
+@@ -1,9 +1,9 @@
+ # Client quickstart
+-See [the client API](src/client.rs). connect accepts an endpoint; the example must compile against the current public API. The caller imports connect from the linked API before using this excerpt.
++See [the client API](src/client.rs). connect accepts an endpoint and retry count; the example must compile against the current public API. The caller imports connect from the linked API before using this excerpt.
+ 
+ ```rust
+ // connect is imported from the linked client API by the caller.
+ fn main() {
+-    let _connection = connect("db");
++    let _connection = connect("db", 3);
+ }
+ ```
+--- a/src/client.rs
++++ b/src/client.rs
+@@ -1 +1,3 @@
+-pub fn connect(endpoint: &str) -> String { endpoint.into() }
++pub fn connect(endpoint: &str, retries: u8) -> String {
++    format!("{}:{}", endpoint, retries)
++}
+--- a/tests.rs
++++ b/tests.rs
+@@ -1,2 +1,2 @@
+ mod client;
+-fn main() { assert_eq!(client::connect("db"), "db"); }
++fn main() { assert_eq!(client::connect("db", 3), "db:3"); }

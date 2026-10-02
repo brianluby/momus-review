@@ -1,0 +1,7 @@
+--- a/client.py
++++ b/client.py
+@@ -1,2 +1,2 @@
+-def send(message):
+-    return message
++def send(message, token):
++    return message, token

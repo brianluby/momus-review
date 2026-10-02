@@ -1,0 +1,189 @@
+{
+  "cases": [
+    {
+      "abstention": null,
+      "annotation": {
+        "rationale": "Known synthetic scorer test annotation, independently constructed from source. This is not product benchmark validation.",
+        "reviewer": "offline-unit-fixture-reviewer",
+        "status": "validated"
+      },
+      "base": "sources/unit-defect/base",
+      "diff": "sources/unit-defect/change.diff",
+      "dimension": "correctness",
+      "expectation": "defect",
+      "head": "sources/unit-defect/head",
+      "id": "unit-defect",
+      "issues": [
+        {
+          "acceptableFinding": "Establish the exact trigger, violated contract and consequence.",
+          "consequence": "Returns 20 instead of 10.",
+          "contract": "Return the first element.",
+          "dimension": "correctness",
+          "endLine": 2,
+          "explanation": {
+            "actionability": "Source-grounded test rubric for actionability",
+            "sourceCorrectness": "Source-grounded test rubric for sourceCorrectness",
+            "specificity": "Source-grounded test rubric for specificity",
+            "uncertainty": "Source-grounded test rubric for uncertainty"
+          },
+          "file": "adapter.py",
+          "fix": "Restore the documented behavior.",
+          "id": "unit-first-issue",
+          "startLine": 2,
+          "trigger": "Call first([10, 20])."
+        }
+      ],
+      "language": "python",
+      "pairId": "unit-first",
+      "reproducer": null,
+      "slice": "core",
+      "source": {
+        "baseSha256": "509ae3b851c26191e62697a27753916331b055099169690b1b0c95ff10f025d9",
+        "description": "Tiny authored scorer regression fixture, outside the product corpus.",
+        "diffSha256": "e4315c6e9c598f25827fd75bdab89dfcbc77fe2066e5473f9bdf86bfb7ede0f5",
+        "headSha256": "1799e7e8bd37a1f4b7a94e764d3500a733b2ab51f736a0ae1c432a692e87fc2f",
+        "kind": "authored",
+        "license": "MIT"
+      },
+      "split": "holdout"
+    },
+    {
+      "abstention": null,
+      "annotation": {
+        "rationale": "Known synthetic scorer test annotation, independently constructed from source. This is not product benchmark validation.",
+        "reviewer": "offline-unit-fixture-reviewer",
+        "status": "validated"
+      },
+      "base": "sources/unit-fixed/base",
+      "diff": "sources/unit-fixed/change.diff",
+      "dimension": "correctness",
+      "expectation": "clean",
+      "head": "sources/unit-fixed/head",
+      "id": "unit-fixed",
+      "issues": [],
+      "language": "python",
+      "pairId": "unit-first",
+      "reproducer": null,
+      "slice": "core",
+      "source": {
+        "baseSha256": "1799e7e8bd37a1f4b7a94e764d3500a733b2ab51f736a0ae1c432a692e87fc2f",
+        "description": "Tiny authored scorer regression fixture, outside the product corpus.",
+        "diffSha256": "9842c58e7c2d1cf6af547d4d0ead62c0cf4c50d2fae20a53bd155b075bf73498",
+        "headSha256": "509ae3b851c26191e62697a27753916331b055099169690b1b0c95ff10f025d9",
+        "kind": "authored",
+        "license": "MIT"
+      },
+      "split": "holdout"
+    },
+    {
+      "abstention": {
+        "acceptableResponse": "State the missing caller contract before asserting stale data.",
+        "missingEvidence": [
+          "The caller freshness contract is outside the supplied repository."
+        ]
+      },
+      "annotation": {
+        "rationale": "Known synthetic scorer test annotation, independently constructed from source. This is not product benchmark validation.",
+        "reviewer": "offline-unit-fixture-reviewer",
+        "status": "validated"
+      },
+      "base": "sources/unit-abstain/base",
+      "diff": "sources/unit-abstain/change.diff",
+      "dimension": "compatibility",
+      "expectation": "abstain",
+      "head": "sources/unit-abstain/head",
+      "id": "unit-abstain",
+      "issues": [],
+      "language": "python",
+      "pairId": null,
+      "reproducer": null,
+      "slice": "core",
+      "source": {
+        "baseSha256": "eccc8df75a120eb2823ae3241165075c9b2b5f9b8fa2e19bc953328dd40f7fd6",
+        "description": "Tiny authored scorer regression fixture, outside the product corpus.",
+        "diffSha256": "28470d16f4968889550c3d6d453efcd45fc727e51925a6d626c06d5ae1ab0986",
+        "headSha256": "1aa2e2a551f4739c7990ad7638b0dd48e9ca0d42dd7307c9a855eb060b2d6549",
+        "kind": "authored",
+        "license": "MIT"
+      },
+      "split": "holdout"
+    },
+    {
+      "abstention": null,
+      "annotation": {
+        "rationale": "Known synthetic scorer test annotation, independently constructed from source. This is not product benchmark validation.",
+        "reviewer": "offline-unit-fixture-reviewer",
+        "status": "validated"
+      },
+      "base": "sources/unit-doc-defect/base",
+      "diff": "sources/unit-doc-defect/change.diff",
+      "dimension": "docs",
+      "expectation": "defect",
+      "head": "sources/unit-doc-defect/head",
+      "id": "unit-doc-defect",
+      "issues": [
+        {
+          "acceptableFinding": "Establish the exact trigger, violated contract and consequence.",
+          "consequence": "Example omits the required token.",
+          "contract": "Documentation matches the required parameter list.",
+          "dimension": "correctness",
+          "endLine": 1,
+          "explanation": {
+            "actionability": "Source-grounded test rubric for actionability",
+            "sourceCorrectness": "Source-grounded test rubric for sourceCorrectness",
+            "specificity": "Source-grounded test rubric for specificity",
+            "uncertainty": "Source-grounded test rubric for uncertainty"
+          },
+          "file": "README.md",
+          "fix": "Restore the documented behavior.",
+          "id": "unit-doc-issue",
+          "startLine": 1,
+          "trigger": "Follow the README send example."
+        }
+      ],
+      "language": "docs",
+      "pairId": "unit-doc",
+      "reproducer": null,
+      "slice": "auxiliary",
+      "source": {
+        "baseSha256": "7286e29dfb33864f326caf72d0f4ad3371eb6bff5ab9ca88df554066d8279ae5",
+        "description": "Tiny authored scorer regression fixture, outside the product corpus.",
+        "diffSha256": "19f4aba72835fcf5db64b4e62af85c1193f55a207ef8871a1e07d5eefd6a62ee",
+        "headSha256": "d704699cad5bf8b63fb7ab1db0c2e0dda3c11077a987b00030033a159464ee4a",
+        "kind": "authored",
+        "license": "MIT"
+      },
+      "split": "holdout"
+    },
+    {
+      "abstention": null,
+      "annotation": {
+        "rationale": "Known synthetic scorer test annotation, independently constructed from source. This is not product benchmark validation.",
+        "reviewer": "offline-unit-fixture-reviewer",
+        "status": "validated"
+      },
+      "base": "sources/unit-doc-fixed/base",
+      "diff": "sources/unit-doc-fixed/change.diff",
+      "dimension": "docs",
+      "expectation": "clean",
+      "head": "sources/unit-doc-fixed/head",
+      "id": "unit-doc-fixed",
+      "issues": [],
+      "language": "docs",
+      "pairId": "unit-doc",
+      "reproducer": null,
+      "slice": "auxiliary",
+      "source": {
+        "baseSha256": "d704699cad5bf8b63fb7ab1db0c2e0dda3c11077a987b00030033a159464ee4a",
+        "description": "Tiny authored scorer regression fixture, outside the product corpus.",
+        "diffSha256": "80e4ea884e58e254a43af54622f12c55f9db8dae9e541bc92e0d263c867a9181",
+        "headSha256": "469b59f8e10e7f5dd01a35a001503a66e9514aa6deadfad23716cceb76bd9d04",
+        "kind": "authored",
+        "license": "MIT"
+      },
+      "split": "holdout"
+    }
+  ],
+  "datasetVersion": "momus-scorer-fixture-v1",
+  "schemaVersion": 1
+}

@@ -28,5 +28,18 @@ jobs:
         with:
           api-key: ${{ secrets.TYPESAFE_API_KEY }}
           version: source
+          # Evaluate the harness code; authored holdouts and exposed controls
+          # belong to separately scheduled benchmark runs.
+          exclude: |
+            eval/momus/fixtures/**
+            eval/momus/development/**
+            eval/momus/stored/**
+            eval/momus/generate.py
+            eval/momus/reproduce.py
+            eval/momus/development_controls.py
+            eval/momus/manifest.json
+            eval/momus/ANNOTATIONS.md
+            eval/momus/annotation-review.md
+            tests/product_fixtures.rs
           # Advisory while the signals are uncalibrated: comment, never block.
           fail-on-blocking: "false"

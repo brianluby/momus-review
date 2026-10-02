@@ -23,6 +23,9 @@ impl CallBudget {
         }
     }
     /// Atomically reserve one attempt, or count deferred work when the limit is reached.
+    // Keep the API available at the declared Rust 1.88 MSRV; its renamed
+    // replacement is newer. This allowance is limited to this compatibility call.
+    #[allow(deprecated)]
     pub fn reserve(&self) -> Result<(), BudgetExhausted> {
         if self
             .reserved

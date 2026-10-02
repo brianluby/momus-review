@@ -1,0 +1,161 @@
+{
+  "budget": {
+    "deferred": 0,
+    "limit": null,
+    "reserved": 0
+  },
+  "contextFiles": [],
+  "dimensions": [
+    {
+      "key": "compatibility",
+      "label": "compatibility",
+      "short": "compatibility"
+    },
+    {
+      "key": "correctness",
+      "label": "correctness",
+      "short": "correctness"
+    },
+    {
+      "key": "reliability",
+      "label": "reliability",
+      "short": "reliability"
+    },
+    {
+      "key": "security",
+      "label": "security",
+      "short": "security"
+    },
+    {
+      "key": "testGap",
+      "label": "testGap",
+      "short": "testGap"
+    }
+  ],
+  "findings": [
+    {
+      "action": "request_changes",
+      "dimension": "correctness",
+      "ensemble": null,
+      "evidence": "return items[1]",
+      "exoneration": null,
+      "file": "adapter.py",
+      "fingerprint": "",
+      "fix": null,
+      "line": 2,
+      "locationConfidence": 1,
+      "mechanism": "offByOne",
+      "mechanismConfidence": 0.9,
+      "owner": null,
+      "ownerConfidence": null,
+      "probability": 0.9,
+      "rank": null,
+      "related": [],
+      "severity": 2,
+      "severityConfidence": 0.9,
+      "taint": null,
+      "test": null,
+      "title": null,
+      "why": null
+    },
+    {
+      "action": "request_changes",
+      "dimension": "correctness",
+      "ensemble": null,
+      "evidence": "return items[1]",
+      "exoneration": null,
+      "file": "adapter.py",
+      "fingerprint": "",
+      "fix": null,
+      "line": 2,
+      "locationConfidence": 1,
+      "mechanism": "offByOne",
+      "mechanismConfidence": 0.9,
+      "owner": null,
+      "ownerConfidence": null,
+      "probability": 0.9,
+      "rank": null,
+      "related": [],
+      "severity": 2,
+      "severityConfidence": 0.9,
+      "taint": null,
+      "test": null,
+      "title": null,
+      "why": null
+    },
+    {
+      "action": "request_changes",
+      "dimension": "correctness",
+      "ensemble": null,
+      "evidence": "return items[1]",
+      "exoneration": null,
+      "file": "adapter.py",
+      "fingerprint": "",
+      "fix": null,
+      "line": 2,
+      "locationConfidence": 1,
+      "mechanism": "invented",
+      "mechanismConfidence": 0.9,
+      "owner": null,
+      "ownerConfidence": null,
+      "probability": 0.9,
+      "rank": null,
+      "related": [],
+      "severity": 2,
+      "severityConfidence": 0.9,
+      "taint": null,
+      "test": null,
+      "title": null,
+      "why": null
+    },
+    {
+      "action": "request_changes",
+      "dimension": "correctness",
+      "ensemble": null,
+      "evidence": "return items[1]",
+      "exoneration": null,
+      "file": "adapter.py",
+      "fingerprint": "",
+      "fix": null,
+      "line": 2,
+      "locationConfidence": 1,
+      "mechanism": "styleAdvisory",
+      "mechanismConfidence": 0.9,
+      "owner": null,
+      "ownerConfidence": null,
+      "probability": 0.9,
+      "rank": null,
+      "related": [],
+      "severity": 2,
+      "severityConfidence": 0.9,
+      "taint": null,
+      "test": null,
+      "title": null,
+      "why": null
+    }
+  ],
+  "matrix": [
+    {
+      "compatibility": 0.1,
+      "correctness": 0.1,
+      "file": "adapter.py",
+      "reliability": 0.1,
+      "security": 0.1,
+      "testGap": 0.1
+    }
+  ],
+  "mode": "changes",
+  "partial": false,
+  "reviewedBase": "0000000000000000000000000000000000000001",
+  "reviewedClean": true,
+  "reviewedCommitted": true,
+  "reviewedHead": "0000000000000000000000000000000000000065",
+  "scope": ".",
+  "screenedFiles": 1,
+  "skipped": [],
+  "workflow": {
+    "followedSignals": 0,
+    "screenedCells": 5,
+    "thresholdSignals": 0
+  }
+}

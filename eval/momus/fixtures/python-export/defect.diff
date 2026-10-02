@@ -1,0 +1,15 @@
+--- a/exports.py
++++ b/exports.py
+@@ -1,4 +1,2 @@
+ def resolve_export(root, name):
+-    if "/" in name:
+-        raise ValueError("flat export names only")
+-    return root / name
++    return (root / name).resolve()
+--- a/tests.py
++++ b/tests.py
+@@ -1,3 +1,3 @@
+ from pathlib import Path
+ from exports import resolve_export
+-assert resolve_export(Path("/exports"), "report.csv") == Path("/exports/report.csv")
++assert resolve_export(Path("/exports"), "month/report.csv") == Path("/exports/month/report.csv")

@@ -199,6 +199,13 @@ windows and a chronological holdout covering the candidate score bins. Collect
 those records prospectively, publish the measured held-out results and monitor
 drift before describing the engine as calibrated on real outcomes.
 
+The [prospective collection/export protocol](outcome-collection.md) now provides
+offline frozen-report capture and separately sourced outcome validation. It
+preserves label availability separately from event/surveillance time and
+withholds labels unavailable at their chronological boundary. Its audited
+repository source inventory records available candidate premerge reports and
+the exact external-evidence gaps; collection machinery does not close #17/#51.
+
 ## Trusted GitHub publishing setup
 
 Use a clean checkout of the exact PR head and pin the binary/action source. Keep review cache, index and reports outside that checkout (or ignored):

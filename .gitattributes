@@ -1,0 +1,2 @@
+# Stored unified patches preserve significant context-line and source bytes.
+eval/momus/**/*.diff -whitespace

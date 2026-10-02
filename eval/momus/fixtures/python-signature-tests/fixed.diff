@@ -1,0 +1,21 @@
+--- a/tests.py
++++ b/tests.py
+@@ -1,2 +1,6 @@
+-from webhook import signature
+-assert len(signature(b"event", b"secret")) == 64
++from webhook import signature, valid_webhook
++payload, secret = b"event", b"secret"
++signed = signature(payload, secret)
++assert valid_webhook(payload, signed, secret)
++assert not valid_webhook(b"tampered", signed, secret)
++assert not valid_webhook(payload, "0" * 64, secret)
+--- a/webhook.py
++++ b/webhook.py
+@@ -3,3 +3,7 @@
+ 
+ def signature(payload, secret):
+     return hmac.new(secret, payload, hashlib.sha256).hexdigest()
++
++def valid_webhook(payload, supplied, secret):
++    expected = signature(payload, secret)
++    return hmac.compare_digest(expected, supplied)

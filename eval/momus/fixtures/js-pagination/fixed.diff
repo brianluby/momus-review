@@ -1,0 +1,8 @@
+--- a/catalog.js
++++ b/catalog.js
+@@ -1 +1,4 @@
+-exports.page = (rows, cursor) => ({items: rows.slice(cursor, cursor + 2), nextCursor: cursor + 2 < rows.length ? cursor + 2 : null});
++exports.page = (rows, cursor) => {
++  const next = cursor + 2 < rows.length ? cursor + 2 : null;
++  return {items: rows.slice(cursor, cursor + 2), nextCursor: next, hasMore: next !== null};
++};
