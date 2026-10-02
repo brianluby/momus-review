@@ -13,9 +13,10 @@ requests.
   link against Ubuntu 22.04's glibc so they run on older hosts too.
   Verify a download with `scripts/verify-release.sh` (docs/slsa.md);
   releases before v0.3.0 have checksums only.
-- **From source**: `cargo install --locked --git https://github.com/brianluby/momus-review`
-  (binary `momus`); `cargo run -q --bin momus --` for development. The
-  exact toolchain is pinned by `rust-toolchain.toml`.
+- **From source**: `cargo install --locked --git https://github.com/brianluby/momus-review --bin momus momus-review`.
+  Select the `momus-review` package explicitly because the repository also
+  contains benchmark fixture crates. Use `cargo run -q --bin momus --` for
+  development. The exact toolchain is pinned by `rust-toolchain.toml`.
 - No runtime beyond the binary: `momus review ~/repos/anything` just works.
 - Config comes from the environment (`TYPESAFE_API_KEY`, …; see README
   "Configuration"). The report defaults to `./reviews/latest.json` in the
