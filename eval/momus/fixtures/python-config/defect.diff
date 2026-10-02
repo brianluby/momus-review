@@ -1,0 +1,12 @@
+--- a/config.py
++++ b/config.py
+@@ -1,2 +1,2 @@
+ def timeout_seconds(config):
+-    return config.get("timeout", 10)
++    return config.get("timeout_ms", 10000) / 1000
+--- a/tests.py
++++ b/tests.py
+@@ -1,2 +1,2 @@
+ from config import timeout_seconds
+-assert timeout_seconds({"timeout":2}) == 2
++assert timeout_seconds({"timeout_ms":2500}) == 2.5

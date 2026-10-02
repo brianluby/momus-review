@@ -1,0 +1,62 @@
+{
+  "cases": [
+    {
+      "abstention": null,
+      "caseId": "unit-defect",
+      "error": null,
+      "receipt": "receipts/unit-defect.json",
+      "receiptSha256": "e9357f88c8de359e3a8248f51186d2d9f3f5867c3e6f341967753c83557246b4",
+      "report": "reports/unit-defect.json",
+      "reportSha256": "9f66ca8520533de774987eb93f79f3c7988e18088b55bcc258bbd6866d07be23",
+      "status": "complete"
+    },
+    {
+      "abstention": null,
+      "caseId": "unit-fixed",
+      "error": null,
+      "receipt": "receipts/unit-fixed.json",
+      "receiptSha256": "fb86fdda833ee173c1b3e52130c6bbad612a71338e06bdc73c67a38d34ece7e8",
+      "report": "reports/unit-fixed.json",
+      "reportSha256": "5eebbc1ea9c218edb86116a6bee5ee23e9d7ff8de4c29b5a91071238ccc1992c",
+      "status": "complete"
+    },
+    {
+      "abstention": {
+        "abstained": true,
+        "rationale": "The caller freshness contract is unavailable; cannot prove compatibility."
+      },
+      "caseId": "unit-abstain",
+      "error": null,
+      "receipt": "receipts/unit-abstain.json",
+      "receiptSha256": "9f866f0caaa40b702cca658156d0e6338ccf3bc40c0cd001728f00b04dcdf3b4",
+      "report": "reports/unit-abstain.json",
+      "reportSha256": "3a6ad89d7e74383d0c6fbdd61b5051db655481609a7d60a192e4f9fa0a865c6c",
+      "status": "complete"
+    },
+    {
+      "abstention": null,
+      "caseId": "unit-doc-defect",
+      "error": null,
+      "receipt": "receipts/unit-doc-defect.json",
+      "receiptSha256": "817d3f8393ec2ecd42581b882763bfed29ae0012d6bf83194b4ee196f66780b9",
+      "report": "reports/unit-doc-defect.json",
+      "reportSha256": "bf8ed37ecfa08db21ffb0d0d68204bd9a32a4923be252b921caa768ad6738a3c",
+      "status": "complete"
+    },
+    {
+      "abstention": null,
+      "caseId": "unit-doc-fixed",
+      "error": null,
+      "receipt": "receipts/unit-doc-fixed.json",
+      "receiptSha256": "8bb19d84bd315f984ec43459d057671ca014ca2efc0f2891676e4d3fc410195f",
+      "report": "reports/unit-doc-fixed.json",
+      "reportSha256": "23203d567131019b82379a3c7faa75a61a37a2be4817f92e857954ddf34a8737",
+      "status": "complete"
+    }
+  ],
+  "datasetVersion": "momus-scorer-fixture-v1",
+  "kind": "offline-test",
+  "manifestSha256": "4d82e004c6ff01e5f090617174c855d65f6348f9431169f43add0985f8338639",
+  "runId": "offline-scorer-regression",
+  "schemaVersion": 1
+}

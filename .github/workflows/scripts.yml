@@ -5,10 +5,10 @@ name: scripts
 
 on:
   pull_request:
-    paths: ["scripts/**", "examples/**", "tests/*.cjs", "src/dashboard/public/**", ".github/workflows/**", "Cargo.lock", "action.yml"]
+    paths: ["scripts/**", "examples/**", "eval/**", "tests/*.cjs", "src/dashboard/public/**", ".github/workflows/**", "Cargo.lock", "action.yml"]
   push:
     branches: [main]
-    paths: ["scripts/**", "examples/**", "tests/*.cjs", "src/dashboard/public/**", ".github/workflows/**", "Cargo.lock", "action.yml"]
+    paths: ["scripts/**", "examples/**", "eval/**", "tests/*.cjs", "src/dashboard/public/**", ".github/workflows/**", "Cargo.lock", "action.yml"]
   schedule:
     # Weekly RustSec sweep of the locked dependency set on main.
     - cron: "17 4 * * 1"
@@ -50,6 +50,18 @@ jobs:
 
       - name: Test dashboard evidence rendering
         run: node --test tests/dashboard-robustness.cjs
+
+      - name: Install the pinned Rust toolchain for offline fixture controls
+        run: rustup toolchain install --profile minimal
+
+      - name: Validate offline product benchmarks and outcome collection
+        run: |
+          python3 -B eval/momus/evaluate.py validate
+          python3 -B eval/momus/test_evaluate.py
+          python3 -B eval/momus/test_materialize.py
+          python3 -B eval/momus/reproduce.py --all
+          python3 -B eval/outcomes/test_collect.py
+          cargo test --locked --test product_fixtures
 
   macos-shell:
     runs-on: macos-14

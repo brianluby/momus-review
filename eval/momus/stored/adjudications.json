@@ -1,0 +1,156 @@
+{
+  "cases": [
+    {
+      "abstention": null,
+      "caseId": "unit-defect",
+      "findings": [
+        {
+          "duplicateOf": null,
+          "explanation": {
+            "actionability": true,
+            "rationale": "Independent synthetic scorer-test assessment; not a model output or performance claim.",
+            "sourceCorrectness": true,
+            "specificity": true,
+            "uncertainty": true
+          },
+          "index": 0,
+          "issueId": "unit-first-issue",
+          "rationale": {
+            "consequence": "An off-by-one access returns the second element; unrelated claims have no supporting defect.",
+            "contract": "The first element is required, or this finding is separately a benign advisory.",
+            "trigger": "The exact finding index is reviewed against the stored caller and source."
+          },
+          "verdict": "matched"
+        },
+        {
+          "duplicateOf": 0,
+          "explanation": {
+            "actionability": true,
+            "rationale": "Independent synthetic scorer-test assessment; not a model output or performance claim.",
+            "sourceCorrectness": true,
+            "specificity": true,
+            "uncertainty": true
+          },
+          "index": 1,
+          "issueId": "unit-first-issue",
+          "rationale": {
+            "consequence": "An off-by-one access returns the second element; unrelated claims have no supporting defect.",
+            "contract": "The first element is required, or this finding is separately a benign advisory.",
+            "trigger": "The exact finding index is reviewed against the stored caller and source."
+          },
+          "verdict": "duplicate"
+        },
+        {
+          "duplicateOf": null,
+          "explanation": {
+            "actionability": false,
+            "rationale": "Independent synthetic scorer-test assessment; not a model output or performance claim.",
+            "sourceCorrectness": false,
+            "specificity": false,
+            "uncertainty": true
+          },
+          "index": 2,
+          "issueId": null,
+          "rationale": {
+            "consequence": "An off-by-one access returns the second element; unrelated claims have no supporting defect.",
+            "contract": "The first element is required, or this finding is separately a benign advisory.",
+            "trigger": "The exact finding index is reviewed against the stored caller and source."
+          },
+          "verdict": "unrelated"
+        },
+        {
+          "duplicateOf": null,
+          "explanation": {
+            "actionability": true,
+            "rationale": "Independent synthetic scorer-test assessment; not a model output or performance claim.",
+            "sourceCorrectness": true,
+            "specificity": true,
+            "uncertainty": true
+          },
+          "index": 3,
+          "issueId": null,
+          "rationale": {
+            "consequence": "An off-by-one access returns the second element; unrelated claims have no supporting defect.",
+            "contract": "The first element is required, or this finding is separately a benign advisory.",
+            "trigger": "The exact finding index is reviewed against the stored caller and source."
+          },
+          "verdict": "advisory"
+        }
+      ],
+      "reportSha256": "9f66ca8520533de774987eb93f79f3c7988e18088b55bcc258bbd6866d07be23"
+    },
+    {
+      "abstention": null,
+      "caseId": "unit-fixed",
+      "findings": [
+        {
+          "duplicateOf": null,
+          "explanation": {
+            "actionability": false,
+            "rationale": "Independent synthetic scorer-test assessment; not a model output or performance claim.",
+            "sourceCorrectness": false,
+            "specificity": false,
+            "uncertainty": true
+          },
+          "index": 0,
+          "issueId": null,
+          "rationale": {
+            "consequence": "An off-by-one access returns the second element; unrelated claims have no supporting defect.",
+            "contract": "The first element is required, or this finding is separately a benign advisory.",
+            "trigger": "The exact finding index is reviewed against the stored caller and source."
+          },
+          "verdict": "unrelated"
+        },
+        {
+          "duplicateOf": null,
+          "explanation": {
+            "actionability": true,
+            "rationale": "Independent synthetic scorer-test assessment; not a model output or performance claim.",
+            "sourceCorrectness": true,
+            "specificity": true,
+            "uncertainty": true
+          },
+          "index": 1,
+          "issueId": null,
+          "rationale": {
+            "consequence": "An off-by-one access returns the second element; unrelated claims have no supporting defect.",
+            "contract": "The first element is required, or this finding is separately a benign advisory.",
+            "trigger": "The exact finding index is reviewed against the stored caller and source."
+          },
+          "verdict": "advisory"
+        }
+      ],
+      "reportSha256": "5eebbc1ea9c218edb86116a6bee5ee23e9d7ff8de4c29b5a91071238ccc1992c"
+    },
+    {
+      "abstention": {
+        "appropriate": true,
+        "rationale": "The missing caller contract genuinely prevents the asserted concrete conclusion."
+      },
+      "caseId": "unit-abstain",
+      "findings": [],
+      "reportSha256": "3a6ad89d7e74383d0c6fbdd61b5051db655481609a7d60a192e4f9fa0a865c6c"
+    },
+    {
+      "abstention": null,
+      "caseId": "unit-doc-defect",
+      "findings": [],
+      "reportSha256": "bf8ed37ecfa08db21ffb0d0d68204bd9a32a4923be252b921caa768ad6738a3c"
+    },
+    {
+      "abstention": null,
+      "caseId": "unit-doc-fixed",
+      "findings": [],
+      "reportSha256": "23203d567131019b82379a3c7faa75a61a37a2be4817f92e857954ddf34a8737"
+    }
+  ],
+  "datasetVersion": "momus-scorer-fixture-v1",
+  "manifestSha256": "4d82e004c6ff01e5f090617174c855d65f6348f9431169f43add0985f8338639",
+  "reviewer": {
+    "identity": "offline-independent-fixture-author",
+    "independent": true,
+    "method": "offline-test"
+  },
+  "runSha256": "42c9cbe235c96d7be19a51c530f3aa20a5e2178a7623ae2ba381cac3e0e7ac28",
+  "schemaVersion": 1
+}

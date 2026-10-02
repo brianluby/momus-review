@@ -1,0 +1,21 @@
+--- a/ledger.js
++++ b/ledger.js
+@@ -1 +1,6 @@
+-exports.charge = (state, cents) => { state.balance -= cents; };
++exports.refund = (state, key, cents) => {
++  if (state.refunds.has(key)) return false;
++  state.refunds.add(key);
++  state.balance += cents;
++  return true;
++};
+--- a/tests.js
++++ b/tests.js
+@@ -1,5 +1,5 @@
+ const assert = require("node:assert/strict");
+ const ledger = require("./ledger");
+-const state = {balance:100};
+-ledger.charge(state, 20);
+-assert.equal(state.balance, 80);
++const state = {balance:0, refunds:new Set()};
++assert.equal(ledger.refund(state, "order-7", 30), true);
++assert.equal(state.balance, 30);

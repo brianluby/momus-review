@@ -1,0 +1,186 @@
+{
+  "adjudicationsSha256": "b3e73e15d5f97f59e25b92bd145222801e99b1c92815a14d437cc6ec8cda810f",
+  "cases": [
+    {
+      "abstained": false,
+      "advisoryIndices": [
+        3
+      ],
+      "appropriateAbstention": false,
+      "attemptComplete": true,
+      "caseId": "unit-defect",
+      "caughtIssues": [
+        "unit-first-issue"
+      ],
+      "complete": true,
+      "dimension": "correctness",
+      "duplicateIndices": [
+        1
+      ],
+      "expectation": "defect",
+      "falseAlarmIndices": [
+        2
+      ],
+      "incompleteReason": null,
+      "invalidMatchIndices": [],
+      "missedIssues": [],
+      "slice": "core",
+      "status": "complete",
+      "unadjudicatedIndices": [],
+      "withheldMatchIndices": []
+    },
+    {
+      "abstained": false,
+      "advisoryIndices": [
+        1
+      ],
+      "appropriateAbstention": false,
+      "attemptComplete": true,
+      "caseId": "unit-fixed",
+      "caughtIssues": [],
+      "complete": true,
+      "dimension": "correctness",
+      "duplicateIndices": [],
+      "expectation": "clean",
+      "falseAlarmIndices": [
+        0
+      ],
+      "incompleteReason": null,
+      "invalidMatchIndices": [],
+      "missedIssues": [],
+      "slice": "core",
+      "status": "complete",
+      "unadjudicatedIndices": [],
+      "withheldMatchIndices": []
+    },
+    {
+      "abstained": true,
+      "advisoryIndices": [],
+      "appropriateAbstention": true,
+      "attemptComplete": true,
+      "caseId": "unit-abstain",
+      "caughtIssues": [],
+      "complete": true,
+      "dimension": "compatibility",
+      "duplicateIndices": [],
+      "expectation": "abstain",
+      "falseAlarmIndices": [],
+      "incompleteReason": null,
+      "invalidMatchIndices": [],
+      "missedIssues": [],
+      "slice": "core",
+      "status": "complete",
+      "unadjudicatedIndices": [],
+      "withheldMatchIndices": []
+    },
+    {
+      "abstained": false,
+      "advisoryIndices": [],
+      "appropriateAbstention": false,
+      "attemptComplete": true,
+      "caseId": "unit-doc-defect",
+      "caughtIssues": [],
+      "complete": true,
+      "dimension": "docs",
+      "duplicateIndices": [],
+      "expectation": "defect",
+      "falseAlarmIndices": [],
+      "incompleteReason": null,
+      "invalidMatchIndices": [],
+      "missedIssues": [
+        "unit-doc-issue"
+      ],
+      "slice": "auxiliary",
+      "status": "complete",
+      "unadjudicatedIndices": [],
+      "withheldMatchIndices": []
+    },
+    {
+      "abstained": false,
+      "advisoryIndices": [],
+      "appropriateAbstention": false,
+      "attemptComplete": true,
+      "caseId": "unit-doc-fixed",
+      "caughtIssues": [],
+      "complete": true,
+      "dimension": "docs",
+      "duplicateIndices": [],
+      "expectation": "clean",
+      "falseAlarmIndices": [],
+      "incompleteReason": null,
+      "invalidMatchIndices": [],
+      "missedIssues": [],
+      "slice": "auxiliary",
+      "status": "complete",
+      "unadjudicatedIndices": [],
+      "withheldMatchIndices": []
+    }
+  ],
+  "datasetVersion": "momus-scorer-fixture-v1",
+  "explanationQuality": {
+    "actionability": {
+      "assessed": 6,
+      "passed": 4,
+      "rate": 0.6666666666666666
+    },
+    "sourceCorrectness": {
+      "assessed": 6,
+      "passed": 4,
+      "rate": 0.6666666666666666
+    },
+    "specificity": {
+      "assessed": 6,
+      "passed": 4,
+      "rate": 0.6666666666666666
+    },
+    "uncertainty": {
+      "assessed": 6,
+      "passed": 6,
+      "rate": 1.0
+    }
+  },
+  "fullyEvaluated": true,
+  "fullyEvaluatedAbstentionAttempts": true,
+  "fullyEvaluatedCleanCases": true,
+  "manifestSha256": "4d82e004c6ff01e5f090617174c855d65f6348f9431169f43add0985f8338639",
+  "notice": "Deterministic offline scorer fixture; not measured product performance.",
+  "rates": {
+    "abstentionSuccessRate": 1.0,
+    "cleanCaseFalseAlarmRate": 0.5,
+    "completionRate": 1.0,
+    "issueRecall": 0.5
+  },
+  "runId": "offline-scorer-regression",
+  "runKind": "offline-test",
+  "runSha256": "42c9cbe235c96d7be19a51c530f3aa20a5e2178a7623ae2ba381cac3e0e7ac28",
+  "schemaVersion": 1,
+  "selection": {
+    "slice": "all",
+    "split": "holdout"
+  },
+  "totals": {
+    "abstentionCases": 1,
+    "advisories": 2,
+    "appropriateAbstentions": 1,
+    "cases": 5,
+    "caughtIssues": 1,
+    "cleanCases": 2,
+    "cleanCasesWithFalseAlarms": 1,
+    "cleanFalseAlarms": 1,
+    "completeCases": 5,
+    "completeCleanCases": 2,
+    "creditedFindings": 1,
+    "duplicateFindings": 1,
+    "failedCases": 0,
+    "falseAlarms": 2,
+    "findings": 6,
+    "incompleteCases": 0,
+    "issues": 2,
+    "missedIssues": 1,
+    "missingCases": 0,
+    "unadjudicatedFindings": 0,
+    "unexpectedAbstentions": 0,
+    "unvalidatedCases": 0,
+    "withheldMatches": 0
+  }
+}

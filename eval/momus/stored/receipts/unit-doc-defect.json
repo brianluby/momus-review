@@ -1,0 +1,13 @@
+{
+  "caseId": "unit-doc-defect",
+  "datasetVersion": "momus-scorer-fixture-v1",
+  "manifestSha256": "4d82e004c6ff01e5f090617174c855d65f6348f9431169f43add0985f8338639",
+  "reviewedBase": "0000000000000000000000000000000000000004",
+  "reviewedHead": "0000000000000000000000000000000000000068",
+  "schemaVersion": 1,
+  "source": {
+    "baseSha256": "7286e29dfb33864f326caf72d0f4ad3371eb6bff5ab9ca88df554066d8279ae5",
+    "diffSha256": "19f4aba72835fcf5db64b4e62af85c1193f55a207ef8871a1e07d5eefd6a62ee",
+    "headSha256": "d704699cad5bf8b63fb7ab1db0c2e0dda3c11077a987b00030033a159464ee4a"
+  }
+}

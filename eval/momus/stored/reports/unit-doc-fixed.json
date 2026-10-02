@@ -1,0 +1,61 @@
+{
+  "budget": {
+    "deferred": 0,
+    "limit": null,
+    "reserved": 0
+  },
+  "contextFiles": [],
+  "dimensions": [
+    {
+      "key": "compatibility",
+      "label": "compatibility",
+      "short": "compatibility"
+    },
+    {
+      "key": "correctness",
+      "label": "correctness",
+      "short": "correctness"
+    },
+    {
+      "key": "reliability",
+      "label": "reliability",
+      "short": "reliability"
+    },
+    {
+      "key": "security",
+      "label": "security",
+      "short": "security"
+    },
+    {
+      "key": "testGap",
+      "label": "testGap",
+      "short": "testGap"
+    }
+  ],
+  "docsDrift": {
+    "checks": [
+      {
+        "reason": "Synthetic documentation check fixture",
+        "symbol": "send"
+      }
+    ],
+    "findings": [],
+    "unknowns": []
+  },
+  "findings": [],
+  "matrix": [],
+  "mode": "changes",
+  "partial": false,
+  "reviewedBase": "0000000000000000000000000000000000000005",
+  "reviewedClean": true,
+  "reviewedCommitted": false,
+  "reviewedHead": "0000000000000000000000000000000000000069",
+  "scope": ".",
+  "screenedFiles": 0,
+  "skipped": [],
+  "workflow": {
+    "followedSignals": 0,
+    "screenedCells": 0,
+    "thresholdSignals": 0
+  }
+}

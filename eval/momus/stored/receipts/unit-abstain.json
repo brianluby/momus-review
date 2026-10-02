@@ -1,0 +1,13 @@
+{
+  "caseId": "unit-abstain",
+  "datasetVersion": "momus-scorer-fixture-v1",
+  "manifestSha256": "4d82e004c6ff01e5f090617174c855d65f6348f9431169f43add0985f8338639",
+  "reviewedBase": "0000000000000000000000000000000000000003",
+  "reviewedHead": "0000000000000000000000000000000000000067",
+  "schemaVersion": 1,
+  "source": {
+    "baseSha256": "eccc8df75a120eb2823ae3241165075c9b2b5f9b8fa2e19bc953328dd40f7fd6",
+    "diffSha256": "28470d16f4968889550c3d6d453efcd45fc727e51925a6d626c06d5ae1ab0986",
+    "headSha256": "1aa2e2a551f4739c7990ad7638b0dd48e9ca0d42dd7307c9a855eb060b2d6549"
+  }
+}

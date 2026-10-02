@@ -1,0 +1,5 @@
+{
+  "name": "record-writer",
+  "version": "1.0.0",
+  "dependencies": {"codec-fixture": "2.0.0"}
+}

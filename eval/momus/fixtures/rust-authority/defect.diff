@@ -1,0 +1,20 @@
+--- a/src/auth.rs
++++ b/src/auth.rs
+@@ -1,2 +1,7 @@
+ pub struct Actor { pub can_manage: bool }
+-pub fn may_delete(actor: &Actor) -> bool { actor.can_manage }
++pub fn may_delete(actor: &Actor, request_role: &str) -> bool {
++    actor.can_manage || request_role == "admin"
++}
++#[cfg(test)] mod tests {
++    #[test] fn manager_allowed() { assert!(super::may_delete(&super::Actor { can_manage: true }, "member")); }
++}
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,2 +1,5 @@
+ mod auth;
+-fn main() { assert!(!auth::may_delete(&auth::Actor { can_manage: false })); }
++fn main() {
++    let viewer = auth::Actor { can_manage: false };
++    assert!(!auth::may_delete(&viewer, "admin"));
++}

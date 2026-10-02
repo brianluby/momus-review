@@ -97,11 +97,22 @@ The five refinement judgments run as one post-locate stage
   `momus github-review` publisher (#27), and the composite action + prebuilt
   release binaries (#28). See README "CI".
 - ✅ Golden-set eval harness (shipped: `momus-eval` + curated Juice Shop
-  ground truth) — precision/recall on labeled vulns.
+  ground truth) — security-category coverage and curated lower-bound corroboration.
+- ✅ Offline Momus-owned benchmark suite (#54): 13 authored core defect/fixed
+  pairs, two docs/dependency pairs, four insufficient-evidence cases and two
+  exposed PR #40 development controls; exact source identities, independently
+  reviewed annotations, offline behavioral probes and issue-level scoring.
+  [Product evaluation](../eval/momus/README.md) remains separately scheduled;
+  its results template is blank.
 
 ## Beyond Review (Jev as judgment fabric)
 
 - Merge-confidence engine (#17): implemented separate outcome history, chronological held-out evaluation, explicit unknowns and opt-in fail-closed approval. Implementation child #52; real repository outcome/calibration acceptance remains open in #51. Synthetic fixtures establish machinery only. See [merge confidence](merge-confidence.md).
+- Prospective outcome collection (#60): frozen trusted premerge receipts, exact
+  merged-head joins, separately sourced observations and availability-aware
+  history export are implemented offline. [Source inventory and collection protocol](outcome-collection.md)
+  record candidate archived reports and the missing mature independent telemetry;
+  #17/#51 remain open, with no real-data calibration acceptance.
 - Test planner (#18): opt-in `choice` over strategies per gap → unfinished test
   scaffold and observable assertion guidance; no source writes or execution.
 - Spec drift (#19): opt-in comparison with supplied local requirements, exact
