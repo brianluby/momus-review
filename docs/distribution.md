@@ -30,8 +30,10 @@ requests.
   against the selected tag's source commit, runs `momus review --base <PR
   base sha>`, optionally uploads SARIF to code
   scanning, then `momus github-review` posts inline comments and a sticky
-  summary. With no prebuilt binary (or `version: source`) it builds the
-  action's own checkout with `cargo install --locked`. Usage: README "CI".
+  summary. Unsupported prebuilt platforms, unavailable downloads and
+  verification failures stop installation; none triggers a source build.
+  Choose `version: source` explicitly to build the action's trusted checkout
+  with `cargo install --locked --path . --bin momus`. Usage: README "CI".
 - **Any CI**: `momus review --base origin/main --fail-on-blocking` is the
   exit-code contract; `--sarif <path>` writes SARIF 2.1.0 for other
   uploaders.
@@ -57,7 +59,7 @@ requests.
    validation, Apple signing/notarization, attestations and consumer
    verification — without publishing or moving tags. A release is cut only
    after a passing rehearsal and review.
-3. Tag and push: `git tag v0.3.0 && git push origin v0.3.0`. The workflow
+3. Tag and push: `git tag v0.9.0 && git push origin v0.9.0`. The workflow
    refuses a tag that does not match `Cargo.toml`, refuses to overwrite an
    existing release, requires immutable releases, verifies the draft as a
    consumer before publishing, and moves the major tag (`v0`) only after

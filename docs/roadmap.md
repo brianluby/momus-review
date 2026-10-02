@@ -7,6 +7,26 @@ and findings now reach reviewers where they work: inline PR comments from a
 GitHub Action. Biggest ROI is not more dimensions — it's precision,
 calibration, and staying in the reviewer's workflow.
 
+## Release milestones
+
+- **0.9 beta — assembled capabilities:** supported repository docs/dependency
+  checks, local tours, separate merge-outcome tooling, the Momus-owned offline
+  benchmark suite, native receipt/scorer acceptance fixes and executable Rust
+  API contracts. Use findings as advisory evidence with manual source review;
+  automatic approval stays disabled by default. This milestone does not claim
+  product model accuracy, full language coverage or real-history calibration.
+  See [v0.9.0 notes](releases/v0.9.0.md).
+- **1.0 — finish non-Jeeves work and stabilize supported contracts:** complete
+  the remaining non-Jeeves tickets and verify the supported CLI, report,
+  evidence and failure behavior. #17/#51 still require independently sourced
+  external outcomes, mature observation windows and chronological held-out
+  acceptance; collection machinery and synthetic fixtures do not close that
+  gate. #63's comparative evaluation also remains open.
+- **1.1 — Jeeves while preserving 1.0 contracts:** pursue the deferred Jeeves
+  work (#53/#55/#56/#57) without weakening established CLI/report compatibility,
+  source evidence, uncertainty, privacy or approval boundaries. Benchmark
+  holdouts remain evaluation-only rather than tuning or training inputs.
+
 ## Progress (2026-09-30)
 
 Completed ahead of / from this plan:
