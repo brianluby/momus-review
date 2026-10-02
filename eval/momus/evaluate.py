@@ -18,7 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 
 CORE_DIMENSIONS = {"correctness", "security", "reliability", "compatibility", "testGap"}
@@ -113,6 +113,23 @@ def local_path(root, value, label):
     return candidate
 
 
+def absolute_scope(value, label):
+    """Check a recorded scope identity without accessing an archived workspace."""
+    string(value, label)
+    posix = PurePosixPath(value)
+    windows = PureWindowsPath(value)
+    # Archived native scopes may come from a different OS. Validate spelling
+    # with pure path types; do not resolve or normalize the recorded identity.
+    posix_valid = posix.is_absolute() and not value.startswith("//") and posix.as_posix() == value and ".." not in posix.parts
+    # PureWindowsPath folds UNC server/share names into one anchor part, so
+    # inspect raw components too; a share named '.' or '..' is not normalized.
+    windows_components = value.split("\\")
+    windows_valid = windows.is_absolute() and windows.root == "\\" and str(windows) == value and not {".", ".."}.intersection(windows_components)
+    require((posix_valid or windows_valid) and "\x00" not in value,
+            f"{label}: expected normalized absolute filesystem path")
+    return value
+
+
 def _pairs(items):
     result = {}
     for key, value in items:
@@ -126,7 +143,9 @@ def load_json(path):
     try:
         return json.loads(Path(path).read_text(encoding="utf-8"), object_pairs_hook=_pairs, parse_float=_finite_float,
                           parse_constant=lambda value: fail(f"JSON: invalid number {value}"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+    except ValidationError:
+        raise
+    except (OSError, UnicodeError, ValueError, RecursionError) as exc:
         fail(f"{path}: {exc}")
 
 
@@ -435,14 +454,21 @@ def validate_report(report, label):
 def validate_receipt(path, expected_sha, manifest, manifest_sha, case):
     require(sha256(path) == expected_sha, f"{case['id']}: materialization receipt hash mismatch")
     receipt = load_json(path)
-    object_keys(receipt, {"schemaVersion", "datasetVersion", "manifestSha256", "caseId", "source", "reviewedBase", "reviewedHead"}, label="materialization receipt")
-    require(type(receipt["schemaVersion"]) is int and receipt["schemaVersion"] == 1, "receipt: unsupported schemaVersion")
+    require(type(receipt) is dict, "materialization receipt: expected object")
+    version = receipt.get("schemaVersion")
+    require(type(version) is int and version in {1, 2}, "receipt: unsupported schemaVersion")
+    required = {"schemaVersion", "datasetVersion", "manifestSha256", "caseId", "source", "reviewedBase", "reviewedHead"}
+    if version == 2:
+        required.add("reviewedScope")
+    object_keys(receipt, required, label="materialization receipt")
     require(receipt["datasetVersion"] == manifest["datasetVersion"] and receipt["manifestSha256"] == manifest_sha and receipt["caseId"] == case["id"], f"{case['id']}: receipt identity mismatch")
     object_keys(receipt["source"], {"baseSha256", "headSha256", "diffSha256"}, label="receipt.source")
     source_hashes(receipt["source"], "receipt.source")
     require(all(receipt["source"][key] == case["source"][key] for key in receipt["source"]), f"{case['id']}: receipt source mismatch")
     commit(receipt["reviewedBase"], "receipt.reviewedBase")
     commit(receipt["reviewedHead"], "receipt.reviewedHead")
+    if version == 2:
+        absolute_scope(receipt["reviewedScope"], "receipt.reviewedScope")
     return receipt
 
 
@@ -472,6 +498,7 @@ def validate_run(run_path, manifest, manifest_sha):
             boolean(abstention["abstained"], f"{cid}.abstention.abstained")
             string(abstention["rationale"], f"{cid}.abstention.rationale")
         report = None
+        reviewed_scope = "."
         if entry["report"] is None:
             require(status in {"failed", "missing"}, f"{cid}: report required for reviewed cases")
             require(all(entry[name] is None for name in ("reportSha256", "receipt", "receiptSha256")), f"{cid}: absent report cannot have evidence hashes")
@@ -487,7 +514,8 @@ def validate_run(run_path, manifest, manifest_sha):
             receipt_path = local_path(run_path.parent, entry["receipt"], f"{cid}.receipt")
             receipt = validate_receipt(receipt_path, entry["receiptSha256"], manifest, manifest_sha, manifest_cases[cid])
             require(report.get("reviewedBase") == receipt["reviewedBase"] and report.get("reviewedHead") == receipt["reviewedHead"], f"{cid}: report reviewed identity differs from materialization receipt")
-        parsed[cid] = {"entry": entry, "report": report}
+            reviewed_scope = receipt.get("reviewedScope", ".")
+        parsed[cid] = {"entry": entry, "report": report, "reviewedScope": reviewed_scope}
     return run, parsed
 
 
@@ -583,10 +611,10 @@ def _changed_code_inventory(case, manifest_path):
     return subjects, tests
 
 
-def report_attempt_incomplete(report, case, manifest_path):
+def report_attempt_incomplete(report, case, manifest_path, reviewed_scope="."):
     """Coverage/identity failures differ from an evidence-limited abstention."""
-    if report.get("mode") != "changes" or report.get("scope") != ".":
-        return "benchmark requires changes mode over the materialized repository scope '.'"
+    if report.get("mode") != "changes" or report.get("scope") != reviewed_scope:
+        return "benchmark requires changes mode over the exact receipt-bound materialized repository scope"
     if report["skipped"]:
         return "native report skipped review work"
     if report["budget"]["deferred"]:
@@ -624,8 +652,8 @@ def report_attempt_incomplete(report, case, manifest_path):
     return None
 
 
-def report_incomplete(report, case, manifest_path):
-    attempt_error = report_attempt_incomplete(report, case, manifest_path)
+def report_incomplete(report, case, manifest_path, reviewed_scope="."):
+    attempt_error = report_attempt_incomplete(report, case, manifest_path, reviewed_scope)
     if attempt_error:
         return attempt_error
     if report["partial"]:
@@ -656,11 +684,12 @@ def score(manifest_path, run_path, adjudications_path, split="holdout", slice_na
         run_case = run_cases.get(cid)
         adjudication = judgments.get(cid, {"findings": {}, "abstention": None})
         report = run_case["report"] if run_case else None
+        reviewed_scope = run_case["reviewedScope"] if run_case else "."
         findings = report["findings"] if report else []
         totals["findings"] += len(findings)
         status = run_case["entry"]["status"] if run_case else "missing"
         reason = run_case["entry"]["error"] if run_case else "case absent from run receipt"
-        incomplete = reason if status != "complete" else report_incomplete(report, case, manifest_path)
+        incomplete = reason if status != "complete" else report_incomplete(report, case, manifest_path, reviewed_scope)
         if case["annotation"]["status"] != "validated":
             incomplete = "corpus annotation has not been independently validated"
             totals["unvalidatedCases"] += 1
@@ -721,7 +750,7 @@ def score(manifest_path, run_path, adjudications_path, split="holdout", slice_na
         if case["expectation"] == "clean":
             totals["cleanFalseAlarms"] += len(alarms)
             totals["cleanCasesWithFalseAlarms"] += int(bool(alarms))
-        attempt_complete = bool(report and status in {"complete", "partial"} and not report_attempt_incomplete(report, case, manifest_path) and case["annotation"]["status"] == "validated" and not unadjudicated)
+        attempt_complete = bool(report and status in {"complete", "partial"} and not report_attempt_incomplete(report, case, manifest_path, reviewed_scope) and case["annotation"]["status"] == "validated" and not unadjudicated)
         appropriate = bool(attempt_complete and case["expectation"] == "abstain" and abstained and not findings and adjudication["abstention"] and adjudication["abstention"]["appropriate"])
         totals["appropriateAbstentions"] += int(appropriate)
         totals["unexpectedAbstentions"] += int(abstained and case["expectation"] != "abstain")

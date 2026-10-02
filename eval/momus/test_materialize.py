@@ -40,7 +40,11 @@ class MaterializeTests(unittest.TestCase):
             root = Path(tmp)
             first = materialize(ROOT / "manifest.json", case["id"], root / "first", root / "first.json")
             second = materialize(ROOT / "manifest.json", case["id"], root / "second", root / "second.json")
-            self.assertEqual(first, second)
+            self.assertEqual(first["schemaVersion"], 2)
+            self.assertEqual(first["reviewedScope"], str((root / "first").resolve()))
+            self.assertEqual(second["reviewedScope"], str((root / "second").resolve()))
+            self.assertEqual({k: v for k, v in first.items() if k != "reviewedScope"},
+                             {k: v for k, v in second.items() if k != "reviewedScope"})
             self.assertNotEqual(first["reviewedBase"], first["reviewedHead"])
             for kind, commit in [("base", first["reviewedBase"]), ("head", first["reviewedHead"])]:
                 expected = ROOT / case[kind]
