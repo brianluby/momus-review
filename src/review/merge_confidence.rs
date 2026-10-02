@@ -1,14 +1,29 @@
-//! Merge confidence: observed, separate outcomes and fail-closed approval.
+//! Repository-local outcome assessment and opt-in approval eligibility.
 //!
-//! `p_revert` produces an **uncalibrated heuristic** in `[0, 1)` from review
-//! signals. Its weights are hand-picked, not fitted; it must never be presented
-//! or treated as a calibrated probability.
-//! `assess` separately fits fixed-bin empirical estimates to supplied observed
-//! revert, incident and flake outcomes and reports chronological held-out
-//! evaluation. Without sufficient evidence those estimates remain unknown.
-//! Real-world calibration requires real, verified repository outcome history.
+//! [`p_revert`] retains its historical API name, but produces a unitless,
+//! **uncalibrated heuristic** from hand-picked review weights. A zero score
+//! means these signals contributed nothing; it does not establish a zero
+//! chance of a revert, incident or test flake.
 //!
-//! The heuristic is a logistic squash of a weighted `risk` score:
+//! [`assess`] separately uses supplied history to fit four fixed score bins for
+//! each [`OutcomeKind`]. Missing labels remain unknown. Training merges precede
+//! the cutoff and their complete outcome windows and observations must be
+//! available by that cutoff; held-out merges begin at the cutoff and must
+//! mature by `as_of`. Even an early positive event waits for its full window
+//! before entering evaluation. The caller must additionally establish when
+//! evidence first became available: event time alone cannot prove that a label
+//! was known at the split. The outcome collector retains that separate receipt
+//! and withholds labels unavailable at the relevant boundary.
+//!
+//! Evidence strings and provenance are caller assertions, not authenticated
+//! telemetry. The caller owns outcome definitions, full negative surveillance,
+//! score capture before merge and compatible review pipelines. Synthetic data
+//! exercises mechanics only and cannot authorize approval. Empirical estimates
+//! and their sampling bounds do not establish causality or bound distribution
+//! shift. This module returns an auditable eligibility decision; publication
+//! and a fresh GitHub identity check belong to the approval adapter.
+//!
+//! The heuristic applies an exponential transform to a weighted `risk` score:
 //!
 //! ```text
 //! blocking      = count of findings whose action == RequestChanges
@@ -22,8 +37,9 @@
 //! p_revert = 1 - exp(-3 * risk)
 //! ```
 //!
-//! With no findings and an empty matrix, `risk` is 0 and P(revert) is 0; the
-//! exponential term keeps the result asymptotically below 1.
+//! With valid input scales, no findings and an empty matrix produce zero, and
+//! the exponential term keeps the heuristic below one. The name `p_revert`
+//! does not turn this transformation into an observed-outcome probability.
 
 use crate::domain::policy::{BLOCKING_SEVERITY, DIMENSIONS, Dimension, SEVERITY_MAX};
 use crate::domain::report::{Action, Finding, MatrixRow};
@@ -42,43 +58,79 @@ const BINS: usize = 4;
 /// separate compatible exports rather than silently mixing score producers.
 pub const HEURISTIC_VERSION: u32 = 1;
 
-/// Outcomes are independent: reverting a merge is not an incident or a test flake.
+/// Separately labelled outcomes, each with its own observation window.
+///
+/// A revert label does not establish an incident or a flake label, including a
+/// negative one. Separation here does not assume statistical independence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum OutcomeKind {
+    /// A qualifying revert within the caller's repository-specific definition.
     Revert,
+    /// A qualifying incident attributed to this merge by the caller's evidence.
     Incident,
+    /// A qualifying test flake under the caller's protocol, separate from failure.
     Flake,
 }
 
-/// A source-backed observation. Missing labels remain unknown, never negative.
+/// A caller-supplied event or a completed negative surveillance observation.
+///
+/// [`validate_history`] checks timestamps and nonempty evidence; it cannot
+/// verify the source or prove that surveillance covered the entire window.
+/// Keep a label absent in [`OutcomeRecord`] when telemetry is missing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ObservedOutcome {
+    /// `true` identifies a qualifying event; `false` asserts complete surveillance
+    /// found no qualifying event throughout this outcome's window.
     pub occurred: bool,
-    /// Unix seconds: positive event time or the end of verified negative surveillance.
+    /// Unix seconds: positive event time, or the end of negative surveillance.
+    /// This is not an evidence-availability timestamp. Callers must track and
+    /// enforce availability separately before exporting a historical split.
     pub observed_at: i64,
+    /// Nonempty source reference/receipt; its authenticity is a caller contract.
     pub evidence: String,
 }
 
+/// One merged head with a score frozen by the caller before the merge.
+///
+/// Labels are optional independently. A missing incident observation must not
+/// inherit a supplied revert result or be interpreted as `occurred: false`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OutcomeRecord {
+    /// Unique canonical lowercase, nonzero full 40/64-character Git identity
+    /// for observed histories. Synthetic histories may use nonempty fixture IDs.
     pub head: String,
+    /// Positive merge time in Unix seconds, no later than history `as_of`.
     pub merged_at: i64,
-    /// The heuristic must have been frozen before the merge, avoiding hindsight.
+    /// Positive capture time in Unix seconds, no later than `merged_at`.
+    /// Equal-second values pass structural validation; the caller must prove
+    /// that capture preceded merge rather than infer ordering from coarse time.
     pub score_recorded_at: i64,
+    /// Finite score in `[0, 1]` from the pinned producer, never a fitted probability.
     pub heuristic_score: f64,
+    /// Missing revert evidence remains unknown.
     pub revert: Option<ObservedOutcome>,
+    /// Missing incident evidence remains unknown even when revert evidence exists.
     pub incident: Option<ObservedOutcome>,
+    /// Missing flake evidence remains unknown even when another outcome is known.
     pub flake: Option<ObservedOutcome>,
 }
 
+/// Positive observation durations in seconds, evaluated separately per outcome.
+///
+/// Defaults are 30 days for revert/incident and seven days for flake. They are
+/// engineering defaults; callers must freeze the chosen protocol before labels
+/// are collected instead of selecting windows to improve the resulting score.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OutcomeWindows {
+    /// Revert observation duration after merge.
     pub revert_seconds: i64,
+    /// Incident observation duration after merge.
     pub incident_seconds: i64,
+    /// Flake observation duration after merge.
     pub flake_seconds: i64,
 }
 
@@ -92,49 +144,90 @@ impl Default for OutcomeWindows {
     }
 }
 
-/// Explicit chronological split. Labels that were unavailable at trainingCutoff
-/// cannot train the predictor, even when the merged head is older than the cutoff.
+/// Versioned, caller-provenanced history with an explicit chronological split.
+///
+/// Merges before `training_cutoff` may train only after their entire windows
+/// have matured by the cutoff. Merges at/after it are held out and must mature
+/// by `as_of`. Observation times are checked at those boundaries; separate
+/// availability receipts and authoritative outcome definitions remain the
+/// caller's responsibility. See [`validate_history`] for structural rejection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OutcomeHistory {
     /// Required on input. There is no inferred producer for legacy exports.
     pub heuristic_version: u32,
+    /// Exact repository identity, compared with current-head check evidence.
     pub repository: String,
+    /// Nonempty description/reference of the source and collection protocol.
     pub provenance: String,
+    /// Demonstration-only history; estimates from it can never approve a merge.
     pub synthetic: bool,
+    /// Unix-second knowledge boundary, strictly after `training_cutoff`.
     pub as_of: i64,
+    /// Positive Unix-second training boundary, fixed before held-out observation.
     pub training_cutoff: i64,
+    /// Independent positive windows; timestamp addition must not overflow.
     pub windows: OutcomeWindows,
+    /// Uniquely identified merges; input ordering does not affect fitting.
     pub records: Vec<OutcomeRecord>,
 }
 
+/// Descriptive support and held-out diagnostics for a single outcome.
+///
+/// Metrics may be populated while the candidate estimate remains unknown due
+/// to insufficient support. They are not approval evidence by themselves.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Evaluation {
+    /// Mature, available labels from merges strictly before the cutoff.
     pub training_samples: usize,
+    /// Mature labels from merges at/after the cutoff, never used for fitting.
     pub held_out_samples: usize,
+    /// Records with no label for this outcome, rather than negative observations.
     pub unknown_labels: usize,
+    /// Present labels withheld because their window or observation misses a boundary.
     pub immature_or_unavailable_labels: usize,
+    /// Qualifying events among training samples.
     pub training_events: usize,
+    /// Qualifying events among held-out samples.
     pub held_out_events: usize,
+    /// Mean squared error on held-out labels, using training-only bin estimates.
     pub brier_score: Option<f64>,
+    /// Held-out error of the smoothed training population rate for comparison.
     pub baseline_brier_score: Option<f64>,
+    /// Held-out bin calibration errors weighted by their held-out sample counts.
     pub expected_calibration_error: Option<f64>,
+    /// Held-out support in the candidate's bin; pooled support cannot replace it.
     pub matching_bin_held_out_samples: usize,
+    /// Held-out events in the candidate's bin.
     pub matching_bin_held_out_events: usize,
+    /// Absolute difference between that bin's training estimate and held-out rate.
     pub matching_bin_calibration_error: Option<f64>,
+    /// Latest training observation in the candidate bin, used for freshness gates.
     pub matching_bin_training_last_observed_at: Option<i64>,
+    /// Latest held-out observation in the candidate bin, separate from merge age.
     pub matching_bin_held_out_last_observed_at: Option<i64>,
+    /// Latest held-out merge in the candidate bin; refreshing `as_of` cannot revive it.
     pub matching_bin_held_out_last_merged_at: Option<i64>,
 }
 
+/// Candidate-bin estimate for one outcome, with support and limitations.
+///
+/// Probability is absent until there are at least 40 training labels, 20
+/// held-out labels, 20 labels in each candidate training/held-out bin and both
+/// training outcome classes. `evaluatedEmpirical` describes supplied observed
+/// history; it is not a certification that the caller's labels are authentic.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OutcomeEstimate {
+    /// Outcome assessed independently from the other two estimates.
     pub outcome: OutcomeKind,
+    /// Declared observation duration; absent when no history was supplied.
     pub window_seconds: Option<i64>,
     /// unknown | evaluatedEmpirical | syntheticDemonstration
     pub status: String,
+    /// Laplace-smoothed event frequency `(events + 1) / (samples + 2)` in the
+    /// selected training bin, conditional on this supplied history and protocol.
     pub probability: Option<f64>,
     /// Wilson 95% binomial upper bound for the selected training bin.
     /// Sampling uncertainty only; it does not bound distribution shift.
@@ -142,50 +235,113 @@ pub struct OutcomeEstimate {
     /// Separate held-out sampling bound, protecting against pooled metrics
     /// masking regression in the candidate's score bin.
     pub held_out_upper_bound_95: Option<f64>,
+    /// Mature training support in the candidate's score bin.
     pub matching_bin_samples: usize,
+    /// Held-out diagnostics, including candidate-bin evidence age.
     pub evaluation: Evaluation,
+    /// Evidence gaps and statistical assumptions the consumer must retain.
     pub limitations: Vec<String>,
 }
 
+/// Trusted caller's current-head identity, coverage and check inventory.
+///
+/// `Default` expresses missing evidence, not a passing review. When supplied,
+/// every field is required on the JSON input; absence is not inferred from a
+/// green check or an empty finding list. [`assess`] rejects approval when any
+/// coverage assertion is false or an auxiliary unknown remains.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CheckEvidence {
+    /// Exact repository identity matching the supplied history.
     pub repository: String,
+    /// Current candidate head; approval compares this with all review/check heads.
     pub head: String,
+    /// Head that produced the source review, not a subsequently fetched head.
     pub reviewed_head: String,
+    /// Positive Unix-second assessment time supplied by the trusted collector.
     pub assessed_at: i64,
     /// Caller has verified full changed-file coverage, including auxiliary analyses.
     pub review_complete: bool,
+    /// Caller has complete source/check provenance for this identity.
     pub evidence_complete: bool,
+    /// Changed inputs are supported by the review and auxiliary analyses.
     pub supported_inputs: bool,
+    /// Unresolved limitations; any entry blocks approval.
     pub auxiliary_unknowns: Vec<String>,
+    /// All collected checks, including optional ones; every supplied check must
+    /// be uniquely named, passed, fresh, source-backed and bound to this head.
     pub checks: Vec<NamedCheck>,
 }
 
+/// One normalized current-head check result and its provenance reference.
+///
+/// Missing names, unknown results, stale/future completion, missing evidence or
+/// duplicate names block approval, including duplicates across check sources.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NamedCheck {
+    /// Nonempty, unique check name matched exactly against required policy names.
     pub name: String,
+    /// Exact candidate commit that the check evaluated.
     pub head: String,
     /// passed | failed | pending | unknown; every value except passed rejects.
     pub status: String,
+    /// Positive Unix-second completion time, no later than `assessed_at`.
     pub completed_at: i64,
+    /// Nonempty check source URL/receipt; the engine does not fetch it.
     pub evidence: String,
 }
 
-/// Automatic approval is disabled unless explicitly enabled in this policy.
-/// A trusted caller supplies current-head and auxiliary completeness evidence.
+/// Explicit opt-in limits for observed-history approval, disabled by default.
+///
+/// Supplying or enabling a policy does not establish eligibility. All three
+/// observed outcomes, their training/held-out sampling bounds and calibration
+/// diagnostics must pass, alongside a complete immutable changes review and
+/// fresh, uniquely named current-head checks. Synthetic histories, missing
+/// telemetry and intrinsically blocking findings cannot be waived by a limit.
+///
+/// Omitted JSON fields use these defaults. An enabled policy requires at least
+/// one nonempty required-check name; [`assess`] validates policy limits even
+/// when approval is disabled.
+///
+/// ```
+/// use momus_review::domain::report::ReviewReport;
+/// use momus_review::review::merge_confidence::{ApprovalPolicy, assess};
+///
+/// let report = ReviewReport::default();
+/// let mut policy = ApprovalPolicy::default();
+/// let decision = assess(&report, None, Some(&policy), None)?.approval;
+/// assert!(!decision.enabled && !decision.eligible);
+///
+/// // Opting in without naming required checks is an invalid policy.
+/// policy.enabled = true;
+/// assert!(assess(&report, None, Some(&policy), None).is_err());
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct ApprovalPolicy {
+    /// Explicit opt-in; false leaves the decision disabled regardless of evidence.
     pub enabled: bool,
+    /// Exact required names. Every supplied check must also pass, even if optional.
     pub required_checks: Vec<String>,
+    /// Maximum training and held-out 95% sampling upper bounds for revert.
     pub max_revert_probability: f64,
+    /// Maximum training and held-out 95% sampling upper bounds for incident.
     pub max_incident_probability: f64,
+    /// Maximum training and held-out 95% sampling upper bounds for flake.
     pub max_flake_probability: f64,
+    /// Inclusive limit for pooled and candidate-bin held-out calibration error.
+    /// Held-out Brier error must additionally be no worse than the baseline.
     pub max_calibration_error: f64,
+    /// A finding at or above this severity rejects approval. The intrinsic
+    /// blocking threshold and `RequestChanges` action remain independent vetoes.
     pub max_finding_severity: f64,
+    /// Positive maximum check age relative to the supplied assessment time.
     pub max_check_age_seconds: i64,
+    /// Positive maximum history/observation age. Candidate-bin cohort checks
+    /// additionally account for the outcome duration; refreshing `as_of` alone
+    /// does not refresh old evidence or old review pipelines.
     pub max_history_age_seconds: i64,
 }
 
@@ -205,30 +361,53 @@ impl Default for ApprovalPolicy {
     }
 }
 
+/// Auditable policy decision, not a GitHub approval or a merge instruction.
+///
+/// Eligibility means all gates passed for the supplied assessment inputs. A
+/// publishing adapter must fetch fresh evidence and recheck repository identity;
+/// this value is not a durable authorization for a later changed head.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApprovalDecision {
+    /// Whether a supplied policy explicitly opted in to automatic approval.
     pub enabled: bool,
+    /// True only when enabled and no rejection reason remains.
     pub eligible: bool,
+    /// Human-readable explanations; do not treat their text as a stable enum.
     pub reasons: Vec<String>,
 }
 
+/// Serialized assessment tying a heuristic producer to separate outcome results.
+///
+/// Preserve `limitations`, outcome status, provenance and the approval decision
+/// when displaying estimates. The heuristic score alone is never merge approval
+/// evidence, and a readable legacy artifact is not a compatible history export.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MergeConfidenceSummary {
+    /// Assessment artifact format version, distinct from score producer identity.
     pub version: u32,
     /// Zero means a saved legacy artifact omitted producer provenance. It is
     /// never used for fitting or approval; assess emits the current version.
     #[serde(default)]
     pub heuristic_version: u32,
+    /// Unitless hand-weighted review heuristic recomputed from the supplied report.
     pub heuristic_score: f64,
+    /// Display label explicitly distinguishing the heuristic from probabilities.
     pub heuristic_label: String,
+    /// Declared history repository, absent when no history was supplied.
     pub repository: Option<String>,
+    /// Declared history source/protocol, not independently authenticated here.
     pub provenance: Option<String>,
+    /// Whether supplied history is demonstration-only; absent without history.
     pub synthetic: Option<bool>,
+    /// Declared chronological fitting boundary, absent without history.
     pub training_cutoff: Option<i64>,
+    /// Declared knowledge boundary for this history, absent without history.
     pub as_of: Option<i64>,
+    /// Revert, incident and flake estimates in that order, with separate unknowns.
     pub outcomes: Vec<OutcomeEstimate>,
+    /// Fail-closed decision over the supplied report, policy, history and checks.
     pub approval: ApprovalDecision,
 }
 
@@ -248,7 +427,60 @@ fn window(windows: &OutcomeWindows, kind: OutcomeKind) -> i64 {
     }
 }
 
-/// Reject malformed, future, hindsight-scored, duplicated or unproven labels.
+/// Check the structural and temporal contract of a supplied history.
+///
+/// Empty histories and absent labels are valid inputs; they establish no
+/// observed-outcome estimate. This function does not collect telemetry, inspect
+/// evidence references, authenticate provenance or determine when an event was
+/// first discovered. Callers must supply those assurances, including complete
+/// negative surveillance and score capture before merge.
+///
+/// # Errors
+///
+/// Returns an error for incompatible producer identity, empty provenance,
+/// invalid chronological boundaries, missing/duplicate/noncanonical observed
+/// heads, nonfinite/out-of-range scores, invalid or overflowing windows, capture
+/// after merge, future observations or labels outside their required window.
+/// Positive events must occur within the window; a negative observation must
+/// reach the full window. Equal capture/merge seconds are structurally accepted
+/// and cannot by themselves prove pre-merge capture.
+///
+/// This tiny fabricated input demonstrates validation only; it is deliberately
+/// marked synthetic and provides no real-world calibration evidence.
+///
+/// ```
+/// use momus_review::review::merge_confidence::{
+///     HEURISTIC_VERSION, ObservedOutcome, OutcomeHistory, OutcomeRecord,
+///     OutcomeWindows, validate_history,
+/// };
+///
+/// let mut history = OutcomeHistory {
+///     heuristic_version: HEURISTIC_VERSION,
+///     repository: "example/repository".into(),
+///     provenance: "offline validation fixture; no observed production history".into(),
+///     synthetic: true,
+///     as_of: 2_000,
+///     training_cutoff: 1_000,
+///     windows: OutcomeWindows {
+///         revert_seconds: 100, incident_seconds: 100, flake_seconds: 100,
+///     },
+///     records: vec![OutcomeRecord {
+///         head: "fixture-unknown".into(),
+///         merged_at: 100,
+///         score_recorded_at: 99,
+///         heuristic_score: 0.2,
+///         revert: None, incident: None, flake: None,
+///     }],
+/// };
+/// validate_history(&history)?; // Missing telemetry remains unknown.
+/// history.records[0].revert = Some(ObservedOutcome {
+///     occurred: false,
+///     observed_at: 150,
+///     evidence: "surveillance stopped before the window ended".into(),
+/// });
+/// assert!(validate_history(&history).is_err()); // Window matures at second 200.
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn validate_history(history: &OutcomeHistory) -> Result<()> {
     ensure!(
         history.heuristic_version == HEURISTIC_VERSION,
@@ -849,8 +1081,37 @@ fn approval(
     decision
 }
 
-/// Assess every independent outcome and fail-closed opt-in approval eligibility.
-/// This returns an auditable decision; it does not publish approval by itself.
+/// Assess separate outcomes and opt-in eligibility without publishing anything.
+///
+/// Recomputes the legacy heuristic from the report rather than trusting a saved
+/// score, validates supplied history/policy and evaluates chronological held-out
+/// labels. Valid but insufficient evidence produces an `Ok` summary with unknown
+/// estimates and/or rejection reasons; missing history never becomes a negative
+/// outcome. Approval requires all three supported observed estimates, fresh
+/// candidate-bin evidence and current-head checks, plus complete committed
+/// review inputs. Neither an absent nor a disabled policy can approve.
+///
+/// # Errors
+///
+/// Returns an error for invalid history or policy, a nonfinite/out-of-range
+/// finding severity/confidence or invalid screening values. Passing structural
+/// validation does not authenticate caller-supplied surveillance, provenance or
+/// evidence availability. No network or publication side effect occurs here.
+///
+/// ```
+/// use momus_review::domain::report::ReviewReport;
+/// use momus_review::review::merge_confidence::assess;
+///
+/// let summary = assess(&ReviewReport::default(), None, None, None)?;
+/// assert_eq!(summary.heuristic_score, 0.0);
+/// assert_eq!(summary.outcomes.len(), 3);
+/// assert!(summary.outcomes.iter().all(|outcome| {
+///     outcome.status == "unknown" && outcome.probability.is_none()
+/// }));
+/// assert!(!summary.approval.enabled && !summary.approval.eligible);
+/// // No findings is not evidence that real outcome risk is zero.
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn assess(
     report: &ReviewReport,
     history: Option<&OutcomeHistory>,
@@ -912,8 +1173,13 @@ pub fn assess(
     })
 }
 
-/// Uncalibrated P(revert) heuristic in `[0, 1)`. See the module doc for the
-/// formula; calibration is owned by #17.
+/// Compute the unitless hand-weighted review heuristic under its legacy name.
+///
+/// With finite confidences in `[0, 1]` and severities in `[0, SEVERITY_MAX]`, the
+/// exponential transform returns a value in `[0, 1)`. Empty inputs contribute
+/// zero. This function performs no input validation, fitting, observation or
+/// probability calibration; use [`assess`] for validation and explicit unknowns.
+/// Its numerical range and name do not make it a probability of reverting.
 pub fn p_revert(findings: &[Finding], matrix: &[MatrixRow]) -> f64 {
     let blocking = findings
         .iter()

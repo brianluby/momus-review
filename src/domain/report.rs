@@ -1,5 +1,17 @@
 //! Report shapes shared by both review modes and the saved dashboard report.
-//! Serde-only report contracts, including the optional judgment artifact types.
+//!
+//! These public structs carry data; construction and Serde deserialization do
+//! not validate source identity, line bounds, probability ranges, score
+//! consistency, or completeness. The review workflow and its adapters establish
+//! those properties where applicable. Consumers of saved or externally supplied
+//! reports must perform their own checks before publishing or making decisions.
+//!
+//! Where Serde defaults are enabled, older reports with missing fields remain
+//! readable. A successfully deserialized report, an empty finding list, or `partial: false`
+//! alone is not evidence that every input was reviewed. Keep skipped requests,
+//! budget deferrals, context trimming, shard metadata, and optional artifacts'
+//! unknowns visible to callers. Scores and confidence values describe judgments;
+//! the wire types provide no empirical calibration guarantee.
 
 use std::collections::BTreeMap;
 
@@ -16,8 +28,14 @@ pub enum ReviewMode {
     Codebase,
 }
 
-/// `ChangedFile { path, patch, base }` — a tracked/untracked diff. `base` is
-/// the pre-change (HEAD) content; empty for a newly added file.
+/// A per-file change and its pre-change source, used for change review.
+///
+/// The Git adapter supplies a repository-relative path, a plain unified diff,
+/// and `base` from the selected comparison revision; that revision need not be
+/// HEAD. A new file has an empty base, and an untracked file has a synthetic
+/// all-additions patch. Callers constructing this struct must keep these three
+/// values aligned: neither construction nor deserialization checks them. An
+/// empty base is also valid content and does not by itself identify a new file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChangedFile {
     pub path: String,
@@ -26,15 +44,26 @@ pub struct ChangedFile {
     pub base: String,
 }
 
-/// `SourceFile { path, content }` — a complete source file.
+/// A complete source file as supplied by the repository adapter for codebase review.
+///
+/// The path identifies the file in the repository inventory. This plain value
+/// does not prove that `content` came from that path or a particular revision;
+/// callers supplying source must bind that identity separately.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceFile {
     pub path: String,
     pub content: String,
 }
 
-/// `Hunk { id, startLine, patch }` — a single diff hunk. Serialized camelCase,
-/// the wire shape judgments send in `candidateHunks`/`selectedEvidence`.
+/// Selectable diff evidence sent as `candidateHunks` or `selectedEvidence`.
+///
+/// `start_line` names the new-file position in the `@@` header, generally
+/// one-based; a zero-length range can name the position 0 before the file.
+/// `patch` includes the header and diff markers, so text offsets into it are
+/// not file positions. IDs identify candidates within one selection request,
+/// not findings across runs. [`super::patch::split_hunk`] leaves IDs empty on
+/// actual split pieces, and its caller assigns unique candidate IDs.
+/// Deserialization does not check that the header, start, or ID agree.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Hunk {
@@ -54,7 +83,11 @@ pub struct FileProfile {
     pub review_priority_confidence: f64,
 }
 
-/// The action derived from severity: ≥ BLOCKING_SEVERITY requests changes.
+/// Suggested review action, serialized as `comment` or `request_changes`.
+///
+/// The ordinary finding producer chooses `RequestChanges` at or above
+/// [`super::policy::BLOCKING_SEVERITY`]. This enum neither recomputes that choice
+/// from a finding's severity nor grants permission to publish or approve a PR.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
@@ -64,6 +97,21 @@ pub enum Action {
 }
 
 /// A located, classified, scored, and routed finding.
+///
+/// Producers choose `line` in the new file for change review or in the source
+/// file for codebase review. The change-review locator uses the first added
+/// line of selected evidence, with a hunk-start fallback for deletions; that
+/// fallback need not be an available RIGHT-side comment anchor. Publishing
+/// callers must check the file inventory and commentable lines independently.
+///
+/// An ordinary model finding has passed the locator's evidence and skeptical
+/// judgment gates; a rejected or unsupported signal produces no finding.
+/// Locally produced advisory findings have their own evidence rules. This
+/// struct records the result, not the rejected signals or a proof of the claim.
+/// Deserialized findings need not satisfy either producer's guarantees: numeric
+/// ranges, mechanism labels, action/severity consistency, and source bindings
+/// are not validated here. Optional fix, test, and test-plan text is guidance,
+/// not an applied change or executed test result.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Finding {
@@ -100,8 +148,12 @@ pub struct Finding {
     /// Opt-in, unfinished scaffold and assertion guidance; never applied or executed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub test_plan: Option<crate::review::test_planner::TestPlan>,
-    /// Stable identity across runs (file, dimension, mechanism, evidence text;
-    /// not line numbers), keying feedback and the suppression list.
+    /// Identity computed by the feedback fingerprint function from file,
+    /// dimension, mechanism, and normalized evidence, excluding line numbers
+    /// and diff headers and collapsing whitespace. Producers use it for
+    /// feedback and suppression; meaningful evidence changes can change the
+    /// identity. Empty on unpopulated or legacy values, and not verified when
+    /// a finding is deserialized.
     #[serde(default)]
     pub fingerprint: String,
     /// Other located findings judged to share this finding's root cause and
@@ -138,6 +190,10 @@ pub struct RelatedFinding {
 
 /// A composed taint judgment: where the data comes from, whether it is
 /// neutralized, and whether it reaches the dangerous sink.
+///
+/// These are model judgments over visible context, not a static-analysis proof
+/// of a path. The refinement producer calculates `exploitability` from its
+/// components, but deserialization does not recompute or range-check it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaintChain {
@@ -157,6 +213,9 @@ pub struct TaintChain {
 }
 
 /// A counterfactual check: the exonerating fact and P(the context shows it).
+///
+/// A missing check is different from a performed check that rejects the fact.
+/// `holds` concerns supplied context; it does not establish facts outside it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Exoneration {
@@ -167,7 +226,12 @@ pub struct Exoneration {
     pub holds: f64,
 }
 
-/// Independent re-screens of a high-stakes finding under varied focus.
+/// Repeated screens of a high-stakes finding under varied focus.
+///
+/// The producer calculates `mean`, `spread`, and `needs_human` from the votes
+/// using policy thresholds. Repetition does not establish statistical
+/// independence or calibrated accuracy, and Serde does not verify that stored
+/// aggregates agree with the stored votes.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Ensemble {
@@ -182,6 +246,11 @@ pub struct Ensemble {
 
 /// `matrix: Array<{ file } & Record<Dimension, number>>`. The per-file
 /// probability matrix flattens `Record<Dimension, number>` onto the row.
+///
+/// The ordinary workflow inserts a row for each successful source screen. A
+/// missing row can represent skipped, excluded, or undiscovered input, rather
+/// than a zero probability. The map permits a subset of dimensions and does
+/// not validate values or establish that all policy dimensions were screened.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MatrixRow {
@@ -191,9 +260,12 @@ pub struct MatrixRow {
 }
 
 /// The `config` snapshot embedded in a report (thresholds/budget ceilings).
-/// `max_follow_ups: None` means unlimited (follow up every threshold signal).
+/// `max_follow_ups: None` removes the follow-up-count cap; a separate call
+/// budget or request failure can still prevent following every threshold signal.
 /// `screen_thresholds` holds the per-dimension thresholds actually applied
 /// (feedback-tuned; `screen_threshold` stays the policy default).
+/// `Default` and missing Serde fields are compatibility defaults, not a
+/// substitute for the configured workflow's actual policy snapshot.
 ///
 /// The 0.2 Rust API adds `follow_up_strategy`; construct unspecified fields
 /// through `Default` when migrating an exhaustive 0.1 struct literal:
@@ -217,6 +289,13 @@ pub struct ConfigSnapshot {
 }
 
 /// Funnel counters reported in `workflow`.
+///
+/// The workflow supplies these stage totals and refinement/drop counts. They
+/// need not equal the final finding count: suppression and refinement remove
+/// findings, and auxiliary checks can append findings separately. Positive
+/// context-drop counters mean some supplied context was unavailable to a
+/// judgment even if `ReviewReport::partial` is false. Zero or defaulted counters
+/// alone do not prove complete review, and Serde enforces no cross-field sums.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct WorkflowCounts {
@@ -263,9 +342,15 @@ impl ReviewStage {
     }
 }
 
-/// A request that failed after the client's retries and was skipped, so the
-/// rest of the review could go on: that file (screen), triage aid (profile),
-/// or signal (locate) is missing from the report.
+/// Work that failed or was deferred and was skipped while the review continued.
+///
+/// This can follow exhausted client retries, a budget refusal before an HTTP
+/// attempt, or an optional test-plan failure. A screen failure loses that
+/// file's screen; profile and locate failures lose their stage's result; a
+/// test-plan failure preserves the finding without attaching a plan. The
+/// workflow marks reports with skipped work partial, rather than interpreting
+/// the absent result as a clean finding or an evidence-based rejection.
+/// `reason` is shortened diagnostic text, not a stable machine error code.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SkippedFile {
@@ -276,9 +361,13 @@ pub struct SkippedFile {
     pub reason: String,
 }
 
-/// Per-run System One usage accumulated across the whole review: successful
-/// calls plus token totals when the server reports them (hosted Jev omits
-/// usage, so only `calls` fills in there).
+/// Successful System One responses and reported token totals across client clones.
+///
+/// `calls` excludes cache hits and failed HTTP attempts, including failed
+/// retries. Token totals accumulate only when a successful server response
+/// includes usage; zero does not distinguish absent usage from measured zero.
+/// Use [`BudgetSummary`] to inspect reserved attempts and deferred work, rather
+/// than treating this value as a complete request or cost ledger.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UsageSummary {
@@ -289,8 +378,12 @@ pub struct UsageSummary {
 }
 
 /// Result-cache counters inside `usage`: work units answered from the
-/// local cache vs sent to the API (`adapters::cache`). A hit is not a Jev
-/// call — `usage.calls` counts only requests that left the machine.
+/// local cache versus work that did not yield a usable cached response.
+///
+/// A hit avoids a System One request. A miss can still be refused by the call
+/// budget or fail, and is counted even when the cache is disabled; it does not
+/// prove that an HTTP request succeeded or was sent. `UsageSummary::calls`
+/// counts successful uncached responses, not misses or retry attempts.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct CacheSummary {
@@ -298,6 +391,10 @@ pub struct CacheSummary {
     pub misses: u64,
 }
 
+/// Repository-index work reused, recomputed, or handled by fallback this run.
+///
+/// These are optimization diagnostics, not source-coverage or validity counts.
+/// Defaulted zeros do not establish that an index lookup was attempted.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct IndexStats {
@@ -306,6 +403,12 @@ pub struct IndexStats {
     pub fallbacks: usize,
 }
 
+/// Snapshot of the shared HTTP-attempt reservation budget.
+///
+/// `limit: None` removes the attempt ceiling. `reserved` counts permits obtained
+/// before sending, including retry attempts, whereas `deferred` counts refused
+/// reservations. A reservation does not prove a successful response. Cached
+/// work does not reserve an attempt; these counters are distinct from usage.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct BudgetSummary {
@@ -313,6 +416,9 @@ pub struct BudgetSummary {
     pub reserved: u64,
     pub deferred: u64,
 }
+/// Optional tier-screen results, including paths dismissed before full screening.
+///
+/// A dismissed path is reduced review coverage, not a fully screened clean file.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct TierSummary {
@@ -320,6 +426,13 @@ pub struct TierSummary {
     pub dismissed: Vec<String>,
 }
 
+/// Provenance needed to combine a complete set of codebase-review shards.
+///
+/// Producers use a one-based `index` within `count` and carry the full discovered
+/// path inventory, inventory key, refinement choice, and model identity into
+/// every shard. One shard alone is partial. Deserialization validates none of
+/// these relationships; the shard merge operation rejects missing, duplicate,
+/// wrongly assigned, or incompatible parts before producing a combined report.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShardMetadata {
@@ -333,17 +446,36 @@ pub struct ShardMetadata {
 
 /// The full review report. `#[serde(default)]` keeps reads deliberately
 /// tolerant: a report saved by an older version stays viewable.
+///
+/// This is an interchange container, not a validated review receipt. Defaults
+/// include absent source identities, no findings, and `partial: false`, so even
+/// an empty JSON object can deserialize. Before treating absence of findings
+/// as review evidence, a caller must establish the intended scope and revision,
+/// inventory and dimensions, successful required stages, and absence of relevant
+/// deferrals, context drops, shard omissions, and auxiliary unknowns. Approval
+/// decisions additionally use their dedicated evidence and policy gates.
+///
+/// The ordinary workflow's `partial` flag covers known skipped, deferred,
+/// capped, tier-dismissed, and shard work; attached checks can add uncertainty.
+/// It is not an attestation that every possible defect was assessed. Likewise,
+/// missing optional artifacts mean unassessed or disabled work, not a negative
+/// judgment. Raw local evidence may contain credentials: redaction of outgoing
+/// requests does not automatically sanitize this report for publication.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ReviewReport {
-    /// Bound source-review identity; absent in legacy reports. Auxiliary
-    /// evidence cannot replace it and invalidates verification on mismatch.
+    /// Source-review identity recorded by the repository review producer;
+    /// absent in legacy reports. Auxiliary evidence cannot replace it and
+    /// invalidates producer verification on mismatch. Stored strings alone are
+    /// not trusted evidence of which revision was read.
     pub reviewed_head: Option<String>,
     pub reviewed_base: Option<String>,
-    /// True only when cleanliness was verified for the bound identity.
+    /// The producer sets this only when cleanliness was verified for the
+    /// bound identity.
     /// False includes missing verification; it does not establish dirtiness.
     pub reviewed_clean: bool,
-    /// True only for verified source inputs from the pinned committed tree.
+    /// The producer sets this only for source inputs verified against the
+    /// pinned committed tree.
     /// False includes missing verification and always rejects approval.
     pub reviewed_committed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -375,19 +507,23 @@ pub struct ReviewReport {
     /// Advisory comparison with explicitly supplied local requirements.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spec_drift: Option<crate::review::spec_drift::SpecSummary>,
-    /// Deferred/failed work means absence of findings is not a complete review.
+    /// Known missing work or evidence in the producing workflow; false alone
+    /// does not establish completeness, especially for legacy/defaulted data.
     pub partial: bool,
     pub tier: TierSummary,
     pub shard: Option<ShardMetadata>,
-    /// Distinct secret values redacted from outgoing requests, per rule
-    /// (`domain::redact`); empty when nothing matched or redaction was off.
+    /// Hash-deduplicated values matched by outgoing-request redaction, per rule.
+    /// Empty when nothing matched or redaction was off; neither case proves
+    /// absence of secrets. This does not describe sanitization of saved evidence.
     pub redactions: BTreeMap<String, usize>,
-    /// Requests that failed and were skipped rather than ending the run;
-    /// empty on a clean run.
+    /// Failed or deferred requests that were skipped rather than ending the run.
+    /// An empty list can also come from defaults and is not completeness proof.
     pub skipped: Vec<SkippedFile>,
     pub findings: Vec<Finding>,
-    /// Uncalibrated heuristic P(revert) in [0, 1) from the review signals.
-    /// A spike (see `review/merge_confidence.rs`); calibration is #17.
+    /// Uncalibrated revert-risk heuristic produced from review signals.
+    /// The producer returns a value in [0, 1); individual shard reports use 0
+    /// until merging. It is not a measured failure probability, and a stored
+    /// value is neither range-checked nor recomputed by Serde.
     #[serde(default)]
     pub p_revert: f64,
 }

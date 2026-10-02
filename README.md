@@ -272,6 +272,7 @@ fixes), `docs/implementation.md` (build decisions).
 - `docs/scaling.md` — whole-repo scale: context budgets, result cache, shards, tiered screening
 - `docs/implementation.md` — build decisions (thin client vs. `jev_sdk`), pending upgrades
 - `docs/rust-types.md` — the shipped Rust types/traits + the `jev_sdk` finding
+- [Rust API contracts](docs/rust-api-contracts.md) — public API invariants, failure behavior and executable rustdoc examples
 - `docs/security-taxonomy.md` — code-findable security classes vs. screen coverage, and the steering decisions
 - `docs/distribution.md` — install, prebuilt binaries, the GitHub Action, releasing
 

@@ -1,4 +1,18 @@
-//! Automatic approval uses live GitHub head, full file inventory and checks.
+//! Live GitHub evidence collection and commit-bound automatic approval.
+//!
+//! [`GitHubClient::approval_evidence`] collects the current PR head/merge base,
+//! changed-file inventory and latest check-run/commit-status results. Missing
+//! file coverage and unsupported patch evidence are explicit unknowns; a green
+//! check alone does not establish a complete review. Outcome surveillance and
+//! its provenance are supplied separately to the assessment engine.
+//!
+//! [`GitHubClient::approve_current_head`] reassesses fresh evidence under an
+//! explicit policy and observed history, rechecks the open non-draft PR, then
+//! posts an approval naming the exact reviewed commit. These REST requests are
+//! separate observations, not a transaction: checks, base or head may change
+//! after the final read. Commit binding prevents the review from silently
+//! targeting a different commit; it does not provide atomic merge authorization
+//! or make a posted approval valid for later changes.
 use super::github::{GitHubApi, GitHubClient, NewReview, PullRequest};
 use crate::{
     domain::report::ReviewReport,
@@ -149,6 +163,29 @@ impl GitHubClient {
         );
         Ok(current)
     }
+    /// Collect live current-head evidence without publishing a review.
+    ///
+    /// The PR must be open, non-draft and still have `pr.head_sha`. Its current
+    /// merge base is compared with the report, and every changed PR file must
+    /// have supported textual patch evidence and appear in the source matrix.
+    /// Auxiliary analyses do not substitute for arbitrary configuration,
+    /// deletion or test-only coverage. Inventory differences return explicit
+    /// `auxiliary_unknowns` and false completeness flags in an `Ok` result.
+    ///
+    /// Latest check runs and commit statuses are both collected with exact
+    /// inventory counts. Only completed success maps to a passing check run;
+    /// neutral, skipped, missing or unsupported results remain unknown. Unknown
+    /// timestamps use zero and missing evidence remains empty. These returned
+    /// check records still require policy validation by the assessment engine:
+    /// completeness flags do not mean that every check passed or is fresh.
+    ///
+    /// # Errors
+    ///
+    /// Propagates request/JSON/clock errors and rejects changed heads, closed or
+    /// draft PRs, missing base/merge-base data, malformed/truncated check
+    /// inventories and mismatched commit-status identity. A returned evidence
+    /// object is a collection snapshot, not approval eligibility or proof that
+    /// GitHub state remains unchanged after the requests complete.
     pub async fn approval_evidence(
         &self,
         pr: &PullRequest,
@@ -238,7 +275,30 @@ impl GitHubClient {
             checks,
         })
     }
-    /// Bind approval to the exact reviewed commit after checking the head again.
+    /// Reassess fresh evidence and publish approval bound to `pr.head_sha`.
+    ///
+    /// Requires an explicitly enabled valid policy, supported observed history
+    /// and an eligible assessment of this report against freshly collected
+    /// evidence. Rechecks the head/open/draft state before posting and requires
+    /// the PR base to remain unchanged between the outer observations. The
+    /// approval request explicitly names the reviewed commit; this method does
+    /// not merge the PR or apply a patch.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed assessment inputs, any ineligible decision, changed
+    /// head/base or closed/draft state, and propagates collection/publication
+    /// errors. Assessment rejection occurs before the approval POST. After a
+    /// POST has begun, a transport error cannot prove that GitHub accepted
+    /// nothing; reconcile remote review state before retrying publication.
+    ///
+    /// # Consistency boundary
+    ///
+    /// The reads, assessment and POST are separate REST operations. Checks or
+    /// repository state may change between them or after posting. Exact commit
+    /// binding and repeated identity checks reduce stale-head mistakes; they do
+    /// not constitute an atomic check-and-approve transaction or a guarantee
+    /// that approval remains applicable to a subsequently updated PR.
     pub async fn approve_current_head(
         &self,
         pr: &PullRequest,
