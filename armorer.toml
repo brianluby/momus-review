@@ -1,0 +1,25 @@
+# Owner-approved pilot adoption 2026-11-21 (Veans #36). M2: momus-eval stays internal.
+schema_version = 1
+repository = "brianluby/momus-review"
+toolchain = "1.98.1" # exact pin already enforced by momus rust-toolchain.toml; verified installed
+manifest = "Cargo.toml"
+
+# Single-package repo. Release pipeline ships exactly one binary (`momus`) on
+# three targets (builder.yml matrix). Package momus-review also builds lib
+# momus_review and bin momus-eval (golden-set eval tool, NOT a release asset);
+# neither is selected as a deliverable — owner decision M2 below.
+[[deliverables]]
+id = "momus"
+profile = "cli"
+package = "momus-review"
+binary = "momus"
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "aarch64-apple-darwin"]
+feature_set = "default"
+
+[feature_sets.default]
+default_features = true
+features = [] # package declares no features (cargo metadata verified)
+
+[policy]
+license_file = "LICENSE"
+attestations = "required"

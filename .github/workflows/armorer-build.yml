@@ -1,0 +1,15 @@
+name: Armorer unsigned build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: armorer-build-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    uses: brianluby/armorer-workflows/.github/workflows/rust-build.yml@e5e9c0d31baff87e357046d81068b646a39a9f23

@@ -1,0 +1,79 @@
+schema_version = 1
+config_sha256 = "cdffc31087a456fafa239706fbe9c12bb4d30123bb5ce6375dd836c73e37ab29"
+runtime_version = "0.1.0"
+
+[workflows]
+repository = "brianluby/armorer-workflows"
+commit = "e5e9c0d31baff87e357046d81068b646a39a9f23"
+
+[tools.actionlint--aarch64-apple-darwin]
+version = "1.7.12"
+sha256 = "aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f"
+
+[tools.actionlint--aarch64-unknown-linux-gnu]
+version = "1.7.12"
+sha256 = "325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6"
+
+[tools.actionlint--x86_64-unknown-linux-gnu]
+version = "1.7.12"
+sha256 = "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+
+[tools.cargo-cyclonedx--aarch64-apple-darwin]
+version = "0.5.9"
+sha256 = "4c53dfa21e70b65bf7f8d2592aadde3bcb02c1a40b6ec63b877e5ca65a29e180"
+
+[tools.cargo-cyclonedx--aarch64-unknown-linux-gnu]
+version = "0.5.9"
+sha256 = "7bf131ca5389b07a4f10c182bcf8a5ad339d64408b6f0d8f6834a0bd6120a06a"
+
+[tools.cargo-cyclonedx--x86_64-unknown-linux-gnu]
+version = "0.5.9"
+sha256 = "fb8dbee9f182173e062a64a387b21a0badc6fab8b2abf9294973f012972bf6d8"
+
+[tools.cargo-deny--aarch64-apple-darwin]
+version = "0.20.2"
+sha256 = "fe67d82a10d8597a3549364cb733a3f9cc1bfff9031b7ae46384a9f2a72090c3"
+
+[tools.cargo-deny--aarch64-unknown-linux-gnu]
+version = "0.20.2"
+sha256 = "995c82be0defc7a025cae49a2aa2644ce8245c9a3318fc4103907c6a285e8c7d"
+
+[tools.cargo-deny--x86_64-unknown-linux-gnu]
+version = "0.20.2"
+sha256 = "9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f"
+
+[tools.cyclonedx--aarch64-apple-darwin]
+version = "0.33.1"
+sha256 = "750c148780154833f6401f9067d08c5a4c31567b6ee3c26c062c3a95c62d741c"
+
+[tools.cyclonedx--aarch64-unknown-linux-gnu]
+version = "0.33.1"
+sha256 = "b2e9fdf9665ef49868a2ec012171c6e785dcd69745bc5869e53e4f4bfb096a5f"
+
+[tools.cyclonedx--x86_64-unknown-linux-gnu]
+version = "0.33.1"
+sha256 = "bfc8b2538da86fe239bc53658bbb63c1c8c510a293c1e6891aa5bea5d3c58746"
+
+[tools.gitleaks--aarch64-apple-darwin]
+version = "8.30.1"
+sha256 = "b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5"
+
+[tools.gitleaks--aarch64-unknown-linux-gnu]
+version = "8.30.1"
+sha256 = "e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080"
+
+[tools.gitleaks--x86_64-unknown-linux-gnu]
+version = "8.30.1"
+sha256 = "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+
+[tools.zizmor--aarch64-apple-darwin]
+version = "1.30.1"
+sha256 = "e28d22b087f9ebb8d99da6e740d348c930f559961c7c3f12badda54f882195a2"
+
+[tools.zizmor--aarch64-unknown-linux-gnu]
+version = "1.30.1"
+sha256 = "7ff1dce33bdd18fd2a4affe63bdd47efcccca97b2cec1c1863ec26e9e2647540"
+
+[tools.zizmor--x86_64-unknown-linux-gnu]
+version = "1.30.1"
+sha256 = "e65324f4430c2717591937edcec90ccbefaf14c174f8ec9415e03ca875b46e1a"
