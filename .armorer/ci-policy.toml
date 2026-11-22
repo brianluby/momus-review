@@ -1,0 +1,38 @@
+# Owner-approved pilot adoption 2026-11-21 (Veans #36). ci-policy-v1 for brianluby/momus-review.
+# Momus has NO cargo-deny today (release gate is scripts/audit.sh, cargo-audit
+# 0.22.2, empty scripts/audit-exceptions.txt). This policy is NEW protection,
+# not a migration. License allowlist derived from the observed all-features
+# dependency closure (cargo-deny 0.19.7 list, offline, 1.98.1, 2026-11-12):
+#   MIT(141) Apache-2.0(115) Unicode-3.0(19) ISC(5) BSD-3-Clause(2)
+#   Apache-2.0 WITH LLVM-exception(1) CDLA-Permissive-2.0(1)
+#   Unlicense(3: aho-corasick/memchr/bstr, all "Unlicense OR MIT")
+#   BSL-1.0(1: ryu, "Apache-2.0 OR BSL-1.0")
+# Permissive-only, matching sibling pilot rusty-brain's deny.toml stance.
+# No copyleft accepted. Owner must approve every token.
+schema_version = 1
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+    "Unlicense",
+    "BSL-1.0",
+]
+
+[advisories]
+# Matches scripts/audit-exceptions.txt today: empty. Any future exception needs
+# owner + reason + ISO UTC expiry within 90 days (ci_policy.rs parse_at).
+exceptions = []
+
+[sources]
+# crates.io only; momus Cargo.toml has no git dependencies (verified).
+allow_git = []
+
+[bans]
+multiple_versions = "warn"
+deny = []
